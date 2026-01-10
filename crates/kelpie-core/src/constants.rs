@@ -16,6 +16,12 @@ pub const ACTOR_NAMESPACE_LENGTH_BYTES_MAX: usize = 128;
 /// Maximum size of actor state in bytes (10 MB)
 pub const ACTOR_STATE_SIZE_BYTES_MAX: usize = 10 * 1024 * 1024;
 
+/// Maximum size of actor KV key in bytes (10 KB)
+pub const ACTOR_KV_KEY_SIZE_BYTES_MAX: usize = 10 * 1024;
+
+/// Maximum size of actor KV value in bytes (1 MB)
+pub const ACTOR_KV_VALUE_SIZE_BYTES_MAX: usize = 1024 * 1024;
+
 /// Maximum duration for an actor invocation in milliseconds (30 sec)
 pub const ACTOR_INVOCATION_TIMEOUT_MS_MAX: u64 = 30 * 1000;
 

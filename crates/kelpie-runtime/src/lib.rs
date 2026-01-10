@@ -9,12 +9,22 @@
 //! - On-demand actor activation
 //! - Actor mailbox management
 //! - Lifecycle management (activate/deactivate)
+//!
+//! # TigerStyle
+//! - Single activation guarantee (one actor instance per ID)
+//! - Explicit lifecycle states
+//! - Bounded mailboxes (no silent message drops)
 
-// Modules will be implemented in Phase 1
-// pub mod activation;
-// pub mod dispatcher;
-// pub mod executor;
-// pub mod mailbox;
+pub mod activation;
+pub mod dispatcher;
+pub mod handle;
+pub mod mailbox;
+pub mod runtime;
 
-/// Placeholder for Phase 1 implementation
-pub struct Runtime;
+pub use activation::{ActivationState, ActivationStats, ActiveActor};
+pub use dispatcher::{
+    ActorFactory, CloneFactory, Dispatcher, DispatcherCommand, DispatcherConfig, DispatcherHandle,
+};
+pub use handle::{ActorHandle, ActorHandleBuilder};
+pub use mailbox::{Envelope, Mailbox, MailboxFullError};
+pub use runtime::{Runtime, RuntimeBuilder, RuntimeConfig};

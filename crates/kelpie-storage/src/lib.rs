@@ -13,6 +13,6 @@ pub mod kv;
 pub mod memory;
 pub mod transaction;
 
-pub use kv::{ActorKV, KVOperation};
+pub use kv::{ActorKV, KVOperation, ScopedKV};
 pub use memory::MemoryKV;
 pub use transaction::Transaction;

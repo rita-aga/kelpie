@@ -215,6 +215,72 @@ pub trait Actor: Send + Sync + 'static {
 }
 
 // =============================================================================
+// ContextKV Trait
+// =============================================================================
+
+/// KV store interface available to actors through their context
+///
+/// This trait defines the storage operations available to actors.
+/// It is automatically scoped to the actor's ID - keys are namespaced
+/// per-actor and cannot collide with other actors' data.
+///
+/// # TigerStyle
+/// - All operations are async and fallible
+/// - Keys are bounded by ACTOR_KV_KEY_SIZE_BYTES_MAX
+/// - Values are bounded by ACTOR_STATE_SIZE_BYTES_MAX
+#[async_trait]
+pub trait ContextKV: Send + Sync {
+    /// Get a value by key
+    ///
+    /// Returns None if the key does not exist.
+    async fn get(&self, key: &[u8]) -> Result<Option<Bytes>>;
+
+    /// Set a key-value pair
+    ///
+    /// Overwrites any existing value for the key.
+    async fn set(&self, key: &[u8], value: &[u8]) -> Result<()>;
+
+    /// Delete a key
+    ///
+    /// No-op if the key does not exist.
+    async fn delete(&self, key: &[u8]) -> Result<()>;
+
+    /// Check if a key exists
+    async fn exists(&self, key: &[u8]) -> Result<bool> {
+        Ok(self.get(key).await?.is_some())
+    }
+
+    /// List keys with a given prefix
+    ///
+    /// Returns all keys that start with the given prefix.
+    async fn list_keys(&self, prefix: &[u8]) -> Result<Vec<Vec<u8>>>;
+}
+
+/// No-op KV implementation for contexts without storage access
+///
+/// Used when an actor doesn't need KV access or for testing.
+pub struct NoOpKV;
+
+#[async_trait]
+impl ContextKV for NoOpKV {
+    async fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
+        Ok(None)
+    }
+
+    async fn set(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
+        Ok(())
+    }
+
+    async fn delete(&self, _key: &[u8]) -> Result<()> {
+        Ok(())
+    }
+
+    async fn list_keys(&self, _prefix: &[u8]) -> Result<Vec<Vec<u8>>> {
+        Ok(Vec::new())
+    }
+}
+
+// =============================================================================
 // ActorContext
 // =============================================================================
 
@@ -222,54 +288,97 @@ pub trait Actor: Send + Sync + 'static {
 ///
 /// Provides access to:
 /// - Actor's persistent state
-/// - Per-actor KV store
-/// - Ability to invoke other actors
+/// - Per-actor KV store (via kv() method)
+/// - Ability to invoke other actors (future phase)
 pub struct ActorContext<S> {
     /// The actor's unique identifier
     pub id: ActorId,
 
     /// The actor's in-memory state
     pub state: S,
-    // These will be populated in later phases:
-    // kv: Box<dyn ActorKV>,
-    // runtime: ActorRuntime,
+
+    /// Per-actor KV store
+    kv: Box<dyn ContextKV>,
 }
 
 impl<S> ActorContext<S>
 where
     S: Serialize + DeserializeOwned + Default + Send + Sync,
 {
-    /// Create a new ActorContext
-    pub fn new(id: ActorId, state: S) -> Self {
-        Self { id, state }
+    /// Create a new ActorContext with KV access
+    pub fn new(id: ActorId, state: S, kv: Box<dyn ContextKV>) -> Self {
+        Self { id, state, kv }
     }
 
-    /// Create a new ActorContext with default state
-    pub fn with_default_state(id: ActorId) -> Self {
+    /// Create a new ActorContext with default state and KV access
+    pub fn with_default_state(id: ActorId, kv: Box<dyn ContextKV>) -> Self {
         Self {
             id,
             state: S::default(),
+            kv,
         }
     }
 
-    // These methods will be implemented in later phases:
+    /// Create a new ActorContext with default state and no KV access
+    ///
+    /// Useful for testing actors that don't use KV operations.
+    pub fn with_default_state_no_kv(id: ActorId) -> Self {
+        Self {
+            id,
+            state: S::default(),
+            kv: Box::new(NoOpKV),
+        }
+    }
 
-    // /// Get a value from the actor's KV store
-    // pub async fn get(&self, key: &[u8]) -> Result<Option<Bytes>> { ... }
+    /// Get a value from the actor's KV store
+    ///
+    /// Keys are automatically scoped to this actor - they cannot
+    /// collide with other actors' data.
+    pub async fn kv_get(&self, key: &[u8]) -> Result<Option<Bytes>> {
+        debug_assert!(
+            key.len() <= crate::constants::ACTOR_KV_KEY_SIZE_BYTES_MAX,
+            "key exceeds maximum size"
+        );
+        self.kv.get(key).await
+    }
 
-    // /// Set a value in the actor's KV store (transactional)
-    // pub async fn set(&mut self, key: &[u8], value: &[u8]) -> Result<()> { ... }
+    /// Set a value in the actor's KV store
+    ///
+    /// Keys are automatically scoped to this actor.
+    pub async fn kv_set(&self, key: &[u8], value: &[u8]) -> Result<()> {
+        debug_assert!(
+            key.len() <= crate::constants::ACTOR_KV_KEY_SIZE_BYTES_MAX,
+            "key exceeds maximum size"
+        );
+        debug_assert!(
+            value.len() <= crate::constants::ACTOR_STATE_SIZE_BYTES_MAX,
+            "value exceeds maximum size"
+        );
+        self.kv.set(key, value).await
+    }
 
-    // /// Delete a value from the actor's KV store
-    // pub async fn delete(&mut self, key: &[u8]) -> Result<()> { ... }
+    /// Delete a value from the actor's KV store
+    pub async fn kv_delete(&self, key: &[u8]) -> Result<()> {
+        debug_assert!(
+            key.len() <= crate::constants::ACTOR_KV_KEY_SIZE_BYTES_MAX,
+            "key exceeds maximum size"
+        );
+        self.kv.delete(key).await
+    }
 
-    // /// Invoke another actor
-    // pub async fn invoke(
-    //     &self,
-    //     target: &ActorRef,
-    //     operation: &str,
-    //     payload: Bytes,
-    // ) -> Result<Bytes> { ... }
+    /// Check if a key exists in the actor's KV store
+    pub async fn kv_exists(&self, key: &[u8]) -> Result<bool> {
+        debug_assert!(
+            key.len() <= crate::constants::ACTOR_KV_KEY_SIZE_BYTES_MAX,
+            "key exceeds maximum size"
+        );
+        self.kv.exists(key).await
+    }
+
+    /// List keys with a given prefix in the actor's KV store
+    pub async fn kv_list_keys(&self, prefix: &[u8]) -> Result<Vec<Vec<u8>>> {
+        self.kv.list_keys(prefix).await
+    }
 }
 
 #[cfg(test)]

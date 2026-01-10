@@ -405,14 +405,55 @@ All significant architectural decisions are documented in `docs/adr/`:
 - Include examples for complex APIs
 - Document invariants and safety requirements
 
+## Commit Policy: Only Working Software
+
+**Never commit broken code.** Every commit must represent working software.
+
+### Pre-Commit Verification
+
+Before every commit, you MUST verify the code works:
+
+```bash
+# Required before EVERY commit
+cargo test           # All tests must pass
+cargo clippy         # No warnings allowed
+cargo fmt --check    # Code must be formatted
+```
+
+### Why This Matters
+
+- Every commit is a potential rollback point
+- Broken commits make `git bisect` useless
+- CI should never be the first place code is tested
+- Other developers should be able to checkout any commit
+
+### Commit Checklist
+
+Before running `git commit`:
+
+1. **Run `cargo test`** - All tests must pass (currently 74+ tests)
+2. **Run `cargo clippy`** - Fix any warnings
+3. **Run `cargo fmt`** - Code must be formatted
+4. **Review changes** - `git diff` to verify what's being committed
+5. **Write clear message** - Describe what and why, not how
+
+### If Tests Fail
+
+Do NOT commit. Instead:
+1. Fix the failing tests
+2. If the fix is complex, consider `git stash` to save work
+3. Never use `--no-verify` to skip pre-commit hooks
+4. Never commit with `// TODO: fix this test` comments
+
 ## Contributing
 
 1. Create a branch from `main`
 2. Make changes following this guide
-3. Ensure `cargo test` passes
-4. Ensure `cargo clippy` has no warnings
-5. Update documentation as needed
-6. Create PR with clear description
+3. **Run `cargo test` and ensure ALL tests pass**
+4. **Run `cargo clippy` and fix ALL warnings**
+5. Run `cargo fmt` to format code
+6. Update documentation as needed
+7. Create PR with clear description
 
 ## References
 

@@ -4,8 +4,10 @@
 
 use crate::fault::{FaultInjector, FaultType};
 use crate::rng::DeterministicRng;
+use async_trait::async_trait;
 use bytes::Bytes;
-use kelpie_core::{Error, Result};
+use kelpie_core::{ActorId, Error, Result};
+use kelpie_storage::ActorKV;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -172,7 +174,7 @@ impl SimStorage {
                 reason: "disk full (injected)".into(),
             }),
             FaultType::CrashBeforeWrite => Err(Error::Internal {
-                reason: "crash before write (injected)".into(),
+                message: "crash before write (injected)".into(),
             }),
             FaultType::CrashAfterWrite => {
                 // Write succeeds but then we "crash"
@@ -181,6 +183,57 @@ impl SimStorage {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Create a scoped key by prefixing with actor_id
+    fn scoped_key(actor_id: &ActorId, key: &[u8]) -> Vec<u8> {
+        let prefix = actor_id.to_key_bytes();
+        let mut scoped = Vec::with_capacity(prefix.len() + 1 + key.len());
+        scoped.extend_from_slice(&prefix);
+        scoped.push(b'/');
+        scoped.extend_from_slice(key);
+        scoped
+    }
+}
+
+/// Implement ActorKV for SimStorage
+///
+/// This allows SimStorage to be used as the storage backend for actor runtime
+/// in deterministic simulation tests. Keys are automatically prefixed with actor_id.
+#[async_trait]
+impl ActorKV for SimStorage {
+    async fn get(&self, actor_id: &ActorId, key: &[u8]) -> Result<Option<Bytes>> {
+        let scoped_key = Self::scoped_key(actor_id, key);
+        self.read(&scoped_key).await
+    }
+
+    async fn set(&self, actor_id: &ActorId, key: &[u8], value: &[u8]) -> Result<()> {
+        let scoped_key = Self::scoped_key(actor_id, key);
+        self.write(&scoped_key, value).await
+    }
+
+    async fn delete(&self, actor_id: &ActorId, key: &[u8]) -> Result<()> {
+        let scoped_key = Self::scoped_key(actor_id, key);
+        SimStorage::delete(self, &scoped_key).await
+    }
+
+    async fn exists(&self, actor_id: &ActorId, key: &[u8]) -> Result<bool> {
+        let scoped_key = Self::scoped_key(actor_id, key);
+        SimStorage::exists(self, &scoped_key).await
+    }
+
+    async fn list_keys(&self, actor_id: &ActorId, prefix: &[u8]) -> Result<Vec<Vec<u8>>> {
+        let scoped_prefix = Self::scoped_key(actor_id, prefix);
+        let actor_prefix = Self::scoped_key(actor_id, b"");
+
+        // Get keys with the scoped prefix
+        let keys = SimStorage::list_keys(self, &scoped_prefix).await?;
+
+        // Remove the actor prefix from each key to return only the user's key portion
+        Ok(keys
+            .into_iter()
+            .map(|k| k[actor_prefix.len()..].to_vec())
+            .collect())
     }
 }
 

@@ -42,6 +42,15 @@ pub enum Error {
         max: usize,
     },
 
+    #[error("Actor deactivated: {actor_id}")]
+    ActorDeactivated { actor_id: crate::ActorId },
+
+    #[error("Invalid operation: {operation}")]
+    InvalidOperation { operation: String },
+
+    #[error("Operation timed out: {operation} after {timeout_ms}ms")]
+    OperationTimedOut { operation: String, timeout_ms: u64 },
+
     // =========================================================================
     // Validation Errors
     // =========================================================================
@@ -128,8 +137,8 @@ pub enum Error {
     // =========================================================================
     // Internal Errors
     // =========================================================================
-    #[error("Internal error: {reason}")]
-    Internal { reason: String },
+    #[error("Internal error: {message}")]
+    Internal { message: String },
 
     #[error("Serialization failed: {reason}")]
     SerializationFailed { reason: String },
@@ -176,9 +185,9 @@ impl Error {
     }
 
     /// Create an internal error
-    pub fn internal(reason: impl Into<String>) -> Self {
+    pub fn internal(message: impl Into<String>) -> Self {
         Self::Internal {
-            reason: reason.into(),
+            message: message.into(),
         }
     }
 
