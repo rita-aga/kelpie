@@ -24,8 +24,10 @@ tokio = { workspace = true }
 kelpie-memory = { workspace = true }
 kelpie-runtime = { workspace = true }
 kelpie-sandbox = { workspace = true }
+kelpie-tools = { workspace = true }
 bytes = { workspace = true }
 proptest = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 stateright = { workspace = true }
 tracing-subscriber = { workspace = true }

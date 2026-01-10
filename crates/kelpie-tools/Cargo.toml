@@ -1,0 +1,31 @@
+[package]
+name = "kelpie-tools"
+description = "Tool integration layer for Kelpie agents (MCP support)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+# MCP server support (spawn external MCP servers)
+mcp-server = []
+
+[dependencies]
+kelpie-core = { workspace = true }
+kelpie-sandbox = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tokio = { workspace = true }
