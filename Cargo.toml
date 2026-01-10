@@ -1,0 +1,87 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/kelpie-core",
+    "crates/kelpie-runtime",
+    "crates/kelpie-registry",
+    "crates/kelpie-storage",
+    "crates/kelpie-wasm",
+    "crates/kelpie-cluster",
+    "crates/kelpie-agent",
+    "crates/kelpie-dst",
+    "crates/kelpie-server",
+    "crates/kelpie-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0"
+repository = "https://github.com/nerdsane/kelpie"
+authors = ["nerdsane"]
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.34", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+bytes = "1.5"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Deterministic RNG
+rand = "0.8"
+rand_chacha = "0.3"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Hashing and checksums
+crc32fast = "1.3"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+# CLI
+clap = { version = "4.4", features = ["derive"] }
+
+# WASM runtime
+wasmtime = "16"
+wasmtime-wasi = "16"
+
+# FoundationDB (optional, feature-gated)
+# foundationdb = "0.9"
+
+# Formal verification
+stateright = "0.30"
+
+# Testing
+proptest = "1.4"
+criterion = "0.5"
+
+# Internal crates
+kelpie-core = { path = "crates/kelpie-core" }
+kelpie-runtime = { path = "crates/kelpie-runtime" }
+kelpie-registry = { path = "crates/kelpie-registry" }
+kelpie-storage = { path = "crates/kelpie-storage" }
+kelpie-wasm = { path = "crates/kelpie-wasm" }
+kelpie-cluster = { path = "crates/kelpie-cluster" }
+kelpie-agent = { path = "crates/kelpie-agent" }
+kelpie-dst = { path = "crates/kelpie-dst" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[profile.bench]
+lto = true

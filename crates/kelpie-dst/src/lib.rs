@@ -1,0 +1,49 @@
+//! Kelpie DST - Deterministic Simulation Testing
+//!
+//! TigerBeetle/FoundationDB-style deterministic simulation testing framework.
+//!
+//! # Overview
+//!
+//! DST enables testing distributed systems with:
+//! - Deterministic time control (SimClock)
+//! - Reproducible random numbers (DeterministicRng)
+//! - Fault injection (FaultInjector)
+//! - Simulated storage and network
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use kelpie_dst::{Simulation, SimConfig, FaultConfig, FaultType};
+//!
+//! #[test]
+//! fn test_with_faults() {
+//!     let config = SimConfig::from_env_or_random();
+//!     let mut sim = Simulation::new(config)
+//!         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.1));
+//!
+//!     sim.run(|env| async move {
+//!         // Test code using env.clock(), env.rng(), env.storage()
+//!         Ok(())
+//!     }).unwrap();
+//! }
+//! ```
+//!
+//! # TigerStyle
+//!
+//! - All operations are deterministic given the same seed
+//! - Always log the seed for reproducibility
+//! - Explicit fault types and probabilities
+
+pub mod clock;
+pub mod fault;
+pub mod network;
+pub mod rng;
+pub mod simulation;
+pub mod storage;
+
+pub use clock::SimClock;
+pub use fault::{FaultConfig, FaultInjector, FaultType};
+pub use network::SimNetwork;
+pub use rng::DeterministicRng;
+pub use simulation::{SimConfig, SimEnvironment, Simulation};
+pub use storage::SimStorage;

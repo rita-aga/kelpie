@@ -1,0 +1,23 @@
+[package]
+name = "kelpie-registry"
+description = "Actor placement and discovery for Kelpie"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+kelpie-core = { workspace = true }
+kelpie-storage = { workspace = true }
+bytes = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+kelpie-dst = { workspace = true }
+proptest = { workspace = true }

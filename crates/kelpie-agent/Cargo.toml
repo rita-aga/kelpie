@@ -1,0 +1,24 @@
+[package]
+name = "kelpie-agent"
+description = "AI agent abstractions for Kelpie"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+kelpie-core = { workspace = true }
+kelpie-runtime = { workspace = true }
+bytes = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+kelpie-dst = { workspace = true }
+proptest = { workspace = true }

@@ -1,0 +1,21 @@
+[package]
+name = "kelpie-server"
+description = "Standalone Kelpie server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+kelpie-core = { workspace = true }
+kelpie-runtime = { workspace = true }
+kelpie-registry = { workspace = true }
+kelpie-storage = { workspace = true }
+kelpie-cluster = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
