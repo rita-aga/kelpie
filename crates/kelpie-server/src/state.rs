@@ -2,6 +2,7 @@
 //!
 //! TigerStyle: Thread-safe shared state with explicit locking.
 
+use crate::llm::LlmClient;
 use crate::models::{AgentState, Block, Message, ToolDefinition};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -29,19 +30,34 @@ struct AppStateInner {
     tools: RwLock<HashMap<String, ToolDefinition>>,
     /// Server start time for uptime calculation
     start_time: Instant,
+    /// LLM client (None if no API key configured)
+    llm: Option<LlmClient>,
 }
 
 impl AppState {
     /// Create new server state
     pub fn new() -> Self {
+        let llm = LlmClient::from_env();
+        if llm.is_some() {
+            tracing::info!("LLM integration enabled");
+        } else {
+            tracing::warn!("No LLM API key found. Set ANTHROPIC_API_KEY or OPENAI_API_KEY for real responses.");
+        }
+
         Self {
             inner: Arc::new(AppStateInner {
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
                 tools: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
+                llm,
             }),
         }
+    }
+
+    /// Get reference to the LLM client (if configured)
+    pub fn llm(&self) -> Option<&LlmClient> {
+        self.inner.llm.as_ref()
     }
 
     /// Get server uptime in seconds

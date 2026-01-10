@@ -3,6 +3,7 @@
 //! Standalone Kelpie server with Letta-compatible REST API.
 
 mod api;
+mod llm;
 mod models;
 mod state;
 

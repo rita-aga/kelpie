@@ -9,15 +9,8 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-# Core kelpie crates (will be used for actual agent execution)
-# kelpie-core = { workspace = true }
-# kelpie-runtime = { workspace = true }
-# kelpie-registry = { workspace = true }
-# kelpie-storage = { workspace = true }
-# kelpie-cluster = { workspace = true }
-# kelpie-memory = { workspace = true }
-# kelpie-sandbox = { workspace = true }
-# kelpie-tools = { workspace = true }
+# Core kelpie crates
+kelpie-sandbox = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
@@ -44,6 +37,9 @@ serde_json = { workspace = true }
 # UUID and time
 uuid = { workspace = true }
 chrono = { workspace = true }
+
+# HTTP client for LLM APIs
+reqwest = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

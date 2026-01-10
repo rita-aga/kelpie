@@ -39,6 +39,7 @@ mod error;
 mod exec;
 mod mock;
 mod pool;
+mod process;
 mod snapshot;
 mod traits;
 
@@ -47,6 +48,7 @@ pub use error::{SandboxError, SandboxResult};
 pub use exec::{ExecOptions, ExecOutput, ExitStatus};
 pub use mock::MockSandbox;
 pub use pool::{PoolConfig, SandboxPool};
+pub use process::{ProcessSandbox, ProcessSandboxFactory};
 pub use snapshot::{Snapshot, SnapshotMetadata};
 pub use traits::{Sandbox, SandboxFactory, SandboxState};
 

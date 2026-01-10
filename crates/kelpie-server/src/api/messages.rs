@@ -3,6 +3,7 @@
 //! TigerStyle: Letta-compatible message operations.
 
 use crate::api::ApiError;
+use crate::llm::{ChatMessage, ToolDefinition};
 use crate::models::{CreateMessageRequest, Message, MessageResponse, MessageRole, UsageStats};
 use crate::state::AppState;
 use axum::{
@@ -10,6 +11,7 @@ use axum::{
     Json,
 };
 use chrono::Utc;
+use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -47,8 +49,8 @@ pub async fn list_messages(
 ///
 /// POST /v1/agents/{agent_id}/messages
 ///
-/// This endpoint currently stores the message and returns a stub response.
-/// Full LLM integration will be added when kelpie-agent is connected.
+/// Builds a prompt from memory blocks and sends to configured LLM.
+/// Falls back to stub response if no LLM is configured.
 pub async fn send_message(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -73,13 +75,143 @@ pub async fn send_message(
     // Store user message
     let stored_user_msg = state.add_message(&agent_id, user_message)?;
 
-    // For now, create a stub assistant response
-    // Real LLM integration will come via kelpie-agent
+    // Get agent for memory blocks and system prompt
+    let agent = state
+        .get_agent(&agent_id)?
+        .ok_or_else(|| ApiError::not_found("agent", &agent_id))?;
+
+    // Generate response (LLM or stub)
+    let (response_content, prompt_tokens, completion_tokens) = if let Some(llm) = state.llm() {
+        // Build messages for LLM
+        let mut messages = Vec::new();
+
+        // System message with memory blocks
+        let system_content = build_system_prompt(&agent.system, &agent.blocks);
+        messages.push(ChatMessage {
+            role: "system".to_string(),
+            content: system_content,
+        });
+
+        // Get recent message history (last 20 messages)
+        let history = state.list_messages(&agent_id, 20, None).unwrap_or_default();
+        for msg in history.iter() {
+            // Skip the message we just added
+            if msg.id == stored_user_msg.id {
+                continue;
+            }
+            messages.push(ChatMessage {
+                role: match msg.role {
+                    MessageRole::User => "user",
+                    MessageRole::Assistant => "assistant",
+                    MessageRole::System => "system",
+                    MessageRole::Tool => "tool",
+                }
+                .to_string(),
+                content: msg.content.clone(),
+            });
+        }
+
+        // Add current user message
+        messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: request.content.clone(),
+        });
+
+        // Define available tools
+        let tools = vec![ToolDefinition::shell()];
+
+        // Call LLM with tools
+        match llm.complete_with_tools(messages.clone(), tools.clone()).await {
+            Ok(mut response) => {
+                let mut total_prompt = response.prompt_tokens;
+                let mut total_completion = response.completion_tokens;
+                let mut final_content = response.content.clone();
+
+                // Handle tool use loop (max 5 iterations)
+                let mut iterations = 0;
+                while response.stop_reason == "tool_use" && iterations < 5 {
+                    iterations += 1;
+                    tracing::info!(
+                        agent_id = %agent_id,
+                        tool_count = response.tool_calls.len(),
+                        iteration = iterations,
+                        "Executing tools"
+                    );
+
+                    // Execute each tool
+                    let mut tool_results = Vec::new();
+                    for tool_call in &response.tool_calls {
+                        let result = execute_tool(&tool_call.name, &tool_call.input);
+                        tracing::info!(
+                            tool = %tool_call.name,
+                            success = result.len() < 1000,
+                            "Tool executed"
+                        );
+                        tool_results.push((tool_call.id.clone(), result));
+                    }
+
+                    // Build assistant content blocks for continuation
+                    let mut assistant_blocks = Vec::new();
+                    if !response.content.is_empty() {
+                        assistant_blocks.push(crate::llm::ContentBlock::Text {
+                            text: response.content.clone(),
+                        });
+                    }
+                    for tc in &response.tool_calls {
+                        assistant_blocks.push(crate::llm::ContentBlock::ToolUse {
+                            id: tc.id.clone(),
+                            name: tc.name.clone(),
+                            input: tc.input.clone(),
+                        });
+                    }
+
+                    // Continue conversation with tool results
+                    match llm
+                        .continue_with_tool_result(messages.clone(), tools.clone(), assistant_blocks, tool_results)
+                        .await
+                    {
+                        Ok(next_response) => {
+                            total_prompt += next_response.prompt_tokens;
+                            total_completion += next_response.completion_tokens;
+                            final_content = next_response.content.clone();
+                            response = next_response;
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "Tool continuation failed");
+                            final_content = format!("Tool execution error: {}", e);
+                            break;
+                        }
+                    }
+                }
+
+                tracing::info!(
+                    agent_id = %agent_id,
+                    prompt_tokens = total_prompt,
+                    completion_tokens = total_completion,
+                    tool_iterations = iterations,
+                    "LLM response received"
+                );
+                (final_content, total_prompt, total_completion)
+            }
+            Err(e) => {
+                tracing::error!(agent_id = %agent_id, error = %e, "LLM call failed");
+                let content = format!("Error calling LLM: {}. Falling back to stub.", e);
+                let tokens = estimate_tokens(&content);
+                (content, estimate_tokens(&request.content), tokens)
+            }
+        }
+    } else {
+        // No LLM configured, use stub
+        let content = generate_stub_response(&request.content);
+        (content, estimate_tokens(&request.content), estimate_tokens(&request.content))
+    };
+
+    // Create assistant message
     let assistant_message = Message {
         id: Uuid::new_v4().to_string(),
         agent_id: agent_id.clone(),
         role: MessageRole::Assistant,
-        content: generate_stub_response(&request.content),
+        content: response_content,
         tool_call_id: None,
         tool_calls: None,
         created_at: Utc::now(),
@@ -87,10 +219,6 @@ pub async fn send_message(
 
     // Store assistant message
     let stored_assistant_msg = state.add_message(&agent_id, assistant_message)?;
-
-    // Calculate usage before moving messages
-    let prompt_tokens = estimate_tokens(&stored_user_msg.content);
-    let completion_tokens = estimate_tokens(&stored_assistant_msg.content);
 
     tracing::info!(
         agent_id = %agent_id,
@@ -107,6 +235,27 @@ pub async fn send_message(
             total_tokens: prompt_tokens + completion_tokens,
         }),
     }))
+}
+
+/// Build system prompt from agent's system message and memory blocks
+fn build_system_prompt(system: &Option<String>, blocks: &[crate::models::Block]) -> String {
+    let mut parts = Vec::new();
+
+    // Add base system prompt
+    if let Some(sys) = system {
+        parts.push(sys.clone());
+    }
+
+    // Add memory blocks
+    if !blocks.is_empty() {
+        parts.push("\n\n<memory>".to_string());
+        for block in blocks {
+            parts.push(format!("<{}>\n{}\n</{}>", block.label, block.value, block.label));
+        }
+        parts.push("</memory>".to_string());
+    }
+
+    parts.join("\n")
 }
 
 /// Generate a stub response for testing
@@ -126,6 +275,76 @@ fn generate_stub_response(input: &str) -> String {
 /// Rough token estimate (4 chars per token on average)
 fn estimate_tokens(text: &str) -> u64 {
     (text.len() / 4).max(1) as u64
+}
+
+/// Execute a tool and return the result
+fn execute_tool(name: &str, input: &serde_json::Value) -> String {
+    match name {
+        "shell" => {
+            let command = input
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            if command.is_empty() {
+                return "Error: No command provided".to_string();
+            }
+
+            // Execute via sandbox
+            let result = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    execute_in_sandbox(command).await
+                })
+            });
+
+            result
+        }
+        _ => format!("Unknown tool: {}", name),
+    }
+}
+
+/// Execute a command in a sandboxed environment
+async fn execute_in_sandbox(command: &str) -> String {
+    // Create and start sandbox
+    let config = SandboxConfig::default();
+    let mut sandbox = ProcessSandbox::new(config);
+
+    if let Err(e) = sandbox.start().await {
+        return format!("Failed to start sandbox: {}", e);
+    }
+
+    // Execute command via sh -c for shell expansion
+    let exec_opts = ExecOptions::new()
+        .with_timeout(std::time::Duration::from_secs(30))
+        .with_max_output(1024 * 1024);
+
+    match sandbox.exec("sh", &["-c", command], exec_opts).await {
+        Ok(output) => {
+            let stdout = output.stdout_string();
+            let stderr = output.stderr_string();
+
+            if output.is_success() {
+                if stdout.is_empty() {
+                    "Command executed successfully (no output)".to_string()
+                } else {
+                    // Truncate long output
+                    if stdout.len() > 4000 {
+                        format!("{}...\n[truncated, {} total bytes]", &stdout[..4000], stdout.len())
+                    } else {
+                        stdout
+                    }
+                }
+            } else {
+                format!(
+                    "Command failed with exit code {}:\n{}{}",
+                    output.status.code,
+                    stdout,
+                    stderr
+                )
+            }
+        }
+        Err(e) => format!("Sandbox execution failed: {}", e),
+    }
 }
 
 #[cfg(test)]
