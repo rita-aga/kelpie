@@ -9,13 +9,41 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-kelpie-core = { workspace = true }
-kelpie-runtime = { workspace = true }
-kelpie-registry = { workspace = true }
-kelpie-storage = { workspace = true }
-kelpie-cluster = { workspace = true }
+# Core kelpie crates (will be used for actual agent execution)
+# kelpie-core = { workspace = true }
+# kelpie-runtime = { workspace = true }
+# kelpie-registry = { workspace = true }
+# kelpie-storage = { workspace = true }
+# kelpie-cluster = { workspace = true }
+# kelpie-memory = { workspace = true }
+# kelpie-sandbox = { workspace = true }
+# kelpie-tools = { workspace = true }
+
+# Async runtime
 tokio = { workspace = true }
+
+# CLI
 clap = { workspace = true }
+
+# Logging
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+# Error handling
 anyhow = { workspace = true }
+
+# Web framework
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# UUID and time
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }

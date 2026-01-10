@@ -1,0 +1,442 @@
+//! API models for Letta-compatible REST API
+//!
+//! TigerStyle: These models mirror Letta's API schema for compatibility.
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+// =============================================================================
+// Agent Models
+// =============================================================================
+
+/// Agent type enumeration (matches Letta's agent types)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+#[allow(clippy::enum_variant_names)] // Matches Letta's API naming
+pub enum AgentType {
+    #[default]
+    MemgptAgent,
+    LettaV1Agent,
+    ReactAgent,
+}
+
+/// Request to create a new agent
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateAgentRequest {
+    /// Name of the agent
+    pub name: String,
+    /// Agent type
+    #[serde(default)]
+    pub agent_type: AgentType,
+    /// Model to use (e.g., "openai/gpt-4o")
+    pub model: Option<String>,
+    /// System prompt
+    pub system: Option<String>,
+    /// Description of the agent
+    pub description: Option<String>,
+    /// Initial memory blocks
+    #[serde(default)]
+    pub memory_blocks: Vec<CreateBlockRequest>,
+    /// Tool IDs to attach
+    #[serde(default)]
+    pub tool_ids: Vec<String>,
+    /// Tags for organization
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Additional metadata
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+}
+
+/// Request to update an agent
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpdateAgentRequest {
+    /// New name
+    pub name: Option<String>,
+    /// New system prompt
+    pub system: Option<String>,
+    /// New description
+    pub description: Option<String>,
+    /// New tags
+    pub tags: Option<Vec<String>>,
+    /// New metadata
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Agent state response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentState {
+    /// Unique identifier
+    pub id: String,
+    /// Agent name
+    pub name: String,
+    /// Agent type
+    pub agent_type: AgentType,
+    /// Model being used
+    pub model: Option<String>,
+    /// System prompt
+    pub system: Option<String>,
+    /// Description
+    pub description: Option<String>,
+    /// Memory blocks
+    pub blocks: Vec<Block>,
+    /// Attached tool IDs
+    pub tool_ids: Vec<String>,
+    /// Tags
+    pub tags: Vec<String>,
+    /// Metadata
+    pub metadata: serde_json::Value,
+    /// Creation timestamp
+    pub created_at: DateTime<Utc>,
+    /// Last update timestamp
+    pub updated_at: DateTime<Utc>,
+}
+
+impl AgentState {
+    /// Create a new agent state from a create request
+    pub fn from_request(request: CreateAgentRequest) -> Self {
+        let now = Utc::now();
+        let id = Uuid::new_v4().to_string();
+
+        let blocks = request
+            .memory_blocks
+            .into_iter()
+            .map(Block::from_request)
+            .collect();
+
+        Self {
+            id,
+            name: request.name,
+            agent_type: request.agent_type,
+            model: request.model,
+            system: request.system,
+            description: request.description,
+            blocks,
+            tool_ids: request.tool_ids,
+            tags: request.tags,
+            metadata: request.metadata,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    /// Apply an update to the agent state
+    pub fn apply_update(&mut self, update: UpdateAgentRequest) {
+        if let Some(name) = update.name {
+            self.name = name;
+        }
+        if let Some(system) = update.system {
+            self.system = Some(system);
+        }
+        if let Some(description) = update.description {
+            self.description = Some(description);
+        }
+        if let Some(tags) = update.tags {
+            self.tags = tags;
+        }
+        if let Some(metadata) = update.metadata {
+            self.metadata = metadata;
+        }
+        self.updated_at = Utc::now();
+    }
+}
+
+// =============================================================================
+// Memory Block Models
+// =============================================================================
+
+/// Request to create a memory block
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateBlockRequest {
+    /// Label for the block (e.g., "persona", "human", "task")
+    pub label: String,
+    /// Initial value/content
+    pub value: String,
+    /// Description for LLM understanding
+    pub description: Option<String>,
+    /// Maximum size limit
+    pub limit: Option<usize>,
+}
+
+/// Request to update a memory block
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpdateBlockRequest {
+    /// New value
+    pub value: Option<String>,
+    /// New description
+    pub description: Option<String>,
+    /// New limit
+    pub limit: Option<usize>,
+}
+
+/// Memory block response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Block {
+    /// Unique identifier
+    pub id: String,
+    /// Block label
+    pub label: String,
+    /// Current value
+    pub value: String,
+    /// Description
+    pub description: Option<String>,
+    /// Size limit
+    pub limit: Option<usize>,
+    /// Creation timestamp
+    pub created_at: DateTime<Utc>,
+    /// Last update timestamp
+    pub updated_at: DateTime<Utc>,
+}
+
+impl Block {
+    /// Create a block from a create request
+    pub fn from_request(request: CreateBlockRequest) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4().to_string(),
+            label: request.label,
+            value: request.value,
+            description: request.description,
+            limit: request.limit,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    /// Apply an update
+    pub fn apply_update(&mut self, update: UpdateBlockRequest) {
+        if let Some(value) = update.value {
+            self.value = value;
+        }
+        if let Some(description) = update.description {
+            self.description = Some(description);
+        }
+        if let Some(limit) = update.limit {
+            self.limit = Some(limit);
+        }
+        self.updated_at = Utc::now();
+    }
+}
+
+// =============================================================================
+// Message Models
+// =============================================================================
+
+/// Message role
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageRole {
+    User,
+    Assistant,
+    System,
+    Tool,
+}
+
+/// Request to send a message to an agent
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateMessageRequest {
+    /// Message role
+    pub role: MessageRole,
+    /// Message content
+    pub content: String,
+    /// Optional tool call ID (for tool responses)
+    pub tool_call_id: Option<String>,
+}
+
+/// Message response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Message {
+    /// Unique identifier
+    pub id: String,
+    /// Agent ID
+    pub agent_id: String,
+    /// Message role
+    pub role: MessageRole,
+    /// Message content
+    pub content: String,
+    /// Tool call ID if this is a tool response
+    pub tool_call_id: Option<String>,
+    /// Tool calls made by assistant
+    pub tool_calls: Option<Vec<ToolCall>>,
+    /// Creation timestamp
+    pub created_at: DateTime<Utc>,
+}
+
+/// Tool call in a message
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    /// Tool call ID
+    pub id: String,
+    /// Tool name
+    pub name: String,
+    /// Tool arguments as JSON
+    pub arguments: serde_json::Value,
+}
+
+/// Response from sending a message
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageResponse {
+    /// Messages generated (may include multiple for tool use)
+    pub messages: Vec<Message>,
+    /// Usage statistics
+    pub usage: Option<UsageStats>,
+}
+
+/// Token usage statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageStats {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+}
+
+// =============================================================================
+// Tool Models
+// =============================================================================
+
+/// Tool definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolDefinition {
+    /// Unique identifier
+    pub id: String,
+    /// Tool name
+    pub name: String,
+    /// Description for LLM
+    pub description: String,
+    /// JSON schema for parameters
+    pub parameters: serde_json::Value,
+    /// Whether this is a built-in tool
+    pub builtin: bool,
+}
+
+// =============================================================================
+// API Response Wrappers
+// =============================================================================
+
+/// List response with pagination
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListResponse<T> {
+    /// Items in this page
+    pub items: Vec<T>,
+    /// Total count
+    pub total: usize,
+    /// Cursor for next page
+    pub cursor: Option<String>,
+}
+
+/// Error response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErrorResponse {
+    /// Error code
+    pub code: String,
+    /// Human-readable message
+    pub message: String,
+    /// Additional details
+    pub details: Option<serde_json::Value>,
+}
+
+impl ErrorResponse {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            details: None,
+        }
+    }
+
+    pub fn not_found(resource: &str, id: &str) -> Self {
+        Self::new(
+            "not_found",
+            format!("{} with id '{}' not found", resource, id),
+        )
+    }
+
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self::new("bad_request", message)
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::new("internal_error", message)
+    }
+}
+
+// =============================================================================
+// Health Check
+// =============================================================================
+
+/// Health check response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthResponse {
+    pub status: String,
+    pub version: String,
+    pub uptime_seconds: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_agent_state() {
+        let request = CreateAgentRequest {
+            name: "test-agent".to_string(),
+            agent_type: AgentType::LettaV1Agent,
+            model: Some("openai/gpt-4o".to_string()),
+            system: Some("You are a helpful assistant.".to_string()),
+            description: Some("A test agent".to_string()),
+            memory_blocks: vec![CreateBlockRequest {
+                label: "persona".to_string(),
+                value: "I am a helpful AI.".to_string(),
+                description: Some("Agent persona".to_string()),
+                limit: Some(1000),
+            }],
+            tool_ids: vec![],
+            tags: vec!["test".to_string()],
+            metadata: serde_json::json!({}),
+        };
+
+        let state = AgentState::from_request(request);
+        assert_eq!(state.name, "test-agent");
+        assert_eq!(state.blocks.len(), 1);
+        assert_eq!(state.blocks[0].label, "persona");
+    }
+
+    #[test]
+    fn test_update_agent() {
+        let request = CreateAgentRequest {
+            name: "test-agent".to_string(),
+            agent_type: AgentType::default(),
+            model: None,
+            system: None,
+            description: None,
+            memory_blocks: vec![],
+            tool_ids: vec![],
+            tags: vec![],
+            metadata: serde_json::json!({}),
+        };
+
+        let mut state = AgentState::from_request(request);
+        let original_updated_at = state.updated_at;
+
+        // Small delay to ensure timestamp changes
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        state.apply_update(UpdateAgentRequest {
+            name: Some("updated-agent".to_string()),
+            description: Some("Updated description".to_string()),
+            ..Default::default()
+        });
+
+        assert_eq!(state.name, "updated-agent");
+        assert_eq!(state.description, Some("Updated description".to_string()));
+        assert!(state.updated_at > original_updated_at);
+    }
+
+    #[test]
+    fn test_error_response() {
+        let err = ErrorResponse::not_found("Agent", "abc123");
+        assert_eq!(err.code, "not_found");
+        assert!(err.message.contains("abc123"));
+    }
+}

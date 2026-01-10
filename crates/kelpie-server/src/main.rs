@@ -1,22 +1,28 @@
 //! Kelpie Server
 //!
-//! Standalone Kelpie server binary.
+//! Standalone Kelpie server with Letta-compatible REST API.
+
+mod api;
+mod models;
+mod state;
 
 use clap::Parser;
+use state::AppState;
+use std::net::SocketAddr;
 use tracing_subscriber::EnvFilter;
 
 /// Kelpie server CLI
 #[derive(Parser, Debug)]
 #[command(name = "kelpie-server")]
-#[command(about = "Kelpie distributed virtual actor server")]
+#[command(about = "Kelpie distributed virtual actor server with Letta-compatible API")]
 #[command(version)]
 struct Cli {
     /// Configuration file path
     #[arg(short, long, default_value = "kelpie.yaml")]
     config: String,
 
-    /// Bind address
-    #[arg(short, long, default_value = "0.0.0.0:9000")]
+    /// HTTP API bind address
+    #[arg(short, long, default_value = "0.0.0.0:8283")]
     bind: String,
 
     /// Enable verbose logging
@@ -30,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize logging
     let filter = match cli.verbose {
-        0 => "info",
+        0 => "info,tower_http=debug",
         1 => "debug",
         _ => "trace",
     };
@@ -39,12 +45,37 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| filter.into()))
         .init();
 
-    tracing::info!("Kelpie server starting...");
+    tracing::info!("Kelpie server v{}", env!("CARGO_PKG_VERSION"));
     tracing::info!("Config: {}", cli.config);
-    tracing::info!("Bind: {}", cli.bind);
 
-    // Server implementation will come in later phases
-    tracing::warn!("Server not yet implemented - Phase 0 bootstrap only");
+    // Parse bind address
+    let addr: SocketAddr = cli
+        .bind
+        .parse()
+        .map_err(|e| anyhow::anyhow!("Invalid bind address '{}': {}", cli.bind, e))?;
+
+    // Create application state
+    let state = AppState::new();
+
+    // Create router
+    let app = api::router(state);
+
+    // Start server
+    tracing::info!("Starting HTTP server on {}", addr);
+    tracing::info!("API endpoints:");
+    tracing::info!("  GET  /health              - Health check");
+    tracing::info!("  GET  /v1/agents           - List agents");
+    tracing::info!("  POST /v1/agents           - Create agent");
+    tracing::info!("  GET  /v1/agents/{{id}}      - Get agent");
+    tracing::info!("  PATCH /v1/agents/{{id}}     - Update agent");
+    tracing::info!("  DELETE /v1/agents/{{id}}    - Delete agent");
+    tracing::info!("  GET  /v1/agents/{{id}}/blocks        - List blocks");
+    tracing::info!("  PATCH /v1/agents/{{id}}/blocks/{{bid}} - Update block");
+    tracing::info!("  GET  /v1/agents/{{id}}/messages      - List messages");
+    tracing::info!("  POST /v1/agents/{{id}}/messages      - Send message");
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
 
     Ok(())
 }

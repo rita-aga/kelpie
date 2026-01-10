@@ -1,0 +1,105 @@
+//! REST API module
+//!
+//! TigerStyle: Letta-compatible REST API for agent management.
+
+pub mod agents;
+pub mod blocks;
+pub mod messages;
+
+use crate::models::{ErrorResponse, HealthResponse};
+use crate::state::{AppState, StateError};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::get,
+    Json, Router,
+};
+use tower_http::cors::{Any, CorsLayer};
+use tower_http::trace::TraceLayer;
+
+/// Create the API router with all routes
+pub fn router(state: AppState) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
+    Router::new()
+        // Health check
+        .route("/health", get(health_check))
+        .route("/v1/health", get(health_check))
+        // Agent routes
+        .nest("/v1/agents", agents::router())
+        // Tool routes (future)
+        // .nest("/v1/tools", tools::router())
+        .layer(TraceLayer::new_for_http())
+        .layer(cors)
+        .with_state(state)
+}
+
+/// Health check endpoint
+async fn health_check(State(state): State<AppState>) -> Json<HealthResponse> {
+    Json(HealthResponse {
+        status: "ok".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        uptime_seconds: state.uptime_seconds(),
+    })
+}
+
+/// API error type that converts to HTTP responses
+pub struct ApiError {
+    status: StatusCode,
+    body: ErrorResponse,
+}
+
+impl ApiError {
+    pub fn not_found(resource: &str, id: &str) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            body: ErrorResponse::not_found(resource, id),
+        }
+    }
+
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            body: ErrorResponse::bad_request(message),
+        }
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            body: ErrorResponse::internal(message),
+        }
+    }
+
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            body: ErrorResponse::new("conflict", message),
+        }
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (self.status, Json(self.body)).into_response()
+    }
+}
+
+impl From<StateError> for ApiError {
+    fn from(err: StateError) -> Self {
+        match err {
+            StateError::NotFound { resource, id } => ApiError::not_found(resource, &id),
+            StateError::AlreadyExists { resource, id } => {
+                ApiError::conflict(format!("{} with id '{}' already exists", resource, id))
+            }
+            StateError::LimitExceeded { resource, limit } => {
+                ApiError::bad_request(format!("{} limit ({}) exceeded", resource, limit))
+            }
+            StateError::LockPoisoned => ApiError::internal("internal state error"),
+        }
+    }
+}
