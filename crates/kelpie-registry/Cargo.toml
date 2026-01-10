@@ -17,6 +17,10 @@ tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rand = { workspace = true }
+hostname = { workspace = true }
 
 [dev-dependencies]
 kelpie-dst = { workspace = true }

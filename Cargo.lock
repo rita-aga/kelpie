@@ -914,6 +914,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "hostname"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "617aaa3557aef3810a6369d0a99fac8a080891b68bd9f9812a1eeda0c0730cbd"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "windows-link",
+]
+
+[[package]]
 name = "httpdate"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1187,11 +1198,14 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "futures",
  "kelpie-core",
  "kelpie-dst",
  "kelpie-registry",
  "kelpie-runtime",
  "proptest",
+ "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",
@@ -1217,8 +1231,10 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "kelpie-cluster",
  "kelpie-core",
  "kelpie-memory",
+ "kelpie-registry",
  "kelpie-runtime",
  "kelpie-sandbox",
  "kelpie-storage",
@@ -1258,10 +1274,14 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "hostname",
  "kelpie-core",
  "kelpie-dst",
  "kelpie-storage",
  "proptest",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",

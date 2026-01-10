@@ -21,7 +21,9 @@ async-trait = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+kelpie-cluster = { workspace = true }
 kelpie-memory = { workspace = true }
+kelpie-registry = { workspace = true }
 kelpie-runtime = { workspace = true }
 kelpie-sandbox = { workspace = true }
 kelpie-tools = { workspace = true }
