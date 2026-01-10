@@ -6,6 +6,7 @@ members = [
     "crates/kelpie-registry",
     "crates/kelpie-storage",
     "crates/kelpie-memory",
+    "crates/kelpie-sandbox",
     "crates/kelpie-wasm",
     "crates/kelpie-cluster",
     "crates/kelpie-agent",
@@ -80,6 +81,7 @@ kelpie-cluster = { path = "crates/kelpie-cluster" }
 kelpie-agent = { path = "crates/kelpie-agent" }
 kelpie-dst = { path = "crates/kelpie-dst" }
 kelpie-memory = { path = "crates/kelpie-memory" }
+kelpie-sandbox = { path = "crates/kelpie-sandbox" }
 
 [profile.release]
 lto = true

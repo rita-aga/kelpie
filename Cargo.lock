@@ -1220,6 +1220,7 @@ dependencies = [
  "kelpie-core",
  "kelpie-memory",
  "kelpie-runtime",
+ "kelpie-sandbox",
  "kelpie-storage",
  "proptest",
  "rand 0.8.5",
@@ -1280,6 +1281,23 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "kelpie-sandbox"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
+ "kelpie-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

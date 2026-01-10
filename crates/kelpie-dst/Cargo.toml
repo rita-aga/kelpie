@@ -23,6 +23,7 @@ tokio = { workspace = true }
 [dev-dependencies]
 kelpie-memory = { workspace = true }
 kelpie-runtime = { workspace = true }
+kelpie-sandbox = { workspace = true }
 bytes = { workspace = true }
 proptest = { workspace = true }
 serde = { workspace = true }
