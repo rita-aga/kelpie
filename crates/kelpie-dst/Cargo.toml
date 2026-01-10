@@ -21,6 +21,7 @@ async-trait = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+kelpie-memory = { workspace = true }
 kelpie-runtime = { workspace = true }
 bytes = { workspace = true }
 proptest = { workspace = true }

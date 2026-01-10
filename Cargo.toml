@@ -5,6 +5,7 @@ members = [
     "crates/kelpie-runtime",
     "crates/kelpie-registry",
     "crates/kelpie-storage",
+    "crates/kelpie-memory",
     "crates/kelpie-wasm",
     "crates/kelpie-cluster",
     "crates/kelpie-agent",
@@ -31,7 +32,7 @@ futures = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
-bytes = "1.5"
+bytes = { version = "1.5", features = ["serde"] }
 
 # Error handling
 thiserror = "1.0"
@@ -78,6 +79,7 @@ kelpie-wasm = { path = "crates/kelpie-wasm" }
 kelpie-cluster = { path = "crates/kelpie-cluster" }
 kelpie-agent = { path = "crates/kelpie-agent" }
 kelpie-dst = { path = "crates/kelpie-dst" }
+kelpie-memory = { path = "crates/kelpie-memory" }
 
 [profile.release]
 lto = true

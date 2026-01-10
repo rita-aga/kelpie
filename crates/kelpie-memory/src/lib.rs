@@ -1,0 +1,55 @@
+//! Hierarchical memory system for Kelpie agents
+//!
+//! TigerStyle: Three-tier memory with explicit boundaries and persistence guarantees.
+//!
+//! # Memory Tiers
+//!
+//! 1. **Core Memory** (~32KB) - Always loaded, in-context for LLM
+//!    - System prompt, persona, key facts
+//!    - Automatically included in every request
+//!
+//! 2. **Working Memory** - Fast KV store for session state
+//!    - Conversation history, scratch space
+//!    - Redis-like access patterns
+//!
+//! 3. **Archival Memory** - Long-term storage with semantic search
+//!    - Vector embeddings for similarity search
+//!    - Graph relationships (causal, temporal, topical)
+//!
+//! # Design Principles
+//!
+//! - Explicit tier boundaries (no automatic promotion/demotion)
+//! - Checkpointing for durability
+//! - Semantic + temporal search across tiers
+
+mod block;
+mod checkpoint;
+mod core;
+mod error;
+mod search;
+mod types;
+mod working;
+
+pub use block::{MemoryBlock, MemoryBlockId, MemoryBlockType};
+pub use checkpoint::{Checkpoint, CheckpointManager};
+pub use core::{
+    CoreMemory, CoreMemoryConfig, CORE_MEMORY_SIZE_BYTES_MAX_DEFAULT, CORE_MEMORY_SIZE_BYTES_MIN,
+};
+pub use error::{MemoryError, MemoryResult};
+pub use search::{SearchQuery, SearchResult, SearchResults};
+pub use types::{MemoryMetadata, MemoryStats, Timestamp};
+pub use working::{WorkingMemory, WorkingMemoryConfig};
+
+// Re-export for convenience
+pub use kelpie_core::actor::ActorId;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_memory_module_compiles() {
+        // Smoke test - ensures all modules compile
+        let _ = MemoryBlockId::new();
+    }
+}
