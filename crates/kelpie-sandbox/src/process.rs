@@ -245,14 +245,19 @@ impl Sandbox for ProcessSandbox {
     }
 
     async fn snapshot(&self) -> SandboxResult<Snapshot> {
-        // For process sandbox, snapshot is not fully supported
-        // Just return metadata
-        Ok(Snapshot::new(&self.id))
+        // ProcessSandbox doesn't support snapshotting - use FirecrackerSandbox for that
+        Err(SandboxError::SnapshotFailed {
+            sandbox_id: self.id.clone(),
+            reason: "ProcessSandbox does not support snapshotting. Use FirecrackerSandbox for snapshot/restore capabilities.".to_string(),
+        })
     }
 
     async fn restore(&mut self, _snapshot: &Snapshot) -> SandboxResult<()> {
-        // For process sandbox, restore is not fully supported
-        Ok(())
+        // ProcessSandbox doesn't support restore - use FirecrackerSandbox for that
+        Err(SandboxError::RestoreFailed {
+            sandbox_id: self.id.clone(),
+            reason: "ProcessSandbox does not support restore. Use FirecrackerSandbox for snapshot/restore capabilities.".to_string(),
+        })
     }
 
     async fn destroy(&mut self) -> SandboxResult<()> {

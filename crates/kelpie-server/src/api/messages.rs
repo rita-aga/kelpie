@@ -50,7 +50,7 @@ pub async fn list_messages(
 /// POST /v1/agents/{agent_id}/messages
 ///
 /// Builds a prompt from memory blocks and sends to configured LLM.
-/// Falls back to stub response if no LLM is configured.
+/// Requires LLM to be configured via ANTHROPIC_API_KEY or OPENAI_API_KEY.
 pub async fn send_message(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -80,8 +80,12 @@ pub async fn send_message(
         .get_agent(&agent_id)?
         .ok_or_else(|| ApiError::not_found("agent", &agent_id))?;
 
-    // Generate response (LLM or stub)
-    let (response_content, prompt_tokens, completion_tokens) = if let Some(llm) = state.llm() {
+    // Generate response via LLM (required)
+    let llm = state.llm().ok_or_else(|| {
+        ApiError::internal("LLM not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable.")
+    })?;
+
+    let (response_content, prompt_tokens, completion_tokens) = {
         // Build messages for LLM
         let mut messages = Vec::new();
 
@@ -195,15 +199,9 @@ pub async fn send_message(
             }
             Err(e) => {
                 tracing::error!(agent_id = %agent_id, error = %e, "LLM call failed");
-                let content = format!("Error calling LLM: {}. Falling back to stub.", e);
-                let tokens = estimate_tokens(&content);
-                (content, estimate_tokens(&request.content), tokens)
+                return Err(ApiError::internal(&format!("LLM call failed: {}", e)));
             }
         }
-    } else {
-        // No LLM configured, use stub
-        let content = generate_stub_response(&request.content);
-        (content, estimate_tokens(&request.content), estimate_tokens(&request.content))
     };
 
     // Create assistant message
@@ -256,20 +254,6 @@ fn build_system_prompt(system: &Option<String>, blocks: &[crate::models::Block])
     }
 
     parts.join("\n")
-}
-
-/// Generate a stub response for testing
-/// This will be replaced by actual LLM calls via kelpie-agent
-fn generate_stub_response(input: &str) -> String {
-    format!(
-        "This is a stub response. The Kelpie server received your message: \"{}\". \
-         LLM integration is pending via kelpie-agent.",
-        if input.len() > 50 {
-            format!("{}...", &input[..50])
-        } else {
-            input.to_string()
-        }
-    )
 }
 
 /// Rough token estimate (4 chars per token on average)
@@ -389,7 +373,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_message() {
+    async fn test_send_message_requires_llm() {
         let (app, agent_id) = test_app_with_agent().await;
 
         let message = serde_json::json!({
@@ -409,17 +393,14 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::OK);
+        // Without LLM configured, should return 500 with helpful error
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let response: super::MessageResponse = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(response.messages.len(), 2);
-        assert_eq!(response.messages[0].role, MessageRole::User);
-        assert_eq!(response.messages[1].role, MessageRole::Assistant);
-        assert!(response.usage.is_some());
+        let error_text = String::from_utf8_lossy(&body);
+        assert!(error_text.contains("LLM not configured"));
     }
 
     #[tokio::test]
@@ -447,31 +428,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_list_messages() {
+    async fn test_list_messages_empty() {
         let (app, agent_id) = test_app_with_agent().await;
 
-        // Send a few messages first
-        for i in 0..3 {
-            let message = serde_json::json!({
-                "role": "user",
-                "content": format!("Message {}", i)
-            });
-
-            let _response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri(format!("/v1/agents/{}/messages", agent_id))
-                        .header("content-type", "application/json")
-                        .body(Body::from(serde_json::to_vec(&message).unwrap()))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-        }
-
-        // List messages
+        // List messages on agent with no messages
         let response = app
             .oneshot(
                 Request::builder()
@@ -490,7 +450,7 @@ mod tests {
             .unwrap();
         let messages: Vec<crate::models::Message> = serde_json::from_slice(&body).unwrap();
 
-        // 3 user messages + 3 assistant responses = 6 total
-        assert_eq!(messages.len(), 6);
+        // No messages sent yet
+        assert_eq!(messages.len(), 0);
     }
 }
