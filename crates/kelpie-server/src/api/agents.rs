@@ -53,6 +53,11 @@ pub fn router() -> Router<AppState> {
             "/:agent_id/messages",
             get(super::messages::list_messages).post(super::messages::send_message),
         )
+        // Streaming message route (letta-code SSE)
+        .route(
+            "/:agent_id/messages/stream",
+            axum::routing::post(super::streaming::send_message_stream),
+        )
         // Nested archival routes
         .route(
             "/:agent_id/archival",

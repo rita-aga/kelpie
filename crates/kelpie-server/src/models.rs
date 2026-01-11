@@ -388,7 +388,9 @@ pub struct Message {
     pub id: String,
     /// Agent ID
     pub agent_id: String,
-    /// Message role
+    /// Message type discriminator (letta-code compatibility)
+    pub message_type: String,
+    /// Message role (legacy)
     pub role: MessageRole,
     /// Message content
     pub content: String,
@@ -397,7 +399,20 @@ pub struct Message {
     /// Tool calls made by assistant
     pub tool_calls: Option<Vec<ToolCall>>,
     /// Creation timestamp
+    #[serde(rename = "date")]
     pub created_at: DateTime<Utc>,
+}
+
+impl Message {
+    /// Get message_type from role
+    pub fn message_type_from_role(role: &MessageRole) -> String {
+        match role {
+            MessageRole::User => "user_message".to_string(),
+            MessageRole::Assistant => "assistant_message".to_string(),
+            MessageRole::System => "system_message".to_string(),
+            MessageRole::Tool => "tool_return_message".to_string(),
+        }
+    }
 }
 
 /// Tool call in a message

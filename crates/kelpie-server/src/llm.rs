@@ -210,6 +210,7 @@ pub struct CompletionResponse {
 }
 
 /// LLM client
+#[derive(Clone)]
 pub struct LlmClient {
     config: LlmConfig,
     client: reqwest::Client,

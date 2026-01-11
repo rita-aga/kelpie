@@ -946,6 +946,7 @@ mod tests {
             let msg = Message {
                 id: format!("msg-{}", i),
                 agent_id: agent_id.clone(),
+                message_type: "user_message".to_string(),
                 role: crate::models::MessageRole::User,
                 content: format!("Message {}", i),
                 tool_call_id: None,

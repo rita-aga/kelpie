@@ -7,6 +7,7 @@ pub mod archival;
 pub mod blocks;
 pub mod messages;
 pub mod standalone_blocks;
+pub mod streaming;
 pub mod tools;
 
 use crate::models::{ErrorResponse, HealthResponse};

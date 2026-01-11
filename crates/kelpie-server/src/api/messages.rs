@@ -1,18 +1,25 @@
 //! Message API endpoints
 //!
-//! TigerStyle: Letta-compatible message operations.
+//! TigerStyle: Letta-compatible message operations with SSE streaming support.
 
 use crate::api::ApiError;
-use crate::llm::{ChatMessage, ToolDefinition};
+use crate::llm::{ChatMessage, ContentBlock, ToolDefinition};
 use crate::models::{CreateMessageRequest, Message, MessageResponse, MessageRole, UsageStats};
 use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
     Json,
 };
 use chrono::Utc;
+use futures::stream::{self, Stream, StreamExt};
 use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
+use std::time::Duration;
 use uuid::Uuid;
 
 /// Query parameters for listing messages
@@ -31,6 +38,59 @@ fn default_limit() -> usize {
 
 /// Maximum limit for list operations
 const LIST_LIMIT_MAX: usize = 1000;
+
+/// Query parameters for sending messages (streaming support)
+#[derive(Debug, Deserialize, Default)]
+pub struct SendMessageQuery {
+    /// Enable step streaming (letta-code compatibility)
+    #[serde(default)]
+    pub stream_steps: bool,
+    /// Enable token streaming (not yet implemented)
+    #[serde(default)]
+    pub stream_tokens: bool,
+}
+
+// =============================================================================
+// SSE Message Types (Letta-compatible)
+// =============================================================================
+
+/// SSE message types for streaming responses
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "message_type")]
+enum SseMessage {
+    #[serde(rename = "assistant_message")]
+    AssistantMessage { id: String, content: String },
+    #[serde(rename = "reasoning_message")]
+    ReasoningMessage { id: String, reasoning: String },
+    #[serde(rename = "tool_call_message")]
+    ToolCallMessage { id: String, tool_call: ToolCallInfo },
+    #[serde(rename = "tool_return_message")]
+    ToolReturnMessage {
+        id: String,
+        tool_return: String,
+        status: String,
+    },
+    #[serde(rename = "usage_statistics")]
+    UsageStatistics {
+        completion_tokens: u64,
+        prompt_tokens: u64,
+        total_tokens: u64,
+        step_count: u32,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ToolCallInfo {
+    name: String,
+    arguments: serde_json::Value,
+}
+
+/// SSE event for stop reason
+#[derive(Debug, Clone, Serialize)]
+struct StopReasonEvent {
+    message_type: &'static str,
+    stop_reason: String,
+}
 
 /// List messages for an agent
 ///
@@ -52,11 +112,28 @@ pub async fn list_messages(
 /// Builds a prompt from memory blocks and sends to configured LLM.
 /// Requires LLM to be configured via ANTHROPIC_API_KEY or OPENAI_API_KEY.
 /// Supports multiple request formats for letta-code compatibility.
+/// Supports SSE streaming when stream_steps=true query parameter is set.
 pub async fn send_message(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
+    Query(query): Query<SendMessageQuery>,
     Json(request): Json<CreateMessageRequest>,
-) -> Result<Json<MessageResponse>, ApiError> {
+) -> Result<Response, ApiError> {
+    // If streaming is requested, delegate to SSE handler
+    if query.stream_steps {
+        return send_message_streaming(state, agent_id, request).await;
+    }
+
+    // Otherwise return JSON response
+    send_message_json(state, agent_id, request).await
+}
+
+/// Send a message with JSON response (non-streaming)
+async fn send_message_json(
+    state: AppState,
+    agent_id: String,
+    request: CreateMessageRequest,
+) -> Result<Response, ApiError> {
     // Extract effective content from various request formats
     let (role, content) = request
         .effective_content()
@@ -66,6 +143,7 @@ pub async fn send_message(
     let user_message = Message {
         id: Uuid::new_v4().to_string(),
         agent_id: agent_id.clone(),
+        message_type: Message::message_type_from_role(&role),
         role: role.clone(),
         content: content.clone(),
         tool_call_id: request.tool_call_id.clone(),
@@ -219,6 +297,7 @@ pub async fn send_message(
     let assistant_message = Message {
         id: Uuid::new_v4().to_string(),
         agent_id: agent_id.clone(),
+        message_type: "assistant_message".to_string(),
         role: MessageRole::Assistant,
         content: response_content,
         tool_call_id: None,
@@ -244,7 +323,282 @@ pub async fn send_message(
             total_tokens: prompt_tokens + completion_tokens,
         }),
         stop_reason: "end_turn".to_string(),
-    }))
+    })
+    .into_response())
+}
+
+/// Send a message with SSE streaming response
+async fn send_message_streaming(
+    state: AppState,
+    agent_id: String,
+    request: CreateMessageRequest,
+) -> Result<Response, ApiError> {
+    // Extract effective content from various request formats
+    let (role, content) = request
+        .effective_content()
+        .ok_or_else(|| ApiError::bad_request("message content cannot be empty"))?;
+
+    // Verify agent exists and get data we need
+    let agent = state
+        .get_agent(&agent_id)?
+        .ok_or_else(|| ApiError::not_found("agent", &agent_id))?;
+
+    let llm = state.llm().ok_or_else(|| {
+        ApiError::internal(
+            "LLM not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable.",
+        )
+    })?;
+
+    // Clone things we need for the async stream
+    let agent_id_clone = agent_id.clone();
+    let state_clone = state.clone();
+    let llm_clone = llm.clone();
+    let agent_clone = agent.clone();
+
+    // Create user message
+    let user_message = Message {
+        id: Uuid::new_v4().to_string(),
+        agent_id: agent_id.clone(),
+        message_type: Message::message_type_from_role(&role),
+        role: role.clone(),
+        content: content.clone(),
+        tool_call_id: request.tool_call_id.clone(),
+        tool_calls: None,
+        created_at: Utc::now(),
+    };
+
+    // Store user message
+    let _stored_user_msg = state.add_message(&agent_id, user_message)?;
+
+    // Create the SSE stream
+    let stream = stream::once(async move {
+        let events = generate_sse_events(
+            &state_clone,
+            &agent_id_clone,
+            &agent_clone,
+            &llm_clone,
+            content,
+        )
+        .await;
+        stream::iter(events)
+    })
+    .flatten();
+
+    Ok(Sse::new(stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("keep-alive"),
+        )
+        .into_response())
+}
+
+/// Generate all SSE events for a streaming response
+async fn generate_sse_events(
+    state: &AppState,
+    agent_id: &str,
+    agent: &crate::models::AgentState,
+    llm: &crate::llm::LlmClient,
+    content: String,
+) -> Vec<Result<Event, Infallible>> {
+    let mut events = Vec::new();
+    let mut total_prompt_tokens = 0u64;
+    let mut total_completion_tokens = 0u64;
+    let mut step_count = 0u32;
+
+    // Build messages for LLM
+    let mut messages = Vec::new();
+
+    // System message with memory blocks
+    let system_content = build_system_prompt(&agent.system, &agent.blocks);
+    messages.push(ChatMessage {
+        role: "system".to_string(),
+        content: system_content,
+    });
+
+    // Get recent message history
+    let history = state.list_messages(agent_id, 20, None).unwrap_or_default();
+    for msg in history.iter() {
+        messages.push(ChatMessage {
+            role: match msg.role {
+                MessageRole::User => "user",
+                MessageRole::Assistant => "assistant",
+                MessageRole::System => "system",
+                MessageRole::Tool => "tool",
+            }
+            .to_string(),
+            content: msg.content.clone(),
+        });
+    }
+
+    // Add current user message
+    messages.push(ChatMessage {
+        role: "user".to_string(),
+        content: content.clone(),
+    });
+
+    // Define available tools
+    let tools = vec![ToolDefinition::shell()];
+
+    // Call LLM
+    match llm.complete_with_tools(messages.clone(), tools.clone()).await {
+        Ok(mut response) => {
+            total_prompt_tokens += response.prompt_tokens;
+            total_completion_tokens += response.completion_tokens;
+            step_count += 1;
+
+            let mut final_content = response.content.clone();
+            let mut iterations = 0;
+
+            // Handle tool use loop
+            while response.stop_reason == "tool_use" && iterations < 5 {
+                iterations += 1;
+
+                // Send tool call events
+                for tool_call in &response.tool_calls {
+                    let tool_msg = SseMessage::ToolCallMessage {
+                        id: Uuid::new_v4().to_string(),
+                        tool_call: ToolCallInfo {
+                            name: tool_call.name.clone(),
+                            arguments: tool_call.input.clone(),
+                        },
+                    };
+                    if let Ok(json) = serde_json::to_string(&tool_msg) {
+                        events.push(Ok(Event::default().data(json)));
+                    }
+                }
+
+                // Execute tools
+                let mut tool_results = Vec::new();
+                for tool_call in &response.tool_calls {
+                    let result = execute_tool_async(&tool_call.name, &tool_call.input).await;
+
+                    // Send tool return event
+                    let return_msg = SseMessage::ToolReturnMessage {
+                        id: Uuid::new_v4().to_string(),
+                        tool_return: result.clone(),
+                        status: "success".to_string(),
+                    };
+                    if let Ok(json) = serde_json::to_string(&return_msg) {
+                        events.push(Ok(Event::default().data(json)));
+                    }
+
+                    tool_results.push((tool_call.id.clone(), result));
+                }
+
+                // Build assistant content blocks for continuation
+                let mut assistant_blocks = Vec::new();
+                if !response.content.is_empty() {
+                    assistant_blocks.push(ContentBlock::Text {
+                        text: response.content.clone(),
+                    });
+                }
+                for tc in &response.tool_calls {
+                    assistant_blocks.push(ContentBlock::ToolUse {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        input: tc.input.clone(),
+                    });
+                }
+
+                // Continue conversation with tool results
+                match llm
+                    .continue_with_tool_result(
+                        messages.clone(),
+                        tools.clone(),
+                        assistant_blocks,
+                        tool_results,
+                    )
+                    .await
+                {
+                    Ok(next_response) => {
+                        total_prompt_tokens += next_response.prompt_tokens;
+                        total_completion_tokens += next_response.completion_tokens;
+                        step_count += 1;
+                        final_content = next_response.content.clone();
+                        response = next_response;
+                    }
+                    Err(e) => {
+                        final_content = format!("Tool execution error: {}", e);
+                        break;
+                    }
+                }
+            }
+
+            // Send assistant message event
+            let assistant_msg = SseMessage::AssistantMessage {
+                id: Uuid::new_v4().to_string(),
+                content: final_content.clone(),
+            };
+            if let Ok(json) = serde_json::to_string(&assistant_msg) {
+                events.push(Ok(Event::default().data(json)));
+            }
+
+            // Store assistant message
+            let assistant_message = Message {
+                id: Uuid::new_v4().to_string(),
+                agent_id: agent_id.to_string(),
+                message_type: "assistant_message".to_string(),
+                role: MessageRole::Assistant,
+                content: final_content,
+                tool_call_id: None,
+                tool_calls: None,
+                created_at: Utc::now(),
+            };
+            let _ = state.add_message(agent_id, assistant_message);
+        }
+        Err(e) => {
+            // Send error as assistant message
+            let error_msg = SseMessage::AssistantMessage {
+                id: Uuid::new_v4().to_string(),
+                content: format!("Error: {}", e),
+            };
+            if let Ok(json) = serde_json::to_string(&error_msg) {
+                events.push(Ok(Event::default().data(json)));
+            }
+        }
+    }
+
+    // Send stop_reason event
+    let stop_event = StopReasonEvent {
+        message_type: "stop_reason",
+        stop_reason: "end_turn".to_string(),
+    };
+    if let Ok(json) = serde_json::to_string(&stop_event) {
+        events.push(Ok(Event::default().data(json)));
+    }
+
+    // Send usage statistics
+    let usage_msg = SseMessage::UsageStatistics {
+        completion_tokens: total_completion_tokens,
+        prompt_tokens: total_prompt_tokens,
+        total_tokens: total_prompt_tokens + total_completion_tokens,
+        step_count,
+    };
+    if let Ok(json) = serde_json::to_string(&usage_msg) {
+        events.push(Ok(Event::default().data(json)));
+    }
+
+    // Send [DONE]
+    events.push(Ok(Event::default().data("[DONE]")));
+
+    events
+}
+
+/// Execute a tool asynchronously and return the result
+async fn execute_tool_async(name: &str, input: &serde_json::Value) -> String {
+    match name {
+        "shell" => {
+            let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
+
+            if command.is_empty() {
+                return "Error: No command provided".to_string();
+            }
+
+            execute_in_sandbox(command).await
+        }
+        _ => format!("Unknown tool: {}", name),
+    }
 }
 
 /// Build system prompt from agent's system message and memory blocks

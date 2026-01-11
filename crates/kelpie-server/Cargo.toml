@@ -41,5 +41,9 @@ chrono = { workspace = true }
 # HTTP client for LLM APIs
 reqwest = { workspace = true }
 
+# Streaming for SSE
+tokio-stream = { workspace = true }
+futures = { workspace = true }
+
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
