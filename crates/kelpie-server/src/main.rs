@@ -7,9 +7,12 @@ mod llm;
 mod models;
 mod state;
 
+use axum::extract::Request;
+use axum::ServiceExt;
 use clap::Parser;
 use state::AppState;
 use std::net::SocketAddr;
+use tower_http::normalize_path::NormalizePath;
 use tracing_subscriber::EnvFilter;
 
 /// Kelpie server CLI
@@ -82,7 +85,10 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("  POST /v1/tools/{{name}}/execute          - Execute tool");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+
+    // Wrap with NormalizePath to handle trailing slashes (letta-code compatibility)
+    let app = NormalizePath::trim_trailing_slash(app);
+    axum::serve(listener, ServiceExt::<Request>::into_make_service(app)).await?;
 
     Ok(())
 }

@@ -144,7 +144,7 @@ pub async fn delete_archival_entry(
 
 #[cfg(test)]
 mod tests {
-    
+
     use crate::api;
     use crate::state::AppState;
     use axum::body::Body;

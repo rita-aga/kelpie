@@ -6,6 +6,7 @@ pub mod agents;
 pub mod archival;
 pub mod blocks;
 pub mod messages;
+pub mod standalone_blocks;
 pub mod tools;
 
 use crate::models::{ErrorResponse, HealthResponse};
@@ -36,6 +37,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/capabilities", get(capabilities))
         // Agent routes
         .nest("/v1/agents", agents::router())
+        // Standalone blocks routes (letta-code compatibility)
+        .nest("/v1/blocks", standalone_blocks::router())
         // Tool routes
         .nest("/v1/tools", tools::router())
         .layer(TraceLayer::new_for_http())

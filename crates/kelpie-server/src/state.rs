@@ -20,6 +20,9 @@ pub const MESSAGES_PER_AGENT_MAX: usize = 10_000;
 /// Maximum archival entries per agent
 pub const ARCHIVAL_ENTRIES_PER_AGENT_MAX: usize = 100_000;
 
+/// Maximum standalone blocks
+pub const BLOCKS_COUNT_MAX: usize = 100_000;
+
 /// Tool information for API responses
 #[derive(Debug, Clone)]
 pub struct ToolInfo {
@@ -44,6 +47,8 @@ struct AppStateInner {
     tools: RwLock<HashMap<String, ToolInfo>>,
     /// Archival memory entries by agent ID
     archival: RwLock<HashMap<String, Vec<ArchivalEntry>>>,
+    /// Standalone blocks by ID (for letta-code compatibility)
+    blocks: RwLock<HashMap<String, Block>>,
     /// Server start time for uptime calculation
     start_time: Instant,
     /// LLM client (None if no API key configured)
@@ -68,6 +73,7 @@ impl AppState {
                 messages: RwLock::new(HashMap::new()),
                 tools: RwLock::new(HashMap::new()),
                 archival: RwLock::new(HashMap::new()),
+                blocks: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm,
             }),
@@ -318,6 +324,200 @@ impl AppState {
         })?;
 
         Ok(agent.blocks.clone())
+    }
+
+    /// Get a memory block by agent ID and label (for letta-code compatibility)
+    pub fn get_block_by_label(
+        &self,
+        agent_id: &str,
+        label: &str,
+    ) -> Result<Option<Block>, StateError> {
+        let agents = self
+            .inner
+            .agents
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        let agent = agents.get(agent_id).ok_or_else(|| StateError::NotFound {
+            resource: "agent",
+            id: agent_id.to_string(),
+        })?;
+
+        Ok(agent.blocks.iter().find(|b| b.label == label).cloned())
+    }
+
+    /// Update a memory block by label (for letta-code compatibility)
+    pub fn update_block_by_label(
+        &self,
+        agent_id: &str,
+        label: &str,
+        update: impl FnOnce(&mut Block),
+    ) -> Result<Block, StateError> {
+        let mut agents = self
+            .inner
+            .agents
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        let agent = agents
+            .get_mut(agent_id)
+            .ok_or_else(|| StateError::NotFound {
+                resource: "agent",
+                id: agent_id.to_string(),
+            })?;
+
+        let block = agent
+            .blocks
+            .iter_mut()
+            .find(|b| b.label == label)
+            .ok_or_else(|| StateError::NotFound {
+                resource: "block",
+                id: label.to_string(),
+            })?;
+
+        update(block);
+        Ok(block.clone())
+    }
+
+    // =========================================================================
+    // Standalone block operations (for letta-code compatibility)
+    // =========================================================================
+
+    /// Create a standalone block
+    pub fn create_standalone_block(&self, block: Block) -> Result<Block, StateError> {
+        let mut blocks = self
+            .inner
+            .blocks
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        if blocks.len() >= BLOCKS_COUNT_MAX {
+            return Err(StateError::LimitExceeded {
+                resource: "blocks",
+                limit: BLOCKS_COUNT_MAX,
+            });
+        }
+
+        if blocks.contains_key(&block.id) {
+            return Err(StateError::AlreadyExists {
+                resource: "block",
+                id: block.id.clone(),
+            });
+        }
+
+        let result = block.clone();
+        blocks.insert(block.id.clone(), block);
+        Ok(result)
+    }
+
+    /// Get a standalone block by ID
+    pub fn get_standalone_block(&self, id: &str) -> Result<Option<Block>, StateError> {
+        let blocks = self
+            .inner
+            .blocks
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+        Ok(blocks.get(id).cloned())
+    }
+
+    /// List all standalone blocks with pagination
+    pub fn list_standalone_blocks(
+        &self,
+        limit: usize,
+        cursor: Option<&str>,
+        label: Option<&str>,
+    ) -> Result<(Vec<Block>, Option<String>), StateError> {
+        let blocks = self
+            .inner
+            .blocks
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        let mut all_blocks: Vec<_> = blocks.values().cloned().collect();
+
+        // Filter by label if provided
+        if let Some(l) = label {
+            all_blocks.retain(|b| b.label == l);
+        }
+
+        all_blocks.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+        // Apply cursor (skip until we find the cursor ID)
+        let start_idx = if let Some(cursor_id) = cursor {
+            all_blocks
+                .iter()
+                .position(|b| b.id == cursor_id)
+                .map(|i| i + 1)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        let page: Vec<_> = all_blocks
+            .into_iter()
+            .skip(start_idx)
+            .take(limit + 1)
+            .collect();
+
+        // Determine next cursor
+        let (items, next_cursor) = if page.len() > limit {
+            let items: Vec<_> = page.into_iter().take(limit).collect();
+            let next_cursor = items.last().map(|b| b.id.clone());
+            (items, next_cursor)
+        } else {
+            (page, None)
+        };
+
+        Ok((items, next_cursor))
+    }
+
+    /// Update a standalone block
+    pub fn update_standalone_block(
+        &self,
+        id: &str,
+        update: impl FnOnce(&mut Block),
+    ) -> Result<Block, StateError> {
+        let mut blocks = self
+            .inner
+            .blocks
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        let block = blocks.get_mut(id).ok_or_else(|| StateError::NotFound {
+            resource: "block",
+            id: id.to_string(),
+        })?;
+
+        update(block);
+        Ok(block.clone())
+    }
+
+    /// Delete a standalone block
+    pub fn delete_standalone_block(&self, id: &str) -> Result<(), StateError> {
+        let mut blocks = self
+            .inner
+            .blocks
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        if blocks.remove(id).is_none() {
+            return Err(StateError::NotFound {
+                resource: "block",
+                id: id.to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Get standalone block count
+    pub fn standalone_block_count(&self) -> Result<usize, StateError> {
+        let blocks = self
+            .inner
+            .blocks
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+        Ok(blocks.len())
     }
 
     // =========================================================================

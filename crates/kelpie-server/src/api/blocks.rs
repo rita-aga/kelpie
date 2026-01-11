@@ -78,6 +78,54 @@ pub async fn update_block(
     Ok(Json(updated))
 }
 
+// =============================================================================
+// Core Memory routes (letta-code compatibility)
+// These use block labels instead of block IDs
+// =============================================================================
+
+/// Get a block by label
+///
+/// GET /v1/agents/{agent_id}/core-memory/blocks/{label}
+pub async fn get_block_by_label(
+    State(state): State<AppState>,
+    Path((agent_id, label)): Path<(String, String)>,
+) -> Result<Json<Block>, ApiError> {
+    let block = state
+        .get_block_by_label(&agent_id, &label)?
+        .ok_or_else(|| ApiError::not_found("Block", &label))?;
+
+    Ok(Json(block))
+}
+
+/// Update a block by label
+///
+/// PATCH /v1/agents/{agent_id}/core-memory/blocks/{label}
+pub async fn update_block_by_label(
+    State(state): State<AppState>,
+    Path((agent_id, label)): Path<(String, String)>,
+    Json(request): Json<UpdateBlockRequest>,
+) -> Result<Json<Block>, ApiError> {
+    // Validate value size if provided
+    if let Some(ref value) = request.value {
+        if let Some(limit) = request.limit {
+            if value.len() > limit {
+                return Err(ApiError::bad_request(format!(
+                    "value exceeds limit ({} > {})",
+                    value.len(),
+                    limit
+                )));
+            }
+        }
+    }
+
+    let updated = state.update_block_by_label(&agent_id, &label, |block| {
+        block.apply_update(request);
+    })?;
+
+    tracing::info!(agent_id = %agent_id, label = %label, "updated block by label");
+    Ok(Json(updated))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::api;

@@ -172,12 +172,7 @@ Long-running tool operations:
 | DST Framework | Complete | Fault injection, deterministic replay |
 | Local Embeddings | Complete | Fastembed integration (optional feature) |
 | Server Wire-up | Complete | Tools, archival memory, capabilities endpoints |
-
-### In Progress
-
-| Component | Status | Blocker |
-|-----------|--------|---------|
-| Letta Adapter | 95% | Only `/v1/sources` endpoint pending |
+| Letta Adapter | Complete | letta-code compatible (ADR-006) |
 
 ### Not Started
 

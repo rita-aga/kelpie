@@ -43,6 +43,11 @@ pub fn router() -> Router<AppState> {
             "/:agent_id/blocks/:block_id",
             get(super::blocks::get_block).patch(super::blocks::update_block),
         )
+        // Core memory routes (letta-code compatibility - uses label instead of ID)
+        .route(
+            "/:agent_id/core-memory/blocks/:label",
+            get(super::blocks::get_block_by_label).patch(super::blocks::update_block_by_label),
+        )
         // Nested message routes
         .route(
             "/:agent_id/messages",

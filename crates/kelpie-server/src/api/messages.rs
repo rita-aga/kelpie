@@ -51,22 +51,23 @@ pub async fn list_messages(
 ///
 /// Builds a prompt from memory blocks and sends to configured LLM.
 /// Requires LLM to be configured via ANTHROPIC_API_KEY or OPENAI_API_KEY.
+/// Supports multiple request formats for letta-code compatibility.
 pub async fn send_message(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
     Json(request): Json<CreateMessageRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
-    // Validate message
-    if request.content.is_empty() && request.role != MessageRole::Tool {
-        return Err(ApiError::bad_request("message content cannot be empty"));
-    }
+    // Extract effective content from various request formats
+    let (role, content) = request
+        .effective_content()
+        .ok_or_else(|| ApiError::bad_request("message content cannot be empty"))?;
 
     // Create user message
     let user_message = Message {
         id: Uuid::new_v4().to_string(),
         agent_id: agent_id.clone(),
-        role: request.role.clone(),
-        content: request.content.clone(),
+        role: role.clone(),
+        content: content.clone(),
         tool_call_id: request.tool_call_id.clone(),
         tool_calls: None,
         created_at: Utc::now(),
@@ -120,7 +121,7 @@ pub async fn send_message(
         // Add current user message
         messages.push(ChatMessage {
             role: "user".to_string(),
-            content: request.content.clone(),
+            content: content.clone(),
         });
 
         // Define available tools

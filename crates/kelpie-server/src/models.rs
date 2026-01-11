@@ -234,14 +234,143 @@ pub enum MessageRole {
 }
 
 /// Request to send a message to an agent
+/// Supports multiple formats for letta-code compatibility
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateMessageRequest {
-    /// Message role
+    /// Message role (defaults to "user" if not provided)
+    #[serde(default = "default_role")]
     pub role: MessageRole,
-    /// Message content
+    /// Message content - supports both "content" and "text" field names
+    #[serde(alias = "text", default)]
     pub content: String,
     /// Optional tool call ID (for tool responses)
     pub tool_call_id: Option<String>,
+    /// Optional messages array (letta-code sends this format)
+    /// If provided, takes precedence over content field
+    pub messages: Option<Vec<LettaMessage>>,
+    /// Optional message field (another letta-code format)
+    #[serde(alias = "message")]
+    pub msg: Option<String>,
+}
+
+fn default_role() -> MessageRole {
+    MessageRole::User
+}
+
+/// Letta message format (used in messages array)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LettaMessage {
+    /// Role (user, assistant, system, tool)
+    #[serde(default = "default_role")]
+    pub role: MessageRole,
+    /// Content - can be string or array of content blocks
+    #[serde(default, deserialize_with = "deserialize_content")]
+    pub content: Option<String>,
+    /// Alternative text field
+    pub text: Option<String>,
+}
+
+/// Deserialize content that can be either a string or an array of content blocks
+fn deserialize_content<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    use std::fmt;
+
+    struct ContentVisitor;
+
+    impl<'de> Visitor<'de> for ContentVisitor {
+        type Value = Option<String>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a string or an array of content blocks")
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(Some(value.to_string()))
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(Some(value))
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            // Content is an array of content blocks, extract text from them
+            let mut texts = Vec::new();
+            while let Some(block) = seq.next_element::<serde_json::Value>()? {
+                // Extract text from content block
+                if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                    texts.push(text.to_string());
+                }
+            }
+            if texts.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(texts.join("\n")))
+            }
+        }
+    }
+
+    deserializer.deserialize_any(ContentVisitor)
+}
+
+impl LettaMessage {
+    /// Get the effective text content from either content or text field
+    pub fn get_text(&self) -> Option<&str> {
+        self.content.as_deref().or(self.text.as_deref())
+    }
+}
+
+impl CreateMessageRequest {
+    /// Get the effective content and role from the request
+    /// Handles multiple formats for letta-code compatibility
+    pub fn effective_content(&self) -> Option<(MessageRole, String)> {
+        // If messages array provided, use first message with content
+        if let Some(ref msgs) = self.messages {
+            for msg in msgs {
+                if let Some(text) = msg.get_text() {
+                    if !text.is_empty() {
+                        return Some((msg.role.clone(), text.to_string()));
+                    }
+                }
+            }
+        }
+        // Check msg field
+        if let Some(ref msg) = self.msg {
+            if !msg.is_empty() {
+                return Some((self.role.clone(), msg.clone()));
+            }
+        }
+        // Fall back to direct content
+        if !self.content.is_empty() {
+            return Some((self.role.clone(), self.content.clone()));
+        }
+        None
+    }
 }
 
 /// Message response

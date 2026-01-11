@@ -160,7 +160,7 @@ async fn execute_tool(
 
 #[cfg(test)]
 mod tests {
-    
+
     use crate::api;
     use crate::state::AppState;
     use axum::body::Body;
