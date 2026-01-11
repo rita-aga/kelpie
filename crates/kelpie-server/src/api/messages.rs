@@ -82,7 +82,9 @@ pub async fn send_message(
 
     // Generate response via LLM (required)
     let llm = state.llm().ok_or_else(|| {
-        ApiError::internal("LLM not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable.")
+        ApiError::internal(
+            "LLM not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable.",
+        )
     })?;
 
     let (response_content, prompt_tokens, completion_tokens) = {
@@ -125,7 +127,10 @@ pub async fn send_message(
         let tools = vec![ToolDefinition::shell()];
 
         // Call LLM with tools
-        match llm.complete_with_tools(messages.clone(), tools.clone()).await {
+        match llm
+            .complete_with_tools(messages.clone(), tools.clone())
+            .await
+        {
             Ok(mut response) => {
                 let mut total_prompt = response.prompt_tokens;
                 let mut total_completion = response.completion_tokens;
@@ -171,7 +176,12 @@ pub async fn send_message(
 
                     // Continue conversation with tool results
                     match llm
-                        .continue_with_tool_result(messages.clone(), tools.clone(), assistant_blocks, tool_results)
+                        .continue_with_tool_result(
+                            messages.clone(),
+                            tools.clone(),
+                            assistant_blocks,
+                            tool_results,
+                        )
                         .await
                     {
                         Ok(next_response) => {
@@ -199,7 +209,7 @@ pub async fn send_message(
             }
             Err(e) => {
                 tracing::error!(agent_id = %agent_id, error = %e, "LLM call failed");
-                return Err(ApiError::internal(&format!("LLM call failed: {}", e)));
+                return Err(ApiError::internal(format!("LLM call failed: {}", e)));
             }
         }
     };
@@ -248,7 +258,10 @@ fn build_system_prompt(system: &Option<String>, blocks: &[crate::models::Block])
     if !blocks.is_empty() {
         parts.push("\n\n<memory>".to_string());
         for block in blocks {
-            parts.push(format!("<{}>\n{}\n</{}>", block.label, block.value, block.label));
+            parts.push(format!(
+                "<{}>\n{}\n</{}>",
+                block.label, block.value, block.label
+            ));
         }
         parts.push("</memory>".to_string());
     }
@@ -257,6 +270,7 @@ fn build_system_prompt(system: &Option<String>, blocks: &[crate::models::Block])
 }
 
 /// Rough token estimate (4 chars per token on average)
+#[allow(dead_code)]
 fn estimate_tokens(text: &str) -> u64 {
     (text.len() / 4).max(1) as u64
 }
@@ -265,10 +279,7 @@ fn estimate_tokens(text: &str) -> u64 {
 fn execute_tool(name: &str, input: &serde_json::Value) -> String {
     match name {
         "shell" => {
-            let command = input
-                .get("command")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
 
             if command.is_empty() {
                 return "Error: No command provided".to_string();
@@ -276,9 +287,8 @@ fn execute_tool(name: &str, input: &serde_json::Value) -> String {
 
             // Execute via sandbox
             let result = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    execute_in_sandbox(command).await
-                })
+                tokio::runtime::Handle::current()
+                    .block_on(async { execute_in_sandbox(command).await })
             });
 
             result
@@ -313,7 +323,11 @@ async fn execute_in_sandbox(command: &str) -> String {
                 } else {
                     // Truncate long output
                     if stdout.len() > 4000 {
-                        format!("{}...\n[truncated, {} total bytes]", &stdout[..4000], stdout.len())
+                        format!(
+                            "{}...\n[truncated, {} total bytes]",
+                            &stdout[..4000],
+                            stdout.len()
+                        )
                     } else {
                         stdout
                     }
@@ -321,9 +335,7 @@ async fn execute_in_sandbox(command: &str) -> String {
             } else {
                 format!(
                     "Command failed with exit code {}:\n{}{}",
-                    output.status.code,
-                    stdout,
-                    stderr
+                    output.status.code, stdout, stderr
                 )
             }
         }
@@ -334,7 +346,7 @@ async fn execute_in_sandbox(command: &str) -> String {
 #[cfg(test)]
 mod tests {
     use crate::api;
-    use crate::models::{AgentState, MessageRole};
+    use crate::models::AgentState;
     use crate::state::AppState;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};

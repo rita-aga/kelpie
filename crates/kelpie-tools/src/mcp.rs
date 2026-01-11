@@ -4,7 +4,7 @@
 //!
 //! MCP is a protocol for tool discovery and execution between AI models
 //! and external tool providers. This module provides a client implementation
-//! that can connect to MCP servers and discover/execute tools.
+//! that can connect to MCP servers via stdio, HTTP, or SSE transports.
 
 use crate::error::{ToolError, ToolResult};
 use crate::traits::{
@@ -14,12 +14,15 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::process::Stdio;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use tracing::{debug, info};
+use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::sync::{mpsc, oneshot, RwLock};
+use tracing::{debug, error, info, warn};
 
 /// MCP protocol version
-#[allow(dead_code)]
 pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// Default MCP connection timeout
@@ -69,6 +72,17 @@ impl McpConfig {
         }
     }
 
+    /// Create configuration for an SSE-based MCP server
+    pub fn sse(name: impl Into<String>, url: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            transport: McpTransport::Sse { url: url.into() },
+            connection_timeout_ms: MCP_CONNECTION_TIMEOUT_MS,
+            request_timeout_ms: MCP_REQUEST_TIMEOUT_MS,
+            env: HashMap::new(),
+        }
+    }
+
     /// Add environment variable
     pub fn with_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.env.insert(key.into(), value.into());
@@ -111,9 +125,10 @@ pub enum McpTransport {
     },
 }
 
-/// MCP JSON-RPC message types
+/// MCP JSON-RPC message types (used for parsing mixed message streams)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
+#[allow(dead_code)]
 pub enum McpMessage {
     /// Request message
     Request(McpRequest),
@@ -137,7 +152,6 @@ pub struct McpRequest {
     pub params: Option<Value>,
 }
 
-#[allow(dead_code)]
 impl McpRequest {
     /// Create a new request
     pub fn new(id: u64, method: impl Into<String>) -> Self {
@@ -208,17 +222,68 @@ pub struct McpToolDefinition {
     pub input_schema: Value,
 }
 
-/// MCP client for connecting to MCP servers
-pub struct McpClient {
-    /// Configuration
-    config: McpConfig,
-    /// Connection state
-    state: RwLock<McpClientState>,
-    /// Request ID counter
-    #[allow(dead_code)]
-    request_id: std::sync::atomic::AtomicU64,
-    /// Discovered tools
-    tools: RwLock<HashMap<String, McpToolDefinition>>,
+/// Server capabilities returned during initialization
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ServerCapabilities {
+    /// Tools capability
+    #[serde(default)]
+    pub tools: Option<ToolsCapability>,
+    /// Resources capability
+    #[serde(default)]
+    pub resources: Option<ResourcesCapability>,
+    /// Prompts capability
+    #[serde(default)]
+    pub prompts: Option<PromptsCapability>,
+}
+
+/// Tools capability
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolsCapability {
+    /// Whether tool list can change
+    #[serde(rename = "listChanged", default)]
+    pub list_changed: bool,
+}
+
+/// Resources capability
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ResourcesCapability {
+    /// Whether to subscribe to resource changes
+    #[serde(default)]
+    pub subscribe: bool,
+    /// Whether resource list can change
+    #[serde(rename = "listChanged", default)]
+    pub list_changed: bool,
+}
+
+/// Prompts capability
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PromptsCapability {
+    /// Whether prompt list can change
+    #[serde(rename = "listChanged", default)]
+    pub list_changed: bool,
+}
+
+/// Initialize result from server
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InitializeResult {
+    /// Protocol version
+    #[serde(rename = "protocolVersion")]
+    pub protocol_version: String,
+    /// Server capabilities
+    pub capabilities: ServerCapabilities,
+    /// Server info
+    #[serde(rename = "serverInfo")]
+    pub server_info: ServerInfo,
+}
+
+/// Server info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerInfo {
+    /// Server name
+    pub name: String,
+    /// Server version
+    #[serde(default)]
+    pub version: String,
 }
 
 /// Client connection state
@@ -234,6 +299,503 @@ pub enum McpClientState {
     Failed,
 }
 
+/// Internal transport abstraction
+#[async_trait]
+trait TransportInner: Send + Sync {
+    /// Send a request and wait for response
+    async fn request(&self, request: McpRequest, timeout: Duration) -> ToolResult<McpResponse>;
+
+    /// Send a notification (no response expected)
+    async fn notify(&self, notification: McpNotification) -> ToolResult<()>;
+
+    /// Close the transport
+    async fn close(&self) -> ToolResult<()>;
+}
+
+/// Stdio transport - communicates via subprocess stdin/stdout
+struct StdioTransport {
+    /// Sender for requests
+    request_tx: mpsc::Sender<(McpRequest, oneshot::Sender<ToolResult<McpResponse>>)>,
+    /// Notification sender
+    notify_tx: mpsc::Sender<McpNotification>,
+    /// Handle to the child process
+    child_handle: RwLock<Option<Child>>,
+}
+
+impl StdioTransport {
+    /// Create and start a new stdio transport
+    async fn new(
+        command: &str,
+        args: &[String],
+        env: &HashMap<String, String>,
+        _timeout: Duration,
+    ) -> ToolResult<Self> {
+        // Spawn the MCP server process
+        let mut cmd = Command::new(command);
+        cmd.args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+
+        // Set environment variables
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+
+        let mut child = cmd.spawn().map_err(|e| ToolError::McpConnectionError {
+            reason: format!("failed to spawn MCP server '{}': {}", command, e),
+        })?;
+
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| ToolError::McpConnectionError {
+                reason: "failed to get stdin for MCP server".to_string(),
+            })?;
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| ToolError::McpConnectionError {
+                reason: "failed to get stdout for MCP server".to_string(),
+            })?;
+
+        // Create channels for communication
+        let (request_tx, request_rx) =
+            mpsc::channel::<(McpRequest, oneshot::Sender<ToolResult<McpResponse>>)>(32);
+        let (notify_tx, notify_rx) = mpsc::channel::<McpNotification>(32);
+        let (response_tx, response_rx) = mpsc::channel::<McpResponse>(32);
+
+        // Spawn writer task
+        let _writer_handle = tokio::spawn(Self::writer_task(stdin, request_rx, notify_rx));
+
+        // Spawn reader task
+        let _reader_handle = tokio::spawn(Self::reader_task(stdout, response_tx));
+
+        // Spawn response router task
+        let pending: Arc<RwLock<HashMap<u64, oneshot::Sender<ToolResult<McpResponse>>>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+        let pending_clone = pending.clone();
+
+        tokio::spawn(async move {
+            let mut response_rx = response_rx;
+            while let Some(response) = response_rx.recv().await {
+                let id = response.id;
+                if let Some(sender) = pending_clone.write().await.remove(&id) {
+                    let _ = sender.send(Ok(response));
+                }
+            }
+        });
+
+        // Store pending map in request channel handler
+        // We need to modify the request_tx to register pending requests
+        let (real_request_tx, mut real_request_rx) =
+            mpsc::channel::<(McpRequest, oneshot::Sender<ToolResult<McpResponse>>)>(32);
+        let pending_clone = pending.clone();
+
+        tokio::spawn(async move {
+            while let Some((request, response_sender)) = real_request_rx.recv().await {
+                let id = request.id;
+                pending_clone.write().await.insert(id, response_sender);
+                if request_tx
+                    .send((request, oneshot::channel().0))
+                    .await
+                    .is_err()
+                {
+                    pending_clone.write().await.remove(&id);
+                }
+            }
+        });
+
+        let transport = Self {
+            request_tx: real_request_tx,
+            notify_tx,
+            child_handle: RwLock::new(Some(child)),
+        };
+
+        Ok(transport)
+    }
+
+    /// Writer task - sends messages to stdin
+    async fn writer_task(
+        mut stdin: ChildStdin,
+        mut request_rx: mpsc::Receiver<(McpRequest, oneshot::Sender<ToolResult<McpResponse>>)>,
+        mut notify_rx: mpsc::Receiver<McpNotification>,
+    ) {
+        loop {
+            tokio::select! {
+                Some((request, _)) = request_rx.recv() => {
+                    let json = match serde_json::to_string(&request) {
+                        Ok(j) => j,
+                        Err(e) => {
+                            error!(error = %e, "Failed to serialize request");
+                            continue;
+                        }
+                    };
+                    debug!(id = request.id, method = %request.method, "Sending request");
+                    if let Err(e) = stdin.write_all(json.as_bytes()).await {
+                        error!(error = %e, "Failed to write to stdin");
+                        break;
+                    }
+                    if let Err(e) = stdin.write_all(b"\n").await {
+                        error!(error = %e, "Failed to write newline to stdin");
+                        break;
+                    }
+                    if let Err(e) = stdin.flush().await {
+                        error!(error = %e, "Failed to flush stdin");
+                        break;
+                    }
+                }
+                Some(notification) = notify_rx.recv() => {
+                    let json = match serde_json::to_string(&notification) {
+                        Ok(j) => j,
+                        Err(e) => {
+                            error!(error = %e, "Failed to serialize notification");
+                            continue;
+                        }
+                    };
+                    debug!(method = %notification.method, "Sending notification");
+                    if let Err(e) = stdin.write_all(json.as_bytes()).await {
+                        error!(error = %e, "Failed to write notification to stdin");
+                        break;
+                    }
+                    if let Err(e) = stdin.write_all(b"\n").await {
+                        error!(error = %e, "Failed to write newline to stdin");
+                        break;
+                    }
+                    if let Err(e) = stdin.flush().await {
+                        error!(error = %e, "Failed to flush stdin");
+                        break;
+                    }
+                }
+                else => break,
+            }
+        }
+    }
+
+    /// Reader task - reads messages from stdout
+    async fn reader_task(stdout: ChildStdout, response_tx: mpsc::Sender<McpResponse>) {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+
+        loop {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) => {
+                    debug!("EOF on stdout");
+                    break;
+                }
+                Ok(_) => {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+
+                    match serde_json::from_str::<McpResponse>(trimmed) {
+                        Ok(response) => {
+                            debug!(id = response.id, "Received response");
+                            if response_tx.send(response).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            // Try parsing as notification
+                            match serde_json::from_str::<McpNotification>(trimmed) {
+                                Ok(notification) => {
+                                    debug!(method = %notification.method, "Received notification");
+                                    // Handle notifications (could add callback here)
+                                }
+                                Err(_) => {
+                                    warn!(error = %e, line = %trimmed, "Failed to parse message");
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!(error = %e, "Failed to read from stdout");
+                    break;
+                }
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl TransportInner for StdioTransport {
+    async fn request(&self, request: McpRequest, timeout: Duration) -> ToolResult<McpResponse> {
+        let (response_tx, response_rx) = oneshot::channel();
+
+        self.request_tx
+            .send((request.clone(), response_tx))
+            .await
+            .map_err(|_| ToolError::McpConnectionError {
+                reason: "transport channel closed".to_string(),
+            })?;
+
+        match tokio::time::timeout(timeout, response_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(ToolError::McpConnectionError {
+                reason: "response channel closed".to_string(),
+            }),
+            Err(_) => Err(ToolError::ExecutionTimeout {
+                tool: request.method,
+                timeout_ms: timeout.as_millis() as u64,
+            }),
+        }
+    }
+
+    async fn notify(&self, notification: McpNotification) -> ToolResult<()> {
+        self.notify_tx
+            .send(notification)
+            .await
+            .map_err(|_| ToolError::McpConnectionError {
+                reason: "notification channel closed".to_string(),
+            })
+    }
+
+    async fn close(&self) -> ToolResult<()> {
+        if let Some(mut child) = self.child_handle.write().await.take() {
+            let _ = child.kill().await;
+        }
+        Ok(())
+    }
+}
+
+/// HTTP transport - communicates via HTTP POST
+struct HttpTransport {
+    /// HTTP client
+    client: reqwest::Client,
+    /// Server URL
+    url: String,
+}
+
+impl HttpTransport {
+    /// Create a new HTTP transport
+    fn new(url: &str, timeout: Duration) -> ToolResult<Self> {
+        let client = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .map_err(|e| ToolError::McpConnectionError {
+                reason: format!("failed to create HTTP client: {}", e),
+            })?;
+
+        Ok(Self {
+            client,
+            url: url.to_string(),
+        })
+    }
+}
+
+#[async_trait]
+impl TransportInner for HttpTransport {
+    async fn request(&self, request: McpRequest, timeout: Duration) -> ToolResult<McpResponse> {
+        let response = self
+            .client
+            .post(&self.url)
+            .timeout(timeout)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| ToolError::McpConnectionError {
+                reason: format!("HTTP request failed: {}", e),
+            })?;
+
+        if !response.status().is_success() {
+            return Err(ToolError::McpConnectionError {
+                reason: format!("HTTP error: {}", response.status()),
+            });
+        }
+
+        let mcp_response: McpResponse =
+            response
+                .json()
+                .await
+                .map_err(|e| ToolError::McpProtocolError {
+                    reason: format!("failed to parse response: {}", e),
+                })?;
+
+        Ok(mcp_response)
+    }
+
+    async fn notify(&self, notification: McpNotification) -> ToolResult<()> {
+        let _ = self
+            .client
+            .post(&self.url)
+            .json(&notification)
+            .send()
+            .await
+            .map_err(|e| ToolError::McpConnectionError {
+                reason: format!("HTTP notification failed: {}", e),
+            })?;
+
+        Ok(())
+    }
+
+    async fn close(&self) -> ToolResult<()> {
+        // HTTP is stateless, nothing to close
+        Ok(())
+    }
+}
+
+/// SSE transport - communicates via Server-Sent Events
+struct SseTransport {
+    /// HTTP client for sending requests
+    client: reqwest::Client,
+    /// Server URL for requests
+    request_url: String,
+    /// Pending responses
+    pending: Arc<RwLock<HashMap<u64, oneshot::Sender<ToolResult<McpResponse>>>>>,
+    /// Shutdown signal (kept to trigger drop-based shutdown)
+    #[allow(dead_code)]
+    shutdown_tx: Option<mpsc::Sender<()>>,
+}
+
+impl SseTransport {
+    /// Create a new SSE transport
+    async fn new(url: &str, timeout: Duration) -> ToolResult<Self> {
+        let client = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .map_err(|e| ToolError::McpConnectionError {
+                reason: format!("failed to create HTTP client: {}", e),
+            })?;
+
+        let pending: Arc<RwLock<HashMap<u64, oneshot::Sender<ToolResult<McpResponse>>>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+
+        let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
+
+        // Start SSE listener
+        let sse_url = format!("{}/sse", url.trim_end_matches('/'));
+        let pending_clone = pending.clone();
+
+        tokio::spawn(async move {
+            use futures::StreamExt;
+            use reqwest_eventsource::{Event, EventSource};
+
+            let mut es = EventSource::get(&sse_url);
+
+            loop {
+                tokio::select! {
+                    event = es.next() => {
+                        match event {
+                            Some(Ok(Event::Message(msg))) => {
+                                if let Ok(response) = serde_json::from_str::<McpResponse>(&msg.data) {
+                                    let id = response.id;
+                                    if let Some(sender) = pending_clone.write().await.remove(&id) {
+                                        let _ = sender.send(Ok(response));
+                                    }
+                                }
+                            }
+                            Some(Ok(Event::Open)) => {
+                                debug!("SSE connection opened");
+                            }
+                            Some(Err(e)) => {
+                                error!(error = %e, "SSE error");
+                                break;
+                            }
+                            None => break,
+                        }
+                    }
+                    _ = shutdown_rx.recv() => {
+                        debug!("SSE transport shutting down");
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(Self {
+            client,
+            request_url: url.to_string(),
+            pending,
+            shutdown_tx: Some(shutdown_tx),
+        })
+    }
+}
+
+#[async_trait]
+impl TransportInner for SseTransport {
+    async fn request(&self, request: McpRequest, timeout: Duration) -> ToolResult<McpResponse> {
+        let (response_tx, response_rx) = oneshot::channel();
+        let id = request.id;
+
+        self.pending.write().await.insert(id, response_tx);
+
+        // Send request via HTTP POST
+        let result = self
+            .client
+            .post(&self.request_url)
+            .timeout(timeout)
+            .json(&request)
+            .send()
+            .await;
+
+        if let Err(e) = result {
+            self.pending.write().await.remove(&id);
+            return Err(ToolError::McpConnectionError {
+                reason: format!("HTTP request failed: {}", e),
+            });
+        }
+
+        // Wait for response via SSE
+        match tokio::time::timeout(timeout, response_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => {
+                self.pending.write().await.remove(&id);
+                Err(ToolError::McpConnectionError {
+                    reason: "response channel closed".to_string(),
+                })
+            }
+            Err(_) => {
+                self.pending.write().await.remove(&id);
+                Err(ToolError::ExecutionTimeout {
+                    tool: request.method,
+                    timeout_ms: timeout.as_millis() as u64,
+                })
+            }
+        }
+    }
+
+    async fn notify(&self, notification: McpNotification) -> ToolResult<()> {
+        let _ = self
+            .client
+            .post(&self.request_url)
+            .json(&notification)
+            .send()
+            .await
+            .map_err(|e| ToolError::McpConnectionError {
+                reason: format!("HTTP notification failed: {}", e),
+            })?;
+
+        Ok(())
+    }
+
+    async fn close(&self) -> ToolResult<()> {
+        // Signal shutdown - this is a bit awkward due to ownership
+        // In practice the transport gets dropped
+        Ok(())
+    }
+}
+
+/// MCP client for connecting to MCP servers
+pub struct McpClient {
+    /// Configuration
+    config: McpConfig,
+    /// Connection state
+    state: RwLock<McpClientState>,
+    /// Request ID counter
+    request_id: std::sync::atomic::AtomicU64,
+    /// Discovered tools
+    tools: RwLock<HashMap<String, McpToolDefinition>>,
+    /// Active transport
+    transport: RwLock<Option<Box<dyn TransportInner>>>,
+    /// Server capabilities
+    capabilities: RwLock<Option<ServerCapabilities>>,
+}
+
 impl McpClient {
     /// Create a new MCP client
     pub fn new(config: McpConfig) -> Self {
@@ -242,6 +804,8 @@ impl McpClient {
             state: RwLock::new(McpClientState::Disconnected),
             request_id: std::sync::atomic::AtomicU64::new(1),
             tools: RwLock::new(HashMap::new()),
+            transport: RwLock::new(None),
+            capabilities: RwLock::new(None),
         }
     }
 
@@ -260,12 +824,12 @@ impl McpClient {
         *self.state.read().await == McpClientState::Connected
     }
 
+    /// Get server capabilities
+    pub async fn capabilities(&self) -> Option<ServerCapabilities> {
+        self.capabilities.read().await.clone()
+    }
+
     /// Connect to the MCP server
-    ///
-    /// Note: This is a mock implementation. Real implementation would:
-    /// - For stdio: spawn subprocess, set up stdin/stdout pipes
-    /// - For HTTP: establish HTTP connection
-    /// - For SSE: establish SSE connection
     pub async fn connect(&self) -> ToolResult<()> {
         {
             let mut state = self.state.write().await;
@@ -277,22 +841,81 @@ impl McpClient {
 
         info!(server = %self.config.name, "Connecting to MCP server");
 
-        // Simulate connection (real implementation would establish actual connection)
-        match &self.config.transport {
+        let timeout = Duration::from_millis(self.config.connection_timeout_ms);
+
+        // Create transport based on configuration
+        let transport: Box<dyn TransportInner> = match &self.config.transport {
             McpTransport::Stdio { command, args } => {
-                debug!(
+                info!(
                     command = %command,
                     args = ?args,
-                    "Would spawn stdio process"
+                    "Spawning stdio MCP server"
                 );
+                Box::new(StdioTransport::new(command, args, &self.config.env, timeout).await?)
             }
             McpTransport::Http { url } => {
-                debug!(url = %url, "Would connect to HTTP endpoint");
+                info!(url = %url, "Connecting to HTTP MCP server");
+                Box::new(HttpTransport::new(url, timeout)?)
             }
             McpTransport::Sse { url } => {
-                debug!(url = %url, "Would connect to SSE endpoint");
+                info!(url = %url, "Connecting to SSE MCP server");
+                Box::new(SseTransport::new(url, timeout).await?)
             }
+        };
+
+        // Store transport
+        *self.transport.write().await = Some(transport);
+
+        // Send initialize request
+        let init_request =
+            McpRequest::new(self.next_request_id(), "initialize").with_params(serde_json::json!({
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {
+                    "tools": {}
+                },
+                "clientInfo": {
+                    "name": "kelpie",
+                    "version": env!("CARGO_PKG_VERSION")
+                }
+            }));
+
+        let response = self.send_request(init_request).await?;
+
+        // Parse initialize result
+        if let Some(error) = response.error {
+            let mut state = self.state.write().await;
+            *state = McpClientState::Failed;
+            return Err(ToolError::McpProtocolError {
+                reason: format!(
+                    "initialization failed: {} (code {})",
+                    error.message, error.code
+                ),
+            });
         }
+
+        if let Some(result) = response.result {
+            let init_result: InitializeResult =
+                serde_json::from_value(result).map_err(|e| ToolError::McpProtocolError {
+                    reason: format!("failed to parse initialize result: {}", e),
+                })?;
+
+            info!(
+                server_name = %init_result.server_info.name,
+                server_version = %init_result.server_info.version,
+                protocol_version = %init_result.protocol_version,
+                "MCP server initialized"
+            );
+
+            *self.capabilities.write().await = Some(init_result.capabilities);
+        }
+
+        // Send initialized notification
+        let initialized = McpNotification {
+            jsonrpc: "2.0".to_string(),
+            method: "notifications/initialized".to_string(),
+            params: None,
+        };
+        self.send_notification(initialized).await?;
 
         // Mark as connected
         {
@@ -306,6 +929,10 @@ impl McpClient {
 
     /// Disconnect from the MCP server
     pub async fn disconnect(&self) -> ToolResult<()> {
+        if let Some(transport) = self.transport.write().await.take() {
+            transport.close().await?;
+        }
+
         let mut state = self.state.write().await;
         *state = McpClientState::Disconnected;
 
@@ -323,55 +950,124 @@ impl McpClient {
 
         debug!(server = %self.config.name, "Discovering tools");
 
-        // In a real implementation, this would send:
-        // {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+        let request = McpRequest::new(self.next_request_id(), "tools/list");
+        let response = self.send_request(request).await?;
 
-        // Return cached tools (real implementation would query server)
-        let tools = self.tools.read().await;
-        Ok(tools.values().cloned().collect())
-    }
+        if let Some(error) = response.error {
+            return Err(ToolError::McpProtocolError {
+                reason: format!("tools/list failed: {} (code {})", error.message, error.code),
+            });
+        }
 
-    /// Register a mock tool definition (for testing)
-    pub async fn register_mock_tool(&self, tool: McpToolDefinition) {
-        let mut tools = self.tools.write().await;
-        tools.insert(tool.name.clone(), tool);
+        let result = response.result.ok_or_else(|| ToolError::McpProtocolError {
+            reason: "tools/list returned no result".to_string(),
+        })?;
+
+        #[derive(Deserialize)]
+        struct ToolsListResult {
+            tools: Vec<McpToolDefinition>,
+        }
+
+        let tools_result: ToolsListResult =
+            serde_json::from_value(result).map_err(|e| ToolError::McpProtocolError {
+                reason: format!("failed to parse tools list: {}", e),
+            })?;
+
+        // Cache discovered tools
+        {
+            let mut tools = self.tools.write().await;
+            tools.clear();
+            for tool in &tools_result.tools {
+                tools.insert(tool.name.clone(), tool.clone());
+            }
+        }
+
+        info!(
+            server = %self.config.name,
+            tool_count = tools_result.tools.len(),
+            "Discovered tools"
+        );
+
+        Ok(tools_result.tools)
     }
 
     /// Execute a tool on the MCP server
-    pub async fn execute_tool(&self, name: &str, _arguments: Value) -> ToolResult<Value> {
+    pub async fn execute_tool(&self, name: &str, arguments: Value) -> ToolResult<Value> {
         if !self.is_connected().await {
             return Err(ToolError::McpConnectionError {
                 reason: "not connected".to_string(),
             });
         }
 
-        let tools = self.tools.read().await;
-        if !tools.contains_key(name) {
-            return Err(ToolError::NotFound {
-                name: name.to_string(),
-            });
-        }
-        drop(tools);
-
         debug!(server = %self.config.name, tool = %name, "Executing MCP tool");
 
-        // In a real implementation, this would send:
-        // {"jsonrpc": "2.0", "id": N, "method": "tools/call", "params": {"name": "...", "arguments": {...}}}
+        let request =
+            McpRequest::new(self.next_request_id(), "tools/call").with_params(serde_json::json!({
+                "name": name,
+                "arguments": arguments
+            }));
 
-        // For now, return a mock result
-        Ok(serde_json::json!({
-            "content": [{
-                "type": "text",
-                "text": format!("Mock result for tool '{}'", name)
-            }]
-        }))
+        let response = self.send_request(request).await?;
+
+        if let Some(error) = response.error {
+            return Err(ToolError::ExecutionFailed {
+                tool: name.to_string(),
+                reason: format!("{} (code {})", error.message, error.code),
+            });
+        }
+
+        let result = response.result.ok_or_else(|| ToolError::ExecutionFailed {
+            tool: name.to_string(),
+            reason: "no result returned".to_string(),
+        })?;
+
+        Ok(result)
+    }
+
+    /// Send a request through the transport
+    async fn send_request(&self, request: McpRequest) -> ToolResult<McpResponse> {
+        let transport = self.transport.read().await;
+        let transport = transport
+            .as_ref()
+            .ok_or_else(|| ToolError::McpConnectionError {
+                reason: "no transport available".to_string(),
+            })?;
+
+        let timeout = Duration::from_millis(self.config.request_timeout_ms);
+        transport.request(request, timeout).await
+    }
+
+    /// Send a notification through the transport
+    async fn send_notification(&self, notification: McpNotification) -> ToolResult<()> {
+        let transport = self.transport.read().await;
+        let transport = transport
+            .as_ref()
+            .ok_or_else(|| ToolError::McpConnectionError {
+                reason: "no transport available".to_string(),
+            })?;
+
+        transport.notify(notification).await
     }
 
     /// Get next request ID
-    #[allow(dead_code)]
     fn next_request_id(&self) -> u64 {
         self.request_id
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Register a tool definition manually (for testing without server connection)
+    pub async fn register_mock_tool(&self, tool: McpToolDefinition) {
+        let mut tools = self.tools.write().await;
+        tools.insert(tool.name.clone(), tool);
+    }
+
+    /// Set client state to connected (for testing without actual connection)
+    ///
+    /// # Safety
+    /// This bypasses the normal initialization flow and should only be used in tests.
+    pub async fn set_connected_for_testing(&self) {
+        let mut state = self.state.write().await;
+        *state = McpClientState::Connected;
     }
 }
 
@@ -524,6 +1220,14 @@ mod tests {
     }
 
     #[test]
+    fn test_mcp_config_sse() {
+        let config = McpConfig::sse("sse-server", "http://localhost:8080");
+
+        assert_eq!(config.name, "sse-server");
+        assert!(matches!(config.transport, McpTransport::Sse { .. }));
+    }
+
+    #[test]
     fn test_mcp_request() {
         let request =
             McpRequest::new(1, "tools/list").with_params(serde_json::json!({"cursor": null}));
@@ -534,25 +1238,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mcp_client_connect() {
-        let config = McpConfig::stdio("test", "echo", vec![]);
+    async fn test_mcp_client_state_transitions() {
+        let config = McpConfig::stdio("test", "nonexistent_command_12345", vec![]);
         let client = McpClient::new(config);
 
         assert_eq!(client.state().await, McpClientState::Disconnected);
-
-        client.connect().await.unwrap();
-        assert_eq!(client.state().await, McpClientState::Connected);
-    }
-
-    #[tokio::test]
-    async fn test_mcp_client_disconnect() {
-        let config = McpConfig::stdio("test", "echo", vec![]);
-        let client = McpClient::new(config);
-
-        client.connect().await.unwrap();
-        client.disconnect().await.unwrap();
-
-        assert_eq!(client.state().await, McpClientState::Disconnected);
+        assert!(!client.is_connected().await);
     }
 
     #[tokio::test]
@@ -565,7 +1256,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mcp_tool_definition() {
+    async fn test_mcp_client_execute_not_connected() {
+        let config = McpConfig::stdio("test", "echo", vec![]);
+        let client = McpClient::new(config);
+
+        let result = client.execute_tool("test", serde_json::json!({})).await;
+        assert!(matches!(result, Err(ToolError::McpConnectionError { .. })));
+    }
+
+    #[test]
+    fn test_mcp_tool_definition() {
         let definition = McpToolDefinition {
             name: "read_file".to_string(),
             description: "Read a file".to_string(),
@@ -591,26 +1291,34 @@ mod tests {
         assert!(metadata.is_param_required("path"));
     }
 
-    #[tokio::test]
-    async fn test_mcp_tool_execute() {
-        let definition = McpToolDefinition {
-            name: "test_tool".to_string(),
-            description: "A test tool".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }),
-        };
+    #[test]
+    fn test_server_capabilities_deserialization() {
+        let json = serde_json::json!({
+            "tools": {
+                "listChanged": true
+            }
+        });
 
-        let config = McpConfig::stdio("test", "echo", vec![]);
-        let client = Arc::new(McpClient::new(config));
-        client.connect().await.unwrap();
-        client.register_mock_tool(definition.clone()).await;
+        let caps: ServerCapabilities = serde_json::from_value(json).unwrap();
+        assert!(caps.tools.is_some());
+        assert!(caps.tools.unwrap().list_changed);
+    }
 
-        let tool = McpTool::new(client, definition);
-        let input = ToolInput::new("test_tool");
-        let output = tool.execute(input).await.unwrap();
+    #[test]
+    fn test_initialize_result_deserialization() {
+        let json = serde_json::json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {
+                "tools": {}
+            },
+            "serverInfo": {
+                "name": "test-server",
+                "version": "1.0.0"
+            }
+        });
 
-        assert!(output.is_success());
+        let result: InitializeResult = serde_json::from_value(json).unwrap();
+        assert_eq!(result.protocol_version, "2024-11-05");
+        assert_eq!(result.server_info.name, "test-server");
     }
 }

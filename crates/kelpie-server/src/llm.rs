@@ -31,7 +31,8 @@ impl LlmConfig {
             return Some(Self {
                 base_url: "https://api.anthropic.com/v1".to_string(),
                 api_key,
-                model: env::var("KELPIE_MODEL").unwrap_or_else(|_| "claude-sonnet-4-20250514".to_string()),
+                model: env::var("KELPIE_MODEL")
+                    .unwrap_or_else(|_| "claude-sonnet-4-20250514".to_string()),
                 max_tokens: 1024,
             });
         }
@@ -84,6 +85,7 @@ struct ChatChoice {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ApiUsage {
     prompt_tokens: u64,
     completion_tokens: u64,
@@ -122,9 +124,16 @@ pub enum AnthropicContentBlock {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "tool_use")]
-    ToolUse { id: String, name: String, input: Value },
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
     #[serde(rename = "tool_result")]
-    ToolResult { tool_use_id: String, content: String },
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+    },
 }
 
 /// Anthropic messages API response
@@ -221,6 +230,7 @@ impl LlmClient {
     }
 
     /// Complete a chat conversation (without tools)
+    #[allow(dead_code)]
     pub async fn complete(&self, messages: Vec<ChatMessage>) -> Result<CompletionResponse, String> {
         self.complete_with_tools(messages, vec![]).await
     }
@@ -276,7 +286,10 @@ impl LlmClient {
         self.call_anthropic(anthropic_messages, system, tools).await
     }
 
-    fn prepare_anthropic_messages(&self, messages: Vec<ChatMessage>) -> (Option<String>, Vec<AnthropicMessage>) {
+    fn prepare_anthropic_messages(
+        &self,
+        messages: Vec<ChatMessage>,
+    ) -> (Option<String>, Vec<AnthropicMessage>) {
         let mut system = None;
         let mut anthropic_messages = Vec::new();
 
@@ -294,7 +307,10 @@ impl LlmClient {
         (system, anthropic_messages)
     }
 
-    async fn complete_openai(&self, messages: Vec<ChatMessage>) -> Result<CompletionResponse, String> {
+    async fn complete_openai(
+        &self,
+        messages: Vec<ChatMessage>,
+    ) -> Result<CompletionResponse, String> {
         let request = ChatCompletionRequest {
             model: self.config.model.clone(),
             messages,

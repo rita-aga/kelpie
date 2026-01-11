@@ -54,6 +54,9 @@ pub enum MemoryError {
 
     /// Internal error
     Internal { message: String },
+
+    /// Embedding generation error
+    EmbeddingError { message: String },
 }
 
 impl fmt::Display for MemoryError {
@@ -114,6 +117,9 @@ impl fmt::Display for MemoryError {
             }
             Self::Internal { message } => {
                 write!(f, "internal error: {}", message)
+            }
+            Self::EmbeddingError { message } => {
+                write!(f, "embedding error: {}", message)
             }
         }
     }

@@ -8,6 +8,19 @@ Accepted
 
 2025-01-10
 
+## Implementation Status
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| Storage abstraction | ✅ Complete | `kelpie-storage/src/lib.rs` |
+| ActorKV trait | ✅ Complete | `kelpie-storage/src/actor_kv.rs` |
+| MemoryBackend (DST) | ✅ Complete | `kelpie-storage/src/memory.rs` |
+| FDB Backend | ⏳ Not Started | P0 priority |
+| Key space design | 📋 Designed | See ADR |
+| Transaction semantics | 📋 Designed | See ADR |
+
+**Note**: FDB integration is designed but not implemented. Currently using MemoryBackend for development and testing. FDB backend is P0 priority for production readiness.
+
 ## Context
 
 Kelpie requires a storage backend that provides:

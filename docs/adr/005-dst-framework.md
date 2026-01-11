@@ -8,6 +8,22 @@ Accepted
 
 2025-01-10
 
+## Implementation Status
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| SimClock | ✅ Complete | `kelpie-dst/src/clock.rs` |
+| SimRng (ChaCha20) | ✅ Complete | `kelpie-dst/src/rng.rs` |
+| FaultInjector | ✅ Complete | `kelpie-dst/src/faults.rs` |
+| SimStorage | ✅ Complete | `kelpie-dst/src/storage.rs` |
+| SimNetwork | ✅ Complete | `kelpie-dst/src/network.rs` |
+| Simulation harness | ✅ Complete | `kelpie-dst/src/lib.rs` |
+| 16+ fault types | ✅ Complete | All categories implemented |
+| DST_SEED replay | ✅ Complete | Via environment variable |
+| Stateright integration | 🚧 Scaffolded | Basic structure only |
+
+**Test Coverage**: 49+ DST tests across storage, network, time, and fault injection scenarios.
+
 ## Context
 
 Distributed systems are notoriously difficult to test. Traditional testing approaches fail to catch:

@@ -8,14 +8,14 @@ An ADR is a document that captures an important architectural decision made alon
 
 ## ADR Index
 
-| ADR | Title | Status | Date |
-|-----|-------|--------|------|
+| ADR | Title | Status | Implementation |
+|-----|-------|--------|----------------|
 | [000](./000-template.md) | ADR Template | - | - |
-| [001](./001-virtual-actor-model.md) | Virtual Actor Model | Accepted | 2025-01-10 |
-| [002](./002-foundationdb-integration.md) | FoundationDB Integration | Accepted | 2025-01-10 |
-| [003](./003-wasm-actor-runtime.md) | WASM Actor Runtime | Proposed | 2025-01-10 |
-| [004](./004-linearizability-guarantees.md) | Linearizability Guarantees | Accepted | 2025-01-10 |
-| [005](./005-dst-framework.md) | DST Framework | Accepted | 2025-01-10 |
+| [001](./001-virtual-actor-model.md) | Virtual Actor Model | Accepted | ✅ Complete |
+| [002](./002-foundationdb-integration.md) | FoundationDB Integration | Accepted | 🚧 Designed (FDB pending) |
+| [003](./003-wasm-actor-runtime.md) | WASM Actor Runtime | Proposed | ⏳ Not Started (P3) |
+| [004](./004-linearizability-guarantees.md) | Linearizability Guarantees | Accepted | 🚧 Partial (needs FDB) |
+| [005](./005-dst-framework.md) | DST Framework | Accepted | ✅ Complete |
 
 ## Creating a New ADR
 

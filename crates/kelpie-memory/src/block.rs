@@ -101,6 +101,9 @@ pub struct MemoryBlock {
     pub size_bytes: u64,
     /// Metadata
     pub metadata: MemoryMetadata,
+    /// Optional embedding vector for semantic search
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<Vec<f32>>,
 }
 
 impl MemoryBlock {
@@ -126,6 +129,7 @@ impl MemoryBlock {
             content,
             size_bytes,
             metadata: MemoryMetadata::new(),
+            embedding: None,
         }
     }
 
@@ -217,6 +221,29 @@ impl MemoryBlock {
     /// Record an access to this block
     pub fn record_access(&mut self) {
         self.metadata.record_access();
+    }
+
+    /// Set the embedding vector for this block
+    pub fn set_embedding(&mut self, embedding: Vec<f32>) {
+        assert!(!embedding.is_empty(), "embedding vector cannot be empty");
+        self.embedding = Some(embedding);
+        self.metadata.record_modification();
+    }
+
+    /// Create a block with an embedding
+    pub fn with_embedding(mut self, embedding: Vec<f32>) -> Self {
+        self.set_embedding(embedding);
+        self
+    }
+
+    /// Check if this block has an embedding
+    pub fn has_embedding(&self) -> bool {
+        self.embedding.is_some()
+    }
+
+    /// Get the embedding dimension if present
+    pub fn embedding_dim(&self) -> Option<usize> {
+        self.embedding.as_ref().map(|e| e.len())
     }
 }
 

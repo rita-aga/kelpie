@@ -21,8 +21,10 @@ pub mod actor;
 pub mod config;
 pub mod constants;
 pub mod error;
+pub mod telemetry;
 
 pub use actor::{Actor, ActorContext, ActorId, ActorRef, ContextKV, NoOpKV};
 pub use config::KelpieConfig;
 pub use constants::*;
 pub use error::{Error, Result};
+pub use telemetry::{init_telemetry, TelemetryConfig, TelemetryGuard};

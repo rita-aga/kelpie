@@ -43,6 +43,9 @@ mod process;
 mod snapshot;
 mod traits;
 
+#[cfg(feature = "firecracker")]
+mod firecracker;
+
 pub use config::{ResourceLimits, SandboxConfig};
 pub use error::{SandboxError, SandboxResult};
 pub use exec::{ExecOptions, ExecOutput, ExitStatus};
@@ -51,6 +54,14 @@ pub use pool::{PoolConfig, SandboxPool};
 pub use process::{ProcessSandbox, ProcessSandboxFactory};
 pub use snapshot::{Snapshot, SnapshotMetadata};
 pub use traits::{Sandbox, SandboxFactory, SandboxState};
+
+#[cfg(feature = "firecracker")]
+pub use firecracker::{
+    FirecrackerConfig, FirecrackerSandbox, FirecrackerSandboxFactory,
+    FIRECRACKER_API_TIMEOUT_MS_DEFAULT, FIRECRACKER_BINARY_PATH_DEFAULT,
+    FIRECRACKER_BOOT_TIMEOUT_MS_DEFAULT, FIRECRACKER_VSOCK_CID_DEFAULT,
+    FIRECRACKER_VSOCK_PORT_DEFAULT,
+};
 
 #[cfg(test)]
 mod tests {

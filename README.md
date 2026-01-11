@@ -3,182 +3,198 @@
 [![CI](https://github.com/nerdsane/kelpie/actions/workflows/ci.yml/badge.svg)](https://github.com/nerdsane/kelpie/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-A distributed virtual actor system with linearizability guarantees, designed for AI agent orchestration and general stateful distributed systems.
+An open-source agent runtime with stateful memory, sandboxed execution, and MCP tool integration.
 
 ## Overview
 
-Kelpie is a Rust implementation of the virtual actor model (Orleans/NOLA pattern) with:
+Kelpie provides infrastructure for building AI agents that:
 
-- **Linearizable Operations**: Single activation guarantee ensures at most one instance of an actor exists at any time
-- **DST-First**: Deterministic Simulation Testing from day one, inspired by FoundationDB and TigerBeetle
-- **FoundationDB Backend**: Per-actor KV storage with ACID transactions
-- **WASM Actors**: Write actors in Rust, Go, or other languages compiled to WebAssembly
-- **AI Agent Ready**: First-class support for stateful agent orchestration
+- **Persist state** across invocations with a three-tier memory hierarchy
+- **Execute tools safely** via MCP protocol with process or VM isolation
+- **Scale horizontally** with virtual actor model and cluster coordination
+- **Test deterministically** with simulation testing and fault injection
 
 ## Quick Start
 
+```bash
+# Start the server
+ANTHROPIC_API_KEY=sk-... cargo run -p kelpie-server
+
+# Create an agent
+curl -X POST http://localhost:8283/v1/agents \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my-agent",
+    "memory_blocks": [
+      {"label": "persona", "value": "You are a helpful assistant."}
+    ]
+  }'
+
+# Send a message
+curl -X POST http://localhost:8283/v1/agents/{id}/messages \
+  -H "Content-Type: application/json" \
+  -d '{"role": "user", "content": "Hello!"}'
+```
+
+## Features
+
+### Memory Hierarchy
+
+| Tier | Purpose | Size | Persistence |
+|------|---------|------|-------------|
+| **Core** | Always in LLM context | ~32KB | Per-agent |
+| **Working** | Session KV store | Unbounded | Per-agent |
+| **Archival** | Semantic search | Unbounded | Per-agent |
+
+### Sandbox Isolation
+
+| Level | Implementation | Boot Time |
+|-------|----------------|-----------|
+| Process | OS process isolation | <10ms |
+| VM | Firecracker microVM | ~125ms |
+
+### Tool Integration (MCP)
+
 ```rust
-use kelpie_core::{Actor, ActorContext, ActorId, Result};
-use async_trait::async_trait;
-use bytes::Bytes;
-use serde::{Deserialize, Serialize};
+// Connect to any MCP server
+let client = McpClient::new(McpTransportType::Stdio {
+    command: "npx".to_string(),
+    args: vec!["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+});
+client.connect().await?;
 
-#[derive(Default, Serialize, Deserialize)]
-struct CounterState {
-    count: u64,
-}
-
-struct CounterActor;
-
-#[async_trait]
-impl Actor for CounterActor {
-    type State = CounterState;
-
-    async fn invoke(
-        &self,
-        ctx: &mut ActorContext<Self::State>,
-        operation: &str,
-        _payload: Bytes,
-    ) -> Result<Bytes> {
-        match operation {
-            "increment" => {
-                ctx.state.count += 1;
-                Ok(Bytes::from(ctx.state.count.to_string()))
-            }
-            "get" => Ok(Bytes::from(ctx.state.count.to_string())),
-            _ => Err(kelpie_core::Error::InvalidOperation {
-                operation: operation.to_string(),
-            }),
-        }
-    }
-}
+// Discover and execute tools
+let tools = client.discover_tools().await?;
+let result = client.execute_tool("read_file", json!({"path": "/tmp/test.txt"})).await?;
 ```
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Kelpie Cluster                           │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐ │
-│  │   Node 1    │  │   Node 2    │  │        Node N           │ │
-│  │  ┌───────┐  │  │  ┌───────┐  │  │  ┌───────┐  ┌───────┐  │ │
-│  │  │Actor A│  │  │  │Actor C│  │  │  │Actor E│  │Actor F│  │ │
-│  │  │Actor B│  │  │  │Actor D│  │  │  │ (WASM)│  │ (Rust)│  │ │
-│  │  └───────┘  │  │  └───────┘  │  │  └───────┘  └───────┘  │ │
-│  └──────┬──────┘  └──────┬──────┘  └───────────┬─────────────┘ │
-│         │                │                      │               │
-│  ┌──────┴────────────────┴──────────────────────┴─────────────┐│
-│  │                    Actor Runtime                            ││
-│  └─────────────────────────────┬──────────────────────────────┘│
-│                                │                                │
-│  ┌─────────────────────────────┴──────────────────────────────┐│
-│  │                      Registry                               ││
-│  └─────────────────────────────┬──────────────────────────────┘│
-└────────────────────────────────┼────────────────────────────────┘
-                                 │
-┌────────────────────────────────┴────────────────────────────────┐
-│                        FoundationDB                              │
-└──────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                    Kelpie Server                        │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐ │
+│  │  REST API   │  │  LLM Client │  │  MCP Tools      │ │
+│  └──────┬──────┘  └──────┬──────┘  └────────┬────────┘ │
+│         └────────────────┼──────────────────┘          │
+│                    ┌─────┴─────┐                       │
+│                    │  Runtime  │                       │
+│                    └─────┬─────┘                       │
+│  ┌───────────────────────┼───────────────────────────┐ │
+│  │              Memory System                        │ │
+│  │  [Core 32KB] [Working KV] [Archival Vectors]     │ │
+│  └───────────────────────┼───────────────────────────┘ │
+│                    ┌─────┴─────┐                       │
+│                    │  Storage  │                       │
+│                    └───────────┘                       │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ## Crates
 
-| Crate | Description |
-|-------|-------------|
-| `kelpie-core` | Core types, errors, and constants |
-| `kelpie-runtime` | Actor runtime and dispatcher |
-| `kelpie-registry` | Actor placement and discovery |
-| `kelpie-storage` | Per-actor KV storage |
-| `kelpie-wasm` | WASM actor runtime |
-| `kelpie-cluster` | Cluster coordination |
-| `kelpie-agent` | AI agent abstractions |
-| `kelpie-dst` | Deterministic Simulation Testing |
-| `kelpie-server` | Standalone server binary |
-| `kelpie-cli` | CLI tools |
+| Crate | Description | Status |
+|-------|-------------|--------|
+| `kelpie-core` | Types, errors, constants | Complete |
+| `kelpie-runtime` | Actor dispatcher | Complete |
+| `kelpie-memory` | Memory hierarchy | Complete |
+| `kelpie-storage` | KV storage | Complete |
+| `kelpie-sandbox` | Process/VM isolation | Complete |
+| `kelpie-tools` | MCP client, tool registry | Complete |
+| `kelpie-cluster` | Node coordination | Complete |
+| `kelpie-server` | REST API server | Complete |
+| `kelpie-dst` | Simulation testing | Complete |
+| `kelpie-agent` | Agent abstractions | Planned |
+| `kelpie-wasm` | WASM actors | Planned |
 
-## DST (Deterministic Simulation Testing)
+## API Compatibility
 
-All critical paths are tested under simulation with fault injection:
+Kelpie implements Letta-compatible REST endpoints:
+
+```
+GET  /health
+GET  /v1/agents
+POST /v1/agents
+GET  /v1/agents/{id}
+PATCH /v1/agents/{id}
+DELETE /v1/agents/{id}
+GET  /v1/agents/{id}/blocks
+PATCH /v1/agents/{id}/blocks/{bid}
+GET  /v1/agents/{id}/messages
+POST /v1/agents/{id}/messages
+```
+
+Use with existing Letta clients:
+
+```python
+from letta_client import Letta
+
+client = Letta(base_url="http://localhost:8283")
+agent = client.agents.create(name="my-agent")
+```
+
+## Testing
+
+Kelpie uses Deterministic Simulation Testing (DST) for reliability:
 
 ```bash
-# Run with random seed (logged for reproduction)
-cargo test -p kelpie-dst
+# Run all tests
+cargo test
 
-# Reproduce specific run
+# Run with specific seed for reproduction
 DST_SEED=12345 cargo test -p kelpie-dst
 
-# Stress test
-cargo test -p kelpie-dst stress --release -- --ignored
+# Run with fault injection
+cargo test -p kelpie-dst -- --ignored
 ```
 
 ### Fault Types
 
-- **Storage**: Write fail, read fail, corruption, latency, disk full
-- **Crash**: Before write, after write, during transaction
+- **Storage**: Write fail, read fail, corruption, latency
 - **Network**: Partition, delay, packet loss, reordering
+- **Crash**: Before write, after write, during transaction
 - **Time**: Clock skew, clock jump
-- **Resource**: Out of memory, CPU starvation
 
-## Development
+## Configuration
 
-### Prerequisites
+Environment variables:
 
-- Rust 1.75+
-- FoundationDB (optional, for production)
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ANTHROPIC_API_KEY` | Anthropic API key | Required for Claude |
+| `OPENAI_API_KEY` | OpenAI API key | Required for GPT |
+| `KELPIE_HOST` | Server bind address | `0.0.0.0` |
+| `KELPIE_PORT` | Server port | `8283` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry endpoint | None |
+| `RUST_LOG` | Log level | `info` |
 
-### Building
+## Roadmap
 
-```bash
-cargo build
-```
+See [VISION.md](./VISION.md) for detailed roadmap.
 
-### Testing
-
-```bash
-cargo test
-```
-
-### Documentation
-
-```bash
-cargo doc --open
-```
+**Next priorities:**
+1. FoundationDB integration (persistence)
+2. Agent framework abstraction
+3. Local embeddings (fastembed)
+4. Authentication
 
 ## Engineering Principles
 
 Kelpie follows **TigerStyle** (Safety > Performance > DX):
 
-- **Explicit Constants**: All limits are named with units (`TIMEOUT_MS_MAX`)
-- **Big-Endian Naming**: From big to small concept (`actor_id_length_bytes_max`)
-- **2+ Assertions per Function**: Preconditions and postconditions
-- **No Silent Truncation**: Explicit conversions only
-- **DST Coverage**: Every critical path
+- Explicit constants with units: `TIMEOUT_MS_MAX`, `MEMORY_BYTES_LIMIT`
+- Big-endian naming: `actor_state_size_bytes_max`
+- 2+ assertions per function
+- No silent truncation
+- DST coverage for critical paths
 
-See [CLAUDE.md](./CLAUDE.md) for detailed development guidelines.
-
-## Architecture Decision Records
-
-- [ADR-001: Virtual Actor Model](./docs/adr/001-virtual-actor-model.md)
-- [ADR-002: FoundationDB Integration](./docs/adr/002-foundationdb-integration.md)
-- [ADR-003: WASM Actor Runtime](./docs/adr/003-wasm-actor-runtime.md)
-- [ADR-004: Linearizability Guarantees](./docs/adr/004-linearizability-guarantees.md)
-- [ADR-005: DST Framework](./docs/adr/005-dst-framework.md)
-
-## Performance Targets
-
-| Metric | Target |
-|--------|--------|
-| Single-actor throughput | >500K ops/sec |
-| Cross-actor throughput | >100K ops/sec |
-| Actor activation rate | >10K/sec |
-| DST coverage | 100% of critical paths |
+See [CLAUDE.md](./CLAUDE.md) for development guidelines.
 
 ## Inspiration
 
 - [NOLA](https://github.com/richardartoul/nola) - Go virtual actors
-- [Orleans](https://github.com/dotnet/orleans) - .NET virtual actors
-- [FoundationDB](https://www.foundationdb.org/) - Simulation testing pioneer
-- [TigerBeetle](https://github.com/tigerbeetle/tigerbeetle) - TigerStyle engineering
+- [Letta](https://github.com/letta-ai/letta) - Stateful AI agents
+- [FoundationDB](https://www.foundationdb.org/) - Simulation testing
+- [TigerBeetle](https://github.com/tigerbeetle/tigerbeetle) - TigerStyle
 
 ## License
 

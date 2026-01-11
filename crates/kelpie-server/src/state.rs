@@ -2,17 +2,32 @@
 //!
 //! TigerStyle: Thread-safe shared state with explicit locking.
 
+use crate::api::archival::ArchivalEntry;
 use crate::llm::LlmClient;
-use crate::models::{AgentState, Block, Message, ToolDefinition};
+use crate::models::{AgentState, Block, Message};
+use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
+use uuid::Uuid;
 
 /// Maximum agents per server instance
 pub const AGENTS_COUNT_MAX: usize = 100_000;
 
 /// Maximum messages per agent
 pub const MESSAGES_PER_AGENT_MAX: usize = 10_000;
+
+/// Maximum archival entries per agent
+pub const ARCHIVAL_ENTRIES_PER_AGENT_MAX: usize = 100_000;
+
+/// Tool information for API responses
+#[derive(Debug, Clone)]
+pub struct ToolInfo {
+    pub name: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,
+    pub source: Option<String>,
+}
 
 /// Server-wide shared state
 #[derive(Clone)]
@@ -25,9 +40,10 @@ struct AppStateInner {
     agents: RwLock<HashMap<String, AgentState>>,
     /// Messages by agent ID
     messages: RwLock<HashMap<String, Vec<Message>>>,
-    /// Tool definitions by ID (for future use)
-    #[allow(dead_code)]
-    tools: RwLock<HashMap<String, ToolDefinition>>,
+    /// Tool definitions by name
+    tools: RwLock<HashMap<String, ToolInfo>>,
+    /// Archival memory entries by agent ID
+    archival: RwLock<HashMap<String, Vec<ArchivalEntry>>>,
     /// Server start time for uptime calculation
     start_time: Instant,
     /// LLM client (None if no API key configured)
@@ -41,7 +57,9 @@ impl AppState {
         if llm.is_some() {
             tracing::info!("LLM integration enabled");
         } else {
-            tracing::warn!("No LLM API key found. Set ANTHROPIC_API_KEY or OPENAI_API_KEY for real responses.");
+            tracing::warn!(
+                "No LLM API key found. Set ANTHROPIC_API_KEY or OPENAI_API_KEY for real responses."
+            );
         }
 
         Self {
@@ -49,6 +67,7 @@ impl AppState {
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
                 tools: RwLock::new(HashMap::new()),
+                archival: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm,
             }),
@@ -101,6 +120,14 @@ impl AppState {
             .write()
             .map_err(|_| StateError::LockPoisoned)?;
         messages.insert(result.id.clone(), Vec::new());
+
+        // Initialize empty archival list for the agent
+        let mut archival = self
+            .inner
+            .archival
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+        archival.insert(result.id.clone(), Vec::new());
 
         Ok(result)
     }
@@ -202,6 +229,14 @@ impl AppState {
             .write()
             .map_err(|_| StateError::LockPoisoned)?;
         messages.remove(id);
+
+        // Also delete archival entries
+        let mut archival = self
+            .inner
+            .archival
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+        archival.remove(id);
 
         Ok(())
     }
@@ -349,43 +384,216 @@ impl AppState {
     }
 
     // =========================================================================
-    // Tool operations (for future use)
+    // Tool operations
     // =========================================================================
 
-    /// Register a tool definition
-    #[allow(dead_code)]
-    pub fn register_tool(&self, tool: ToolDefinition) -> Result<ToolDefinition, StateError> {
+    /// Register a tool
+    pub fn register_tool(
+        &self,
+        name: String,
+        description: String,
+        input_schema: serde_json::Value,
+        source: Option<String>,
+    ) -> Result<(), StateError> {
         let mut tools = self
             .inner
             .tools
             .write()
             .map_err(|_| StateError::LockPoisoned)?;
 
-        let result = tool.clone();
-        tools.insert(tool.id.clone(), tool);
-        Ok(result)
+        tools.insert(
+            name.clone(),
+            ToolInfo {
+                name,
+                description,
+                input_schema,
+                source,
+            },
+        );
+        Ok(())
     }
 
-    /// Get a tool by ID
-    #[allow(dead_code)]
-    pub fn get_tool(&self, id: &str) -> Result<Option<ToolDefinition>, StateError> {
-        let tools = self
-            .inner
-            .tools
-            .read()
-            .map_err(|_| StateError::LockPoisoned)?;
-        Ok(tools.get(id).cloned())
+    /// Get a tool by name
+    pub fn get_tool(&self, name: &str) -> Option<ToolInfo> {
+        let tools = self.inner.tools.read().ok()?;
+        tools.get(name).cloned()
     }
 
     /// List all tools
-    #[allow(dead_code)]
-    pub fn list_tools(&self) -> Result<Vec<ToolDefinition>, StateError> {
+    pub fn list_tools(&self) -> Vec<ToolInfo> {
+        let tools = self.inner.tools.read().ok();
+        match tools {
+            Some(t) => t.values().cloned().collect(),
+            None => vec![],
+        }
+    }
+
+    /// Delete a tool
+    pub fn delete_tool(&self, name: &str) -> Result<(), StateError> {
+        let mut tools = self
+            .inner
+            .tools
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        if tools.remove(name).is_none() {
+            return Err(StateError::NotFound {
+                resource: "tool",
+                id: name.to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Execute a tool (placeholder - actual execution would integrate with kelpie-tools)
+    pub async fn execute_tool(
+        &self,
+        name: &str,
+        _arguments: serde_json::Value,
+    ) -> Result<String, StateError> {
+        // Verify tool exists
         let tools = self
             .inner
             .tools
             .read()
             .map_err(|_| StateError::LockPoisoned)?;
-        Ok(tools.values().cloned().collect())
+
+        if !tools.contains_key(name) {
+            return Err(StateError::NotFound {
+                resource: "tool",
+                id: name.to_string(),
+            });
+        }
+
+        // For now, return a placeholder response
+        // In a full implementation, this would integrate with kelpie-tools
+        Ok(format!("Tool '{}' executed successfully", name))
+    }
+
+    // =========================================================================
+    // Archival memory operations
+    // =========================================================================
+
+    /// Add entry to archival memory
+    pub fn add_archival(
+        &self,
+        agent_id: &str,
+        content: String,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<ArchivalEntry, StateError> {
+        let mut archival = self
+            .inner
+            .archival
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        let entries = archival
+            .get_mut(agent_id)
+            .ok_or_else(|| StateError::NotFound {
+                resource: "agent",
+                id: agent_id.to_string(),
+            })?;
+
+        if entries.len() >= ARCHIVAL_ENTRIES_PER_AGENT_MAX {
+            return Err(StateError::LimitExceeded {
+                resource: "archival_entries",
+                limit: ARCHIVAL_ENTRIES_PER_AGENT_MAX,
+            });
+        }
+
+        let entry = ArchivalEntry {
+            id: Uuid::new_v4().to_string(),
+            content,
+            metadata,
+            created_at: Utc::now().to_rfc3339(),
+        };
+
+        let result = entry.clone();
+        entries.push(entry);
+        Ok(result)
+    }
+
+    /// Search archival memory
+    pub fn search_archival(
+        &self,
+        agent_id: &str,
+        query: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ArchivalEntry>, StateError> {
+        let archival = self
+            .inner
+            .archival
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        let entries = archival.get(agent_id).ok_or_else(|| StateError::NotFound {
+            resource: "agent",
+            id: agent_id.to_string(),
+        })?;
+
+        // Simple text search if query is provided
+        let results: Vec<_> = if let Some(q) = query {
+            let q_lower = q.to_lowercase();
+            entries
+                .iter()
+                .filter(|e| e.content.to_lowercase().contains(&q_lower))
+                .take(limit)
+                .cloned()
+                .collect()
+        } else {
+            entries.iter().take(limit).cloned().collect()
+        };
+
+        Ok(results)
+    }
+
+    /// Get a specific archival entry
+    pub fn get_archival_entry(
+        &self,
+        agent_id: &str,
+        entry_id: &str,
+    ) -> Result<Option<ArchivalEntry>, StateError> {
+        let archival = self
+            .inner
+            .archival
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        let entries = archival.get(agent_id).ok_or_else(|| StateError::NotFound {
+            resource: "agent",
+            id: agent_id.to_string(),
+        })?;
+
+        Ok(entries.iter().find(|e| e.id == entry_id).cloned())
+    }
+
+    /// Delete an archival entry
+    pub fn delete_archival_entry(&self, agent_id: &str, entry_id: &str) -> Result<(), StateError> {
+        let mut archival = self
+            .inner
+            .archival
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        let entries = archival
+            .get_mut(agent_id)
+            .ok_or_else(|| StateError::NotFound {
+                resource: "agent",
+                id: agent_id.to_string(),
+            })?;
+
+        let initial_len = entries.len();
+        entries.retain(|e| e.id != entry_id);
+
+        if entries.len() == initial_len {
+            return Err(StateError::NotFound {
+                resource: "archival_entry",
+                id: entry_id.to_string(),
+            });
+        }
+
+        Ok(())
     }
 }
 

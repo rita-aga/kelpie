@@ -48,6 +48,15 @@ pub fn router() -> Router<AppState> {
             "/:agent_id/messages",
             get(super::messages::list_messages).post(super::messages::send_message),
         )
+        // Nested archival routes
+        .route(
+            "/:agent_id/archival",
+            get(super::archival::search_archival).post(super::archival::add_archival),
+        )
+        .route(
+            "/:agent_id/archival/:entry_id",
+            get(super::archival::get_archival_entry).delete(super::archival::delete_archival_entry),
+        )
 }
 
 /// Create a new agent

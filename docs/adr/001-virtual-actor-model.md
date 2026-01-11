@@ -8,6 +8,18 @@ Accepted
 
 2025-01-10
 
+## Implementation Status
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| ActorId | ✅ Complete | `kelpie-core/src/lib.rs` |
+| Actor trait | ✅ Complete | `kelpie-runtime/src/actor.rs` |
+| ActorContext | ✅ Complete | `kelpie-runtime/src/context.rs` |
+| Dispatcher | ✅ Complete | `kelpie-runtime/src/dispatcher.rs` |
+| Single activation | ✅ Complete | `kelpie-runtime/src/dispatcher.rs` |
+| Lifecycle hooks | ✅ Complete | `on_activate`, `on_deactivate` |
+| State persistence | ✅ Complete | Via ActorKV trait |
+
 ## Context
 
 Kelpie needs a programming model for distributed stateful computation that:

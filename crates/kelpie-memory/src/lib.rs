@@ -25,18 +25,27 @@
 mod block;
 mod checkpoint;
 mod core;
+mod embedder;
 mod error;
 mod search;
 mod types;
 mod working;
 
-pub use block::{MemoryBlock, MemoryBlockId, MemoryBlockType};
+pub use block::{MemoryBlock, MemoryBlockId, MemoryBlockType, MEMORY_BLOCK_CONTENT_SIZE_BYTES_MAX};
 pub use checkpoint::{Checkpoint, CheckpointManager};
 pub use core::{
     CoreMemory, CoreMemoryConfig, CORE_MEMORY_SIZE_BYTES_MAX_DEFAULT, CORE_MEMORY_SIZE_BYTES_MIN,
 };
+pub use embedder::{
+    Embedder, EmbedderConfig, LocalEmbedder, MockEmbedder, EMBEDDING_DIM_1024, EMBEDDING_DIM_1536,
+    EMBEDDING_DIM_384, EMBEDDING_DIM_768,
+};
 pub use error::{MemoryError, MemoryResult};
-pub use search::{SearchQuery, SearchResult, SearchResults};
+pub use search::{
+    cosine_similarity, semantic_search, similarity_score, SearchQuery, SearchResult, SearchResults,
+    SemanticQuery, SemanticSearchResult, SEARCH_RESULTS_LIMIT_DEFAULT,
+    SEMANTIC_SEARCH_SIMILARITY_MIN_DEFAULT,
+};
 pub use types::{MemoryMetadata, MemoryStats, Timestamp};
 pub use working::{WorkingMemory, WorkingMemoryConfig};
 

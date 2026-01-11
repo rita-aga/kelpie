@@ -44,6 +44,12 @@ anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# OpenTelemetry
+opentelemetry = "0.21"
+opentelemetry-otlp = { version = "0.14", features = ["tonic"] }
+opentelemetry_sdk = { version = "0.21", features = ["rt-tokio"] }
+tracing-opentelemetry = "0.22"
+
 # Deterministic RNG
 rand = "0.8"
 rand_chacha = "0.3"
@@ -86,6 +92,9 @@ stateright = "0.30"
 # Testing
 proptest = "1.4"
 criterion = "0.5"
+
+# Embeddings (optional)
+fastembed = "5.4"
 
 # Internal crates
 kelpie-core = { path = "crates/kelpie-core" }

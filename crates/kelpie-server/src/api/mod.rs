@@ -3,8 +3,10 @@
 //! TigerStyle: Letta-compatible REST API for agent management.
 
 pub mod agents;
+pub mod archival;
 pub mod blocks;
 pub mod messages;
+pub mod tools;
 
 use crate::models::{ErrorResponse, HealthResponse};
 use crate::state::{AppState, StateError};
@@ -15,6 +17,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use serde::Serialize;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
@@ -29,13 +32,42 @@ pub fn router(state: AppState) -> Router {
         // Health check
         .route("/health", get(health_check))
         .route("/v1/health", get(health_check))
+        // Capabilities
+        .route("/v1/capabilities", get(capabilities))
         // Agent routes
         .nest("/v1/agents", agents::router())
-        // Tool routes (future)
-        // .nest("/v1/tools", tools::router())
+        // Tool routes
+        .nest("/v1/tools", tools::router())
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state)
+}
+
+/// Server capabilities endpoint
+async fn capabilities() -> Json<CapabilitiesResponse> {
+    Json(CapabilitiesResponse {
+        features: vec![
+            "agents".to_string(),
+            "memory_blocks".to_string(),
+            "messages".to_string(),
+            "tools".to_string(),
+            "archival_memory".to_string(),
+            "semantic_search".to_string(),
+        ],
+        api_version: "v1".to_string(),
+        llm_models: vec![
+            "anthropic/claude-sonnet-4".to_string(),
+            "openai/gpt-4o".to_string(),
+        ],
+    })
+}
+
+/// Server capabilities response
+#[derive(Debug, Serialize)]
+struct CapabilitiesResponse {
+    features: Vec<String>,
+    api_version: String,
+    llm_models: Vec<String>,
 }
 
 /// Health check endpoint

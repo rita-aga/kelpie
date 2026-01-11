@@ -83,7 +83,10 @@ impl Sandbox for ProcessSandbox {
         tokio::fs::create_dir_all(&self.workdir)
             .await
             .map_err(|e| SandboxError::Internal {
-                message: format!("failed to start sandbox {}: failed to create workdir: {}", self.id, e),
+                message: format!(
+                    "failed to start sandbox {}: failed to create workdir: {}",
+                    self.id, e
+                ),
             })?;
 
         *state = SandboxState::Running;
@@ -206,9 +209,7 @@ impl Sandbox for ProcessSandbox {
 
         match result {
             Ok((stdout, stderr, status)) => {
-                let exit_code = status
-                    .map(|s| s.code().unwrap_or(-1))
-                    .unwrap_or(-1);
+                let exit_code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
 
                 let stdout_truncated = stdout.len() >= max_output;
                 let stderr_truncated = stderr.len() >= max_output;
@@ -273,7 +274,9 @@ impl Sandbox for ProcessSandbox {
 
     async fn stats(&self) -> SandboxResult<SandboxStats> {
         let start_time = self.start_time.read().await;
-        let uptime = start_time.map(|s| s.elapsed().as_millis() as u64).unwrap_or(0);
+        let uptime = start_time
+            .map(|s| s.elapsed().as_millis() as u64)
+            .unwrap_or(0);
 
         Ok(SandboxStats {
             memory_bytes_used: 0,

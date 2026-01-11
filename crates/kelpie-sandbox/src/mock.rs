@@ -326,8 +326,10 @@ impl Sandbox for MockSandbox {
 }
 
 /// Factory for creating mock sandboxes
+#[allow(dead_code)]
 pub struct MockSandboxFactory;
 
+#[allow(dead_code)]
 impl MockSandboxFactory {
     /// Create a new factory
     pub fn new() -> Self {

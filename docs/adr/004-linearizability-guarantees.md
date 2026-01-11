@@ -8,6 +8,19 @@ Accepted
 
 2025-01-10
 
+## Implementation Status
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| Single activation | ✅ Complete | `kelpie-runtime/src/dispatcher.rs` |
+| Actor KV transactions | ✅ Complete | `kelpie-storage/src/actor_kv.rs` |
+| Lease-based ownership | 📋 Designed | Requires FDB backend |
+| FDB transactions | ⏳ Not Started | Requires FDB backend |
+| Failure detection | 🚧 Partial | Basic heartbeats in cluster |
+| Automatic recovery | 🚧 Partial | Actor reactivation works |
+
+**Note**: Linearizability guarantees are fully designed but depend on FDB backend for production use. Current in-memory implementation provides linearizability within a single process. Cluster-wide linearizability requires FDB integration.
+
 ## Context
 
 Kelpie makes strong consistency guarantees that distinguish it from eventually consistent actor systems. Users need to understand:

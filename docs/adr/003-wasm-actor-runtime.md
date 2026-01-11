@@ -8,6 +8,19 @@ Proposed
 
 2025-01-10
 
+## Implementation Status
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| Wasmtime integration | 🚧 Scaffolded | `kelpie-wasm/src/lib.rs` |
+| waPC protocol | ⏳ Not Started | P3 priority |
+| Module registry | ⏳ Not Started | P3 priority |
+| Host functions | ⏳ Not Started | P3 priority |
+| Rust WASM actors | ⏳ Not Started | Future |
+| TinyGo actors | ⏳ Not Started | Future |
+
+**Note**: WASM actor support is a P3 (nice-to-have) feature. Basic scaffolding exists but runtime integration is not implemented. Focus is on native Rust actors first.
+
 ## Context
 
 Kelpie aims to support polyglot actors - allowing developers to write actors in languages other than Rust. This is particularly important for:

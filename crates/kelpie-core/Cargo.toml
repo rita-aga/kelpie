@@ -15,6 +15,19 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
+tracing = { workspace = true }
+
+# OpenTelemetry (optional, enabled with "otel" feature)
+opentelemetry = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+
+[features]
+default = []
+otel = ["opentelemetry", "opentelemetry-otlp", "opentelemetry_sdk", "tracing-opentelemetry", "tracing-subscriber", "tokio"]
 
 [dev-dependencies]
 proptest = { workspace = true }

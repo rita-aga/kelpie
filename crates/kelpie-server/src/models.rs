@@ -295,8 +295,9 @@ pub struct UsageStats {
 // Tool Models
 // =============================================================================
 
-/// Tool definition
+/// Tool definition (reserved for future LLM tool integration)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ToolDefinition {
     /// Unique identifier
     pub id: String,

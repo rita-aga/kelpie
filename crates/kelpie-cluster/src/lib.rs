@@ -47,7 +47,7 @@ pub use config::{
 };
 pub use error::{ClusterError, ClusterResult};
 pub use migration::{plan_migrations, MigrationCoordinator, MigrationInfo, MigrationState};
-pub use rpc::{MemoryTransport, RequestId, RpcHandler, RpcMessage, RpcTransport};
+pub use rpc::{MemoryTransport, RequestId, RpcHandler, RpcMessage, RpcTransport, TcpTransport};
 
 #[cfg(test)]
 mod tests {

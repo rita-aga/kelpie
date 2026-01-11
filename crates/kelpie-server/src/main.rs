@@ -64,16 +64,22 @@ async fn main() -> anyhow::Result<()> {
     // Start server
     tracing::info!("Starting HTTP server on {}", addr);
     tracing::info!("API endpoints:");
-    tracing::info!("  GET  /health              - Health check");
-    tracing::info!("  GET  /v1/agents           - List agents");
-    tracing::info!("  POST /v1/agents           - Create agent");
-    tracing::info!("  GET  /v1/agents/{{id}}      - Get agent");
-    tracing::info!("  PATCH /v1/agents/{{id}}     - Update agent");
-    tracing::info!("  DELETE /v1/agents/{{id}}    - Delete agent");
-    tracing::info!("  GET  /v1/agents/{{id}}/blocks        - List blocks");
-    tracing::info!("  PATCH /v1/agents/{{id}}/blocks/{{bid}} - Update block");
-    tracing::info!("  GET  /v1/agents/{{id}}/messages      - List messages");
-    tracing::info!("  POST /v1/agents/{{id}}/messages      - Send message");
+    tracing::info!("  GET  /health                           - Health check");
+    tracing::info!("  GET  /v1/capabilities                  - Server capabilities");
+    tracing::info!("  GET  /v1/agents                        - List agents");
+    tracing::info!("  POST /v1/agents                        - Create agent");
+    tracing::info!("  GET  /v1/agents/{{id}}                   - Get agent");
+    tracing::info!("  PATCH /v1/agents/{{id}}                  - Update agent");
+    tracing::info!("  DELETE /v1/agents/{{id}}                 - Delete agent");
+    tracing::info!("  GET  /v1/agents/{{id}}/blocks            - List blocks");
+    tracing::info!("  PATCH /v1/agents/{{id}}/blocks/{{bid}}     - Update block");
+    tracing::info!("  GET  /v1/agents/{{id}}/messages          - List messages");
+    tracing::info!("  POST /v1/agents/{{id}}/messages          - Send message");
+    tracing::info!("  GET  /v1/agents/{{id}}/archival          - Search archival memory");
+    tracing::info!("  POST /v1/agents/{{id}}/archival          - Add to archival memory");
+    tracing::info!("  GET  /v1/tools                         - List tools");
+    tracing::info!("  POST /v1/tools                         - Register tool");
+    tracing::info!("  POST /v1/tools/{{name}}/execute          - Execute tool");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;

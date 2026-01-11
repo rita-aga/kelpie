@@ -271,6 +271,192 @@ impl SearchResults {
     }
 }
 
+// ============================================================================
+// Vector / Semantic Search
+// ============================================================================
+
+/// Default minimum similarity threshold for semantic search
+pub const SEMANTIC_SEARCH_SIMILARITY_MIN_DEFAULT: f32 = 0.5;
+
+/// A semantic search query using vector similarity
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticQuery {
+    /// The query embedding vector
+    pub embedding: Vec<f32>,
+    /// Minimum similarity score (0.0 - 1.0)
+    pub min_similarity: f32,
+    /// Filter by block types
+    pub block_types: Option<Vec<MemoryBlockType>>,
+    /// Maximum number of results
+    pub limit: usize,
+}
+
+impl SemanticQuery {
+    /// Create a new semantic query with the given embedding
+    pub fn new(embedding: Vec<f32>) -> Self {
+        assert!(!embedding.is_empty(), "embedding cannot be empty");
+
+        Self {
+            embedding,
+            min_similarity: SEMANTIC_SEARCH_SIMILARITY_MIN_DEFAULT,
+            block_types: None,
+            limit: SEARCH_RESULTS_LIMIT_DEFAULT,
+        }
+    }
+
+    /// Set minimum similarity threshold
+    pub fn min_similarity(mut self, threshold: f32) -> Self {
+        assert!(
+            (0.0..=1.0).contains(&threshold),
+            "similarity threshold must be between 0.0 and 1.0"
+        );
+        self.min_similarity = threshold;
+        self
+    }
+
+    /// Filter by block types
+    pub fn block_types(mut self, types: Vec<MemoryBlockType>) -> Self {
+        self.block_types = Some(types);
+        self
+    }
+
+    /// Filter by a single block type
+    pub fn block_type(mut self, block_type: MemoryBlockType) -> Self {
+        self.block_types = Some(vec![block_type]);
+        self
+    }
+
+    /// Set result limit
+    pub fn limit(mut self, limit: usize) -> Self {
+        self.limit = limit;
+        self
+    }
+
+    /// Get the dimension of the query embedding
+    pub fn dimension(&self) -> usize {
+        self.embedding.len()
+    }
+}
+
+/// Compute cosine similarity between two vectors
+///
+/// Returns a value between -1.0 and 1.0, where:
+/// - 1.0 means identical direction
+/// - 0.0 means orthogonal
+/// - -1.0 means opposite direction
+///
+/// TigerStyle: Explicit assertions for vector validity.
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    assert!(!a.is_empty(), "vector a cannot be empty");
+    assert!(!b.is_empty(), "vector b cannot be empty");
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "vectors must have same dimension: {} != {}",
+        a.len(),
+        b.len()
+    );
+
+    let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+    // Handle zero vectors
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
+
+    let similarity = dot_product / (norm_a * norm_b);
+
+    // Clamp to [-1, 1] to handle floating point errors
+    similarity.clamp(-1.0, 1.0)
+}
+
+/// Compute similarity and return a score in [0, 1] range
+///
+/// This normalizes cosine similarity from [-1, 1] to [0, 1]
+pub fn similarity_score(a: &[f32], b: &[f32]) -> f32 {
+    let cosine = cosine_similarity(a, b);
+    // Map [-1, 1] to [0, 1]
+    (cosine + 1.0) / 2.0
+}
+
+/// Search results ranked by semantic similarity
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticSearchResult {
+    /// The matching block
+    pub block: MemoryBlock,
+    /// Cosine similarity score (-1.0 to 1.0)
+    pub cosine_similarity: f32,
+    /// Normalized score (0.0 to 1.0)
+    pub score: f32,
+}
+
+impl SemanticSearchResult {
+    /// Create a new semantic search result
+    pub fn new(block: MemoryBlock, cosine_similarity: f32) -> Self {
+        Self {
+            block,
+            cosine_similarity,
+            score: (cosine_similarity + 1.0) / 2.0,
+        }
+    }
+}
+
+/// Execute a semantic search over a collection of blocks
+///
+/// Returns blocks sorted by similarity (highest first).
+pub fn semantic_search(query: &SemanticQuery, blocks: &[MemoryBlock]) -> Vec<SemanticSearchResult> {
+    assert!(
+        !query.embedding.is_empty(),
+        "query embedding cannot be empty"
+    );
+
+    let query_dim = query.embedding.len();
+    let mut results: Vec<SemanticSearchResult> = Vec::new();
+
+    for block in blocks {
+        // Skip blocks without embeddings
+        let block_embedding = match &block.embedding {
+            Some(e) => e,
+            None => continue,
+        };
+
+        // Skip blocks with mismatched dimensions
+        if block_embedding.len() != query_dim {
+            continue;
+        }
+
+        // Apply block type filter
+        if let Some(ref types) = query.block_types {
+            if !types.contains(&block.block_type) {
+                continue;
+            }
+        }
+
+        let similarity = cosine_similarity(&query.embedding, block_embedding);
+
+        // Skip blocks below threshold
+        if similarity < query.min_similarity {
+            continue;
+        }
+
+        results.push(SemanticSearchResult::new(block.clone(), similarity));
+    }
+
+    // Sort by similarity (highest first)
+    results.sort_by(|a, b| {
+        b.cosine_similarity
+            .partial_cmp(&a.cosine_similarity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Apply limit
+    results.truncate(query.limit);
+
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,5 +579,205 @@ mod tests {
 
         let blocks = results.into_blocks();
         assert_eq!(blocks.len(), 2);
+    }
+
+    // ========================================================================
+    // Semantic Search Tests
+    // ========================================================================
+
+    #[test]
+    fn test_cosine_similarity_identical() {
+        let a = vec![1.0, 0.0, 0.0];
+        let b = vec![1.0, 0.0, 0.0];
+        let sim = cosine_similarity(&a, &b);
+        assert!(
+            (sim - 1.0).abs() < 1e-6,
+            "identical vectors should have similarity 1.0"
+        );
+    }
+
+    #[test]
+    fn test_cosine_similarity_orthogonal() {
+        let a = vec![1.0, 0.0, 0.0];
+        let b = vec![0.0, 1.0, 0.0];
+        let sim = cosine_similarity(&a, &b);
+        assert!(
+            sim.abs() < 1e-6,
+            "orthogonal vectors should have similarity 0.0"
+        );
+    }
+
+    #[test]
+    fn test_cosine_similarity_opposite() {
+        let a = vec![1.0, 0.0, 0.0];
+        let b = vec![-1.0, 0.0, 0.0];
+        let sim = cosine_similarity(&a, &b);
+        assert!(
+            (sim + 1.0).abs() < 1e-6,
+            "opposite vectors should have similarity -1.0"
+        );
+    }
+
+    #[test]
+    fn test_cosine_similarity_scaled() {
+        // Scaling should not affect cosine similarity
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![2.0, 4.0, 6.0]; // Same direction, different magnitude
+        let sim = cosine_similarity(&a, &b);
+        assert!(
+            (sim - 1.0).abs() < 1e-6,
+            "parallel vectors should have similarity 1.0"
+        );
+    }
+
+    #[test]
+    fn test_cosine_similarity_zero_vector() {
+        let a = vec![0.0, 0.0, 0.0];
+        let b = vec![1.0, 2.0, 3.0];
+        let sim = cosine_similarity(&a, &b);
+        assert_eq!(sim, 0.0, "zero vector should return 0.0 similarity");
+    }
+
+    #[test]
+    fn test_similarity_score_range() {
+        let a = vec![1.0, 0.0, 0.0];
+        let b = vec![-1.0, 0.0, 0.0];
+        let score = similarity_score(&a, &b);
+        assert!(
+            (0.0..=1.0).contains(&score),
+            "similarity_score should be in [0, 1]"
+        );
+        assert!(
+            (score - 0.0).abs() < 1e-6,
+            "opposite vectors should have score 0.0"
+        );
+    }
+
+    #[test]
+    fn test_semantic_query_builder() {
+        let embedding = vec![1.0, 2.0, 3.0];
+        let query = SemanticQuery::new(embedding.clone())
+            .min_similarity(0.8)
+            .block_type(MemoryBlockType::Facts)
+            .limit(5);
+
+        assert_eq!(query.embedding, embedding);
+        assert_eq!(query.min_similarity, 0.8);
+        assert_eq!(query.block_types, Some(vec![MemoryBlockType::Facts]));
+        assert_eq!(query.limit, 5);
+    }
+
+    #[test]
+    fn test_semantic_search_finds_similar() {
+        // Create blocks with embeddings
+        let mut block1 = make_test_block("apple fruit", MemoryBlockType::Facts);
+        block1.embedding = Some(vec![1.0, 0.0, 0.0]);
+
+        let mut block2 = make_test_block("banana fruit", MemoryBlockType::Facts);
+        block2.embedding = Some(vec![0.9, 0.1, 0.0]); // Similar to block1
+
+        let mut block3 = make_test_block("car vehicle", MemoryBlockType::Facts);
+        block3.embedding = Some(vec![0.0, 1.0, 0.0]); // Different
+
+        let blocks = vec![block1, block2, block3];
+
+        // Query with vector similar to "apple"
+        let query = SemanticQuery::new(vec![1.0, 0.0, 0.0]).min_similarity(0.5);
+        let results = semantic_search(&query, &blocks);
+
+        assert_eq!(results.len(), 2); // apple and banana should match
+        assert!(results[0].block.content.contains("apple")); // Most similar first
+        assert!(results[0].cosine_similarity > results[1].cosine_similarity);
+    }
+
+    #[test]
+    fn test_semantic_search_respects_threshold() {
+        let mut block = make_test_block("content", MemoryBlockType::Facts);
+        block.embedding = Some(vec![0.6, 0.8, 0.0]); // cos(37 deg) ~ 0.6 with query
+
+        let blocks = vec![block];
+
+        // High threshold - should not match
+        let query = SemanticQuery::new(vec![1.0, 0.0, 0.0]).min_similarity(0.9);
+        let results = semantic_search(&query, &blocks);
+        assert!(results.is_empty());
+
+        // Lower threshold - should match
+        let query = SemanticQuery::new(vec![1.0, 0.0, 0.0]).min_similarity(0.5);
+        let results = semantic_search(&query, &blocks);
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_semantic_search_filters_block_types() {
+        let mut facts_block = make_test_block("fact content", MemoryBlockType::Facts);
+        facts_block.embedding = Some(vec![1.0, 0.0, 0.0]);
+
+        let mut persona_block = make_test_block("persona content", MemoryBlockType::Persona);
+        persona_block.embedding = Some(vec![1.0, 0.0, 0.0]); // Same embedding
+
+        let blocks = vec![facts_block, persona_block];
+
+        let query = SemanticQuery::new(vec![1.0, 0.0, 0.0])
+            .block_type(MemoryBlockType::Facts)
+            .min_similarity(0.0);
+
+        let results = semantic_search(&query, &blocks);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].block.block_type, MemoryBlockType::Facts);
+    }
+
+    #[test]
+    fn test_semantic_search_skips_no_embedding() {
+        let block_with = make_test_block("has embedding", MemoryBlockType::Facts)
+            .with_embedding(vec![1.0, 0.0, 0.0]);
+
+        let block_without = make_test_block("no embedding", MemoryBlockType::Facts);
+
+        let blocks = vec![block_with, block_without];
+
+        let query = SemanticQuery::new(vec![1.0, 0.0, 0.0]).min_similarity(0.0);
+        let results = semantic_search(&query, &blocks);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].block.content.contains("has embedding"));
+    }
+
+    #[test]
+    fn test_semantic_search_respects_limit() {
+        let blocks: Vec<MemoryBlock> = (0..10)
+            .map(|i| {
+                let mut block = make_test_block(&format!("block {}", i), MemoryBlockType::Facts);
+                block.embedding = Some(vec![1.0, 0.0, 0.0]);
+                block
+            })
+            .collect();
+
+        let query = SemanticQuery::new(vec![1.0, 0.0, 0.0])
+            .min_similarity(0.0)
+            .limit(3);
+
+        let results = semantic_search(&query, &blocks);
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn test_block_embedding_methods() {
+        let mut block = make_test_block("test", MemoryBlockType::Facts);
+        assert!(!block.has_embedding());
+        assert_eq!(block.embedding_dim(), None);
+
+        block.set_embedding(vec![1.0, 2.0, 3.0]);
+        assert!(block.has_embedding());
+        assert_eq!(block.embedding_dim(), Some(3));
+    }
+
+    #[test]
+    fn test_block_with_embedding_builder() {
+        let block = make_test_block("test", MemoryBlockType::Facts)
+            .with_embedding(vec![1.0, 2.0, 3.0, 4.0]);
+
+        assert!(block.has_embedding());
+        assert_eq!(block.embedding_dim(), Some(4));
     }
 }

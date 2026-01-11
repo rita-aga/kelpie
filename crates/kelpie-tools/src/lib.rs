@@ -28,7 +28,7 @@
 
 mod builtin;
 mod error;
-mod mcp;
+pub mod mcp;
 mod registry;
 mod traits;
 
