@@ -856,6 +856,7 @@ mod tests {
                 description: None,
                 limit: None,
             }],
+            block_ids: vec![],
             tool_ids: vec![],
             tags: vec![],
             metadata: serde_json::json!({}),

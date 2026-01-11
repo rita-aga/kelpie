@@ -25,6 +25,7 @@ pub enum AgentType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateAgentRequest {
     /// Name of the agent
+    #[serde(default = "default_agent_name")]
     pub name: String,
     /// Agent type
     #[serde(default)]
@@ -35,9 +36,12 @@ pub struct CreateAgentRequest {
     pub system: Option<String>,
     /// Description of the agent
     pub description: Option<String>,
-    /// Initial memory blocks
+    /// Initial memory blocks (inline creation)
     #[serde(default)]
     pub memory_blocks: Vec<CreateBlockRequest>,
+    /// Existing block IDs to attach (letta-code compatibility)
+    #[serde(default)]
+    pub block_ids: Vec<String>,
     /// Tool IDs to attach
     #[serde(default)]
     pub tool_ids: Vec<String>,
@@ -47,6 +51,10 @@ pub struct CreateAgentRequest {
     /// Additional metadata
     #[serde(default)]
     pub metadata: serde_json::Value,
+}
+
+fn default_agent_name() -> String {
+    "Nameless Agent".to_string()
 }
 
 /// Request to update an agent
@@ -410,6 +418,13 @@ pub struct MessageResponse {
     pub messages: Vec<Message>,
     /// Usage statistics
     pub usage: Option<UsageStats>,
+    /// Stop reason (for letta-code compatibility)
+    #[serde(default = "default_stop_reason")]
+    pub stop_reason: String,
+}
+
+fn default_stop_reason() -> String {
+    "end_turn".to_string()
 }
 
 /// Token usage statistics
@@ -521,6 +536,7 @@ mod tests {
                 description: Some("Agent persona".to_string()),
                 limit: Some(1000),
             }],
+            block_ids: vec![],
             tool_ids: vec![],
             tags: vec!["test".to_string()],
             metadata: serde_json::json!({}),
@@ -541,6 +557,7 @@ mod tests {
             system: None,
             description: None,
             memory_blocks: vec![],
+            block_ids: vec![],
             tool_ids: vec![],
             tags: vec![],
             metadata: serde_json::json!({}),

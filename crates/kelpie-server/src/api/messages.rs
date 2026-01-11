@@ -243,6 +243,7 @@ pub async fn send_message(
             completion_tokens,
             total_tokens: prompt_tokens + completion_tokens,
         }),
+        stop_reason: "end_turn".to_string(),
     }))
 }
 

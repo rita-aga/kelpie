@@ -82,10 +82,23 @@ async fn create_agent(
         ));
     }
 
-    let agent = AgentState::from_request(request);
+    // Extract block_ids before consuming request
+    let block_ids = request.block_ids.clone();
+
+    let mut agent = AgentState::from_request(request);
+
+    // Look up and attach standalone blocks by ID (letta-code compatibility)
+    for block_id in block_ids {
+        if let Ok(Some(block)) = state.get_standalone_block(&block_id) {
+            agent.blocks.push(block);
+        } else {
+            tracing::warn!(block_id = %block_id, "standalone block not found, skipping");
+        }
+    }
+
     let created = state.create_agent(agent)?;
 
-    tracing::info!(agent_id = %created.id, name = %created.name, "created agent");
+    tracing::info!(agent_id = %created.id, name = %created.name, block_count = created.blocks.len(), "created agent");
     Ok(Json(created))
 }
 
