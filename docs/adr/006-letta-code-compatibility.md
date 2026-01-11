@@ -18,6 +18,7 @@ Initial testing revealed several API compatibility gaps:
 2. **Standalone blocks**: letta-code creates blocks independently via `/v1/blocks` before associating them with agents
 3. **Core memory access by label**: letta-code accesses blocks via `/v1/agents/{id}/core-memory/blocks/{label}` using labels, not IDs
 4. **Flexible message format**: letta-code sends messages with content as arrays of content blocks, not simple strings
+5. **SSE streaming**: letta-code expects Server-Sent Events streaming via `stream_steps=true` query parameter
 
 ## Decision
 
@@ -75,11 +76,51 @@ pub struct CreateMessageRequest {
 fn deserialize_content<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 ```
 
+### 5. SSE Streaming (`stream_steps=true`)
+
+When the `stream_steps=true` query parameter is passed to `POST /v1/agents/{id}/messages`, return Server-Sent Events instead of JSON:
+
+```rust
+pub async fn send_message(
+    Query(query): Query<SendMessageQuery>,
+    // ...
+) -> Result<Response, ApiError> {
+    if query.stream_steps {
+        return send_message_streaming(state, agent_id, request).await;
+    }
+    send_message_json(state, agent_id, request).await
+}
+```
+
+SSE message types implemented:
+
+- `assistant_message` - Final assistant response with content
+- `tool_call_message` - Tool invocation with name and arguments
+- `tool_return_message` - Tool execution result with status
+- `stop_reason` - End of response marker (`end_turn`)
+- `usage_statistics` - Token usage (prompt, completion, total, step_count)
+
+Stream ends with `data: [DONE]` marker.
+
+Message model updated to include `message_type` field for Letta format compatibility:
+
+```rust
+pub struct Message {
+    pub id: String,
+    pub agent_id: String,
+    pub message_type: String,  // "user_message", "assistant_message", etc.
+    pub role: MessageRole,
+    pub content: String,
+    // ...
+}
+```
+
 ## Consequences
 
 ### Positive
 
 - letta-code can create agents and send messages through Kelpie
+- SSE streaming enables real-time response display in letta-code CLI
 - Existing Letta Python/TypeScript SDKs gain compatibility
 - Flexible message parsing supports both simple and complex formats
 - No breaking changes to existing Kelpie API consumers

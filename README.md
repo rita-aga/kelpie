@@ -108,7 +108,7 @@ let result = client.execute_tool("read_file", json!({"path": "/tmp/test.txt"})).
 
 ## API Compatibility
 
-Kelpie implements Letta-compatible REST endpoints:
+Kelpie implements Letta-compatible REST endpoints with SSE streaming support:
 
 ```
 GET  /health
@@ -120,8 +120,26 @@ DELETE /v1/agents/{id}
 GET  /v1/agents/{id}/blocks
 PATCH /v1/agents/{id}/blocks/{bid}
 GET  /v1/agents/{id}/messages
-POST /v1/agents/{id}/messages
+POST /v1/agents/{id}/messages              # JSON or SSE (stream_steps=true)
+POST /v1/agents/{id}/messages/stream       # SSE streaming
+GET  /v1/blocks                            # Standalone blocks
+POST /v1/blocks
+GET  /v1/agents/{id}/core-memory/blocks/{label}  # Access by label
 ```
+
+### letta-code CLI
+
+Use Kelpie as a drop-in replacement for Letta server with [letta-code](https://github.com/letta-ai/letta-code):
+
+```bash
+# Start Kelpie server
+ANTHROPIC_API_KEY=sk-... cargo run -p kelpie-server
+
+# Run letta-code pointing to Kelpie
+LETTA_BASE_URL=http://localhost:8283 letta -p "help me write a function"
+```
+
+### Python SDK
 
 Use with existing Letta clients:
 
