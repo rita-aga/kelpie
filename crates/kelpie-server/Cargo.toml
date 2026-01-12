@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 # Core kelpie crates
+kelpie-core = { workspace = true }
 kelpie-sandbox = { workspace = true }
 
 # Async runtime

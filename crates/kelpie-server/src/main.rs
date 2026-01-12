@@ -68,9 +68,9 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Starting HTTP server on {}", addr);
     tracing::info!("API endpoints:");
     tracing::info!("  GET  /health                           - Health check");
+    tracing::info!("  GET  /metrics                          - Prometheus metrics");
     tracing::info!("  GET  /v1/capabilities                  - Server capabilities");
     tracing::info!("  GET  /v1/agents                        - List agents");
-    tracing::info!("  POST /v1/agents                        - Create agent");
     tracing::info!("  GET  /v1/agents/{{id}}                   - Get agent");
     tracing::info!("  PATCH /v1/agents/{{id}}                  - Update agent");
     tracing::info!("  DELETE /v1/agents/{{id}}                 - Delete agent");

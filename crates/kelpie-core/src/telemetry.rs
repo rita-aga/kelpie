@@ -20,7 +20,14 @@ pub struct TelemetryConfig {
     pub stdout_enabled: bool,
     /// Log level filter
     pub log_level: String,
+    /// Whether to enable metrics collection
+    pub metrics_enabled: bool,
+    /// Port for Prometheus /metrics endpoint (default: 9090)
+    pub metrics_port: u16,
 }
+
+/// Default metrics port
+const METRICS_PORT_DEFAULT: u16 = 9090;
 
 impl Default for TelemetryConfig {
     fn default() -> Self {
@@ -29,6 +36,8 @@ impl Default for TelemetryConfig {
             otlp_endpoint: None,
             stdout_enabled: true,
             log_level: "info".to_string(),
+            metrics_enabled: false,
+            metrics_port: METRICS_PORT_DEFAULT,
         }
     }
 }
@@ -60,12 +69,27 @@ impl TelemetryConfig {
         self
     }
 
+    /// Enable metrics collection
+    pub fn with_metrics(mut self, port: u16) -> Self {
+        self.metrics_enabled = true;
+        self.metrics_port = port;
+        self
+    }
+
+    /// Disable metrics collection
+    pub fn without_metrics(mut self) -> Self {
+        self.metrics_enabled = false;
+        self
+    }
+
     /// Create from environment variables
     ///
     /// Reads:
     /// - `OTEL_SERVICE_NAME`: Service name (default: "kelpie")
     /// - `OTEL_EXPORTER_OTLP_ENDPOINT`: OTLP endpoint
     /// - `RUST_LOG`: Log level filter (default: "info")
+    /// - `METRICS_ENABLED`: Enable metrics collection (default: false)
+    /// - `METRICS_PORT`: Port for /metrics endpoint (default: 9090)
     pub fn from_env() -> Self {
         let service_name =
             std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "kelpie".to_string());
@@ -74,11 +98,23 @@ impl TelemetryConfig {
 
         let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
 
+        let metrics_enabled = std::env::var("METRICS_ENABLED")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(false);
+
+        let metrics_port = std::env::var("METRICS_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(METRICS_PORT_DEFAULT);
+
         Self {
             service_name,
             otlp_endpoint,
             stdout_enabled: true,
             log_level,
+            metrics_enabled,
+            metrics_port,
         }
     }
 }
@@ -166,8 +202,12 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<TelemetryGuard> {
         "Telemetry initialized"
     );
 
+    // Initialize metrics if enabled
+    let metrics_registry = init_metrics(&config)?;
+
     Ok(TelemetryGuard {
         _has_otel: has_otel,
+        _metrics_registry: metrics_registry,
     })
 }
 
@@ -175,6 +215,54 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<TelemetryGuard> {
 #[cfg(feature = "otel")]
 pub struct TelemetryGuard {
     _has_otel: bool,
+    _metrics_registry: Option<prometheus::Registry>,
+}
+
+/// Initialize Prometheus metrics
+///
+/// Returns a Registry that can be used to scrape metrics.
+/// This should be stored and used to serve the /metrics endpoint.
+#[cfg(feature = "otel")]
+pub fn init_metrics(config: &TelemetryConfig) -> Result<Option<prometheus::Registry>> {
+    if !config.metrics_enabled {
+        return Ok(None);
+    }
+
+    use opentelemetry_sdk::metrics::MeterProviderBuilder;
+    use opentelemetry_sdk::Resource;
+
+    // Create Prometheus registry
+    let registry = prometheus::Registry::new();
+
+    // Create Prometheus exporter with the registry
+    let exporter = opentelemetry_prometheus::exporter()
+        .with_registry(registry.clone())
+        .build()
+        .map_err(|e| Error::Internal {
+            message: format!("failed to create Prometheus exporter: {}", e),
+        })?;
+
+    // Create meter provider with resource attributes
+    let resource = Resource::new(vec![opentelemetry::KeyValue::new(
+        "service.name",
+        config.service_name.clone(),
+    )]);
+
+    let provider = MeterProviderBuilder::default()
+        .with_resource(resource)
+        .with_reader(exporter)
+        .build();
+
+    // Set global meter provider
+    opentelemetry::global::set_meter_provider(provider);
+
+    tracing::info!(
+        service = %config.service_name,
+        port = config.metrics_port,
+        "Metrics initialized"
+    );
+
+    Ok(Some(registry))
 }
 
 #[cfg(feature = "otel")]
@@ -182,7 +270,14 @@ impl Drop for TelemetryGuard {
     fn drop(&mut self) {
         // Shutdown the global tracer provider
         opentelemetry::global::shutdown_tracer_provider();
+        // Metrics are automatically cleaned up when registry is dropped
     }
+}
+
+/// Initialize metrics without OpenTelemetry (no-op when feature not enabled)
+#[cfg(not(feature = "otel"))]
+pub fn init_metrics(_config: &TelemetryConfig) -> Result<Option<()>> {
+    Ok(None)
 }
 
 /// Initialize telemetry without OpenTelemetry (fallback when feature not enabled)
@@ -206,6 +301,8 @@ mod tests {
         assert_eq!(config.service_name, "kelpie");
         assert!(config.otlp_endpoint.is_none());
         assert!(config.stdout_enabled);
+        assert!(!config.metrics_enabled);
+        assert_eq!(config.metrics_port, 9090);
     }
 
     #[test]
@@ -222,5 +319,14 @@ mod tests {
         );
         assert_eq!(config.log_level, "debug");
         assert!(!config.stdout_enabled);
+    }
+
+    #[test]
+    fn test_telemetry_config_with_metrics() {
+        let config = TelemetryConfig::new("test-service")
+            .with_metrics(9091);
+
+        assert!(config.metrics_enabled);
+        assert_eq!(config.metrics_port, 9091);
     }
 }

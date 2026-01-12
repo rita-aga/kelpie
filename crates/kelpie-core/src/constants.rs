@@ -127,6 +127,40 @@ pub const DST_TIME_MS_MAX: u64 = 24 * 60 * 60 * 1000;
 /// Default fault injection probability
 pub const DST_FAULT_PROBABILITY_DEFAULT: f64 = 0.01;
 
+// =============================================================================
+// Observability - Metric Names (TigerStyle: explicit, with units)
+// =============================================================================
+
+/// Metric: Current number of active agents (gauge)
+pub const METRIC_NAME_AGENTS_ACTIVE_COUNT: &str = "kelpie_agents_active_count";
+
+/// Metric: Total number of agent activations (counter)
+pub const METRIC_NAME_AGENTS_ACTIVATED_TOTAL: &str = "kelpie_agents_activated_total";
+
+/// Metric: Total number of agent deactivations (counter)
+pub const METRIC_NAME_AGENTS_DEACTIVATED_TOTAL: &str = "kelpie_agents_deactivated_total";
+
+/// Metric: Total number of invocations (counter, labels: operation, status)
+pub const METRIC_NAME_INVOCATIONS_TOTAL: &str = "kelpie_invocations_total";
+
+/// Metric: Invocation duration in seconds (histogram)
+pub const METRIC_NAME_INVOCATION_DURATION_SECONDS: &str = "kelpie_invocation_duration_seconds";
+
+/// Metric: Current number of pending invocations (gauge)
+pub const METRIC_NAME_INVOCATIONS_PENDING_COUNT: &str = "kelpie_invocations_pending_count";
+
+/// Metric: Memory usage in bytes (gauge, labels: tier)
+pub const METRIC_NAME_MEMORY_USAGE_BYTES: &str = "kelpie_memory_usage_bytes";
+
+/// Metric: Total number of memory blocks (gauge)
+pub const METRIC_NAME_MEMORY_BLOCKS_TOTAL: &str = "kelpie_memory_blocks_total";
+
+/// Metric: Storage operation duration in seconds (histogram, labels: operation)
+pub const METRIC_NAME_STORAGE_DURATION_SECONDS: &str = "kelpie_storage_duration_seconds";
+
+/// Metric: Total storage operations (counter, labels: operation, status)
+pub const METRIC_NAME_STORAGE_OPERATIONS_TOTAL: &str = "kelpie_storage_operations_total";
+
 // Compile-time assertions for constant validity
 const _: () = {
     assert!(ACTOR_ID_LENGTH_BYTES_MAX >= 64);

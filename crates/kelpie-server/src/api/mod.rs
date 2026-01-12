@@ -34,6 +34,8 @@ pub fn router(state: AppState) -> Router {
         // Health check
         .route("/health", get(health_check))
         .route("/v1/health", get(health_check))
+        // Metrics endpoint (Prometheus)
+        .route("/metrics", get(metrics))
         // Capabilities
         .route("/v1/capabilities", get(capabilities))
         // Agent routes
@@ -81,6 +83,38 @@ async fn health_check(State(state): State<AppState>) -> Json<HealthResponse> {
         version: env!("CARGO_PKG_VERSION").to_string(),
         uptime_seconds: state.uptime_seconds(),
     })
+}
+
+/// Prometheus metrics endpoint
+///
+/// Returns metrics in Prometheus text format.
+/// This is scraped by Prometheus servers for monitoring.
+async fn metrics(State(state): State<AppState>) -> Response {
+    // For Phase 1, return a simple response
+    // In Phase 2, this will scrape from the actual Prometheus registry
+    let agent_count = state.agent_count().unwrap_or(0);
+
+    let metrics_text = format!(
+        "# HELP kelpie_agents_active_count Current number of active agents\n\
+         # TYPE kelpie_agents_active_count gauge\n\
+         kelpie_agents_active_count {}\n\
+         \n\
+         # HELP kelpie_server_uptime_seconds Server uptime in seconds\n\
+         # TYPE kelpie_server_uptime_seconds gauge\n\
+         kelpie_server_uptime_seconds {}\n",
+        agent_count,
+        state.uptime_seconds()
+    );
+
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        metrics_text,
+    )
+        .into_response()
 }
 
 /// API error type that converts to HTTP responses

@@ -48,7 +48,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 opentelemetry = "0.21"
 opentelemetry-otlp = { version = "0.14", features = ["tonic"] }
 opentelemetry_sdk = { version = "0.21", features = ["rt-tokio"] }
+opentelemetry-prometheus = "0.14"
 tracing-opentelemetry = "0.22"
+prometheus = "0.13"
 
 # Deterministic RNG
 rand = "0.8"
