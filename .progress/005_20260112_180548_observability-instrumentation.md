@@ -367,13 +367,16 @@ pub const INVOCATION_TIME: &str = "invocation_time";
 | Metrics endpoint | `cargo run -p kelpie-server` then `curl http://localhost:8283/metrics` | Prometheus-format metrics (agent count, uptime) |
 | TelemetryConfig with metrics | `TelemetryConfig::new("test").with_metrics(9090)` | Config includes metrics_enabled=true |
 
+| **Comprehensive spans** | `RUST_LOG=info cargo run -p kelpie-server` | All API requests, activations, invocations traced |
+| **Invocation metrics** | Create agent, send messages, check `/metrics` | See `kelpie_invocations_total`, `kelpie_invocation_duration_seconds` |
+| **Memory metrics** | Create agents with blocks, check `/metrics` | See `kelpie_memory_usage_bytes{tier="core/working/archival"}` |
+| **Storage spans** | `RUST_LOG=debug cargo test -p kelpie-storage` | See spans for get/set/delete operations |
+
 ### Doesn't Work Yet ❌
 | What | Why | When Expected |
 |------|-----|---------------|
-| Full metrics collection | Only agent count + uptime, need all metrics | After Phase 2 |
-| Comprehensive spans | Only 6 spans exist | After Phase 3 |
-| Invocation latency metrics | No histogram collection | After Phase 2 |
-| Memory usage metrics | No gauge export | After Phase 2 |
+| DST coverage for observability | Phase 4 not started yet | After Phase 4 |
+| Full documentation | METRICS.md and TRACING.md not created | After Phase 5 |
 
 ### Known Limitations ⚠️
 - Metrics are in-memory only (lost on restart) - this is standard for Prometheus
