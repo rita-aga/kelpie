@@ -20,6 +20,7 @@ use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::time::Duration;
+use tracing::instrument;
 use uuid::Uuid;
 
 /// Query parameters for listing messages
@@ -95,6 +96,7 @@ struct StopReasonEvent {
 /// List messages for an agent
 ///
 /// GET /v1/agents/{agent_id}/messages
+#[instrument(skip(state, query), fields(agent_id = %agent_id, limit = query.limit), level = "info")]
 pub async fn list_messages(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -113,6 +115,7 @@ pub async fn list_messages(
 /// Requires LLM to be configured via ANTHROPIC_API_KEY or OPENAI_API_KEY.
 /// Supports multiple request formats for letta-code compatibility.
 /// Supports SSE streaming when stream_steps=true query parameter is set.
+#[instrument(skip(state, query, request), fields(agent_id = %agent_id, stream = query.stream_steps), level = "info")]
 pub async fn send_message(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -129,6 +132,7 @@ pub async fn send_message(
 }
 
 /// Send a message with JSON response (non-streaming)
+#[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
 async fn send_message_json(
     state: AppState,
     agent_id: String,
@@ -328,6 +332,7 @@ async fn send_message_json(
 }
 
 /// Send a message with SSE streaming response
+#[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
 async fn send_message_streaming(
     state: AppState,
     agent_id: String,
@@ -394,6 +399,7 @@ async fn send_message_streaming(
 }
 
 /// Generate all SSE events for a streaming response
+#[instrument(skip(state, agent, llm, content), fields(agent_id), level = "debug")]
 async fn generate_sse_events(
     state: &AppState,
     agent_id: &str,
@@ -589,6 +595,7 @@ async fn generate_sse_events(
 }
 
 /// Execute a tool asynchronously and return the result
+#[instrument(skip(input), fields(tool = name), level = "debug")]
 async fn execute_tool_async(name: &str, input: &serde_json::Value) -> String {
     match name {
         "shell" => {
@@ -657,6 +664,7 @@ fn execute_tool(name: &str, input: &serde_json::Value) -> String {
 }
 
 /// Execute a command in a sandboxed environment
+#[instrument(skip(command), level = "debug")]
 async fn execute_in_sandbox(command: &str) -> String {
     // Create and start sandbox
     let config = SandboxConfig::default();

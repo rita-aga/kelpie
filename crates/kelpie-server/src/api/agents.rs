@@ -11,6 +11,7 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
+use tracing::instrument;
 
 /// Query parameters for listing agents
 #[derive(Debug, Deserialize)]
@@ -72,6 +73,7 @@ pub fn router() -> Router<AppState> {
 /// Create a new agent
 ///
 /// POST /v1/agents
+#[instrument(skip(state, request), fields(agent_name = %request.name), level = "info")]
 async fn create_agent(
     State(state): State<AppState>,
     Json(request): Json<CreateAgentRequest>,
@@ -110,6 +112,7 @@ async fn create_agent(
 /// Get an agent by ID
 ///
 /// GET /v1/agents/{agent_id}
+#[instrument(skip(state), fields(agent_id = %agent_id), level = "info")]
 async fn get_agent(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -124,6 +127,7 @@ async fn get_agent(
 /// List all agents with pagination
 ///
 /// GET /v1/agents
+#[instrument(skip(state, query), fields(limit = query.limit, cursor = ?query.cursor), level = "info")]
 async fn list_agents(
     State(state): State<AppState>,
     Query(query): Query<ListAgentsQuery>,
@@ -142,6 +146,7 @@ async fn list_agents(
 /// Update an agent
 ///
 /// PATCH /v1/agents/{agent_id}
+#[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
 async fn update_agent(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -170,6 +175,7 @@ async fn update_agent(
 /// Delete an agent
 ///
 /// DELETE /v1/agents/{agent_id}
+#[instrument(skip(state), fields(agent_id = %agent_id), level = "info")]
 async fn delete_agent(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,

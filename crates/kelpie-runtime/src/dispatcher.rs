@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, instrument};
 
 /// Configuration for the dispatcher
 #[derive(Debug, Clone)]
@@ -190,6 +190,7 @@ where
     }
 
     /// Run the dispatcher loop
+    #[instrument(skip(self), level = "info")]
     pub async fn run(&mut self) {
         info!("Dispatcher starting");
 
@@ -221,6 +222,7 @@ where
     }
 
     /// Handle an invoke command
+    #[instrument(skip(self, payload), fields(actor_id = %actor_id, operation), level = "debug")]
     async fn handle_invoke(
         &mut self,
         actor_id: ActorId,

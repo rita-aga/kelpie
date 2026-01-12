@@ -9,10 +9,12 @@ use axum::{
     extract::{Path, State},
     Json,
 };
+use tracing::instrument;
 
 /// List all blocks for an agent
 ///
 /// GET /v1/agents/{agent_id}/blocks
+#[instrument(skip(state), fields(agent_id = %agent_id), level = "info")]
 pub async fn list_blocks(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -24,6 +26,7 @@ pub async fn list_blocks(
 /// Get a specific block
 ///
 /// GET /v1/agents/{agent_id}/blocks/{block_id}
+#[instrument(skip(state), fields(agent_id = %agent_id, block_id = %block_id), level = "info")]
 pub async fn get_block(
     State(state): State<AppState>,
     Path((agent_id, block_id)): Path<(String, String)>,
@@ -38,6 +41,7 @@ pub async fn get_block(
 /// Update a block
 ///
 /// PATCH /v1/agents/{agent_id}/blocks/{block_id}
+#[instrument(skip(state, request), fields(agent_id = %agent_id, block_id = %block_id), level = "info")]
 pub async fn update_block(
     State(state): State<AppState>,
     Path((agent_id, block_id)): Path<(String, String)>,
@@ -86,6 +90,7 @@ pub async fn update_block(
 /// Get a block by label
 ///
 /// GET /v1/agents/{agent_id}/core-memory/blocks/{label}
+#[instrument(skip(state), fields(agent_id = %agent_id, label = %label), level = "info")]
 pub async fn get_block_by_label(
     State(state): State<AppState>,
     Path((agent_id, label)): Path<(String, String)>,
@@ -100,6 +105,7 @@ pub async fn get_block_by_label(
 /// Update a block by label
 ///
 /// PATCH /v1/agents/{agent_id}/core-memory/blocks/{label}
+#[instrument(skip(state, request), fields(agent_id = %agent_id, label = %label), level = "info")]
 pub async fn update_block_by_label(
     State(state): State<AppState>,
     Path((agent_id, label)): Path<(String, String)>,

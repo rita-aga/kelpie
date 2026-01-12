@@ -12,7 +12,7 @@ use kelpie_storage::ActorKV;
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
-use tracing::info;
+use tracing::{info, instrument};
 
 /// Configuration for the runtime
 #[derive(Debug, Clone, Default)]
@@ -145,6 +145,7 @@ where
     /// Start the runtime
     ///
     /// Spawns the dispatcher loop in a background task.
+    #[instrument(skip(self), level = "info")]
     pub fn start(&mut self) -> Result<()> {
         if self.task.is_some() {
             return Err(Error::Internal {
@@ -166,6 +167,7 @@ where
     }
 
     /// Stop the runtime
+    #[instrument(skip(self), level = "info")]
     pub async fn stop(&mut self) -> Result<()> {
         if let Some(task) = self.task.take() {
             info!("Stopping Kelpie runtime");

@@ -13,7 +13,7 @@ use kelpie_storage::{ActorKV, ScopedKV};
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 /// State key for actor's serialized state
 const STATE_KEY: &[u8] = b"__state__";
@@ -135,6 +135,7 @@ where
     /// Activate an actor
     ///
     /// Loads state from storage and calls on_activate.
+    #[instrument(skip(actor, kv), fields(actor_id = %id), level = "info")]
     pub async fn activate(id: ActorId, actor: A, kv: Arc<dyn ActorKV>) -> Result<Self> {
         debug!(actor_id = %id, "Activating actor");
 
@@ -216,6 +217,7 @@ where
     /// crashes, either all changes (state + KV) are persisted or none are.
     ///
     /// TigerStyle: Transactional state + KV persistence, 2+ assertions.
+    #[instrument(skip(self, payload), fields(actor_id = %self.id, operation), level = "info")]
     pub async fn process_invocation(&mut self, operation: &str, payload: Bytes) -> Result<Bytes> {
         // Preconditions
         assert!(
@@ -388,6 +390,7 @@ where
     /// Deactivate the actor
     ///
     /// Calls on_deactivate, persists state, and rejects pending messages.
+    #[instrument(skip(self), fields(actor_id = %self.id), level = "info")]
     pub async fn deactivate(&mut self) -> Result<()> {
         if self.state == ActivationState::Deactivated {
             return Ok(());
