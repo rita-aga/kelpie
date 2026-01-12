@@ -190,7 +190,7 @@ Environment variables:
 See [VISION.md](./VISION.md) for detailed roadmap.
 
 **Next priorities:**
-1. FoundationDB integration (persistence)
+1. ~~FoundationDB integration~~ ✅ Backend implemented, needs production testing
 2. Agent framework abstraction
 3. Local embeddings (fastembed)
 4. Authentication

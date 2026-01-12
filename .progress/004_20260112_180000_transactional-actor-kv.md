@@ -93,7 +93,7 @@ save_state_transactional().await?;             // SEPARATE transaction
 | B: Buffer in context | Buffer all KV ops, apply on commit | No API change for actors | Higher memory usage |
 | C: Transactional wrapper | Wrap ContextKV with transaction-aware impl | Clean separation | More abstraction layers |
 
-**Decision:** [To be decided after Phase 1]
+**Decision:** Option B - Buffer in context. No API change for actors, clean separation, simpler than passing transaction through context.
 
 ---
 
