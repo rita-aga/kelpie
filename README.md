@@ -150,6 +150,50 @@ client = Letta(base_url="http://localhost:8283")
 agent = client.agents.create(name="my-agent")
 ```
 
+## Observability
+
+Kelpie includes built-in metrics and distributed tracing for production monitoring.
+
+### Metrics (Prometheus)
+
+```bash
+# Scrape metrics endpoint
+curl http://localhost:8283/metrics
+
+# Example metrics:
+# - kelpie_agents_active_count
+# - kelpie_invocations_total{operation, status}
+# - kelpie_invocation_duration_seconds{operation}
+# - kelpie_memory_usage_bytes{tier="core|working|archival"}
+```
+
+Add to `prometheus.yml`:
+```yaml
+scrape_configs:
+  - job_name: 'kelpie'
+    static_configs:
+      - targets: ['localhost:8283']
+    metrics_path: '/metrics'
+```
+
+### Distributed Tracing (OpenTelemetry)
+
+```bash
+# Run server with tracing
+RUST_LOG=info cargo run -p kelpie-server
+
+# Export to Jaeger/Zipkin/Tempo
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+RUST_LOG=info \
+cargo run -p kelpie-server --features otel
+
+# Start Jaeger all-in-one
+docker run -d -p 4317:4317 -p 16686:16686 jaegertracing/all-in-one:latest
+# View traces at http://localhost:16686
+```
+
+See [docs/observability/METRICS.md](docs/observability/METRICS.md) and [docs/observability/TRACING.md](docs/observability/TRACING.md) for complete reference.
+
 ## Testing
 
 Kelpie uses Deterministic Simulation Testing (DST) for reliability:

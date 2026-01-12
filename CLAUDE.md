@@ -30,6 +30,17 @@ cargo clippy --all-targets --all-features
 
 # Run benchmarks
 cargo bench -p kelpie-runtime
+
+# Observability: Run server with tracing
+RUST_LOG=info cargo run -p kelpie-server
+
+# Observability: Export traces to OTLP collector (Jaeger, Zipkin, etc.)
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+RUST_LOG=info \
+cargo run -p kelpie-server --features otel
+
+# Observability: Check metrics endpoint
+curl http://localhost:8283/metrics
 ```
 
 ## Architecture
