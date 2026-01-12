@@ -146,7 +146,7 @@ save_state_transactional().await?;             // SEPARATE transaction
 - [x] Vision aligned
 - [x] DST coverage added
 - [x] What to Try section updated
-- [ ] Committed
+- [x] Committed (135112c)
 
 ---
 
