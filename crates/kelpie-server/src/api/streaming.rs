@@ -39,20 +39,11 @@ fn default_true() -> bool {
 #[allow(clippy::enum_variant_names)]
 enum SseMessage {
     #[serde(rename = "assistant_message")]
-    AssistantMessage {
-        id: String,
-        content: String,
-    },
+    AssistantMessage { id: String, content: String },
     #[serde(rename = "reasoning_message")]
-    ReasoningMessage {
-        id: String,
-        reasoning: String,
-    },
+    ReasoningMessage { id: String, reasoning: String },
     #[serde(rename = "tool_call_message")]
-    ToolCallMessage {
-        id: String,
-        tool_call: ToolCallInfo,
-    },
+    ToolCallMessage { id: String, tool_call: ToolCallInfo },
     #[serde(rename = "tool_return_message")]
     ToolReturnMessage {
         id: String,
@@ -196,7 +187,10 @@ async fn generate_response_events(
     let tools = vec![ToolDefinition::shell()];
 
     // Call LLM
-    match llm.complete_with_tools(messages.clone(), tools.clone()).await {
+    match llm
+        .complete_with_tools(messages.clone(), tools.clone())
+        .await
+    {
         Ok(mut response) => {
             total_prompt_tokens += response.prompt_tokens;
             total_completion_tokens += response.completion_tokens;

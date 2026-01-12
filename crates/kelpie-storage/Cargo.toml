@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+default = []
+fdb = ["foundationdb"]
+
 [dependencies]
 kelpie-core = { workspace = true }
 bytes = { workspace = true }
@@ -15,6 +19,9 @@ async-trait = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+# Optional: FoundationDB backend
+foundationdb = { workspace = true, optional = true }
 
 [dev-dependencies]
 kelpie-dst = { workspace = true }

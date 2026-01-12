@@ -12,11 +12,13 @@ An ADR is a document that captures an important architectural decision made alon
 |-----|-------|--------|----------------|
 | [000](./000-template.md) | ADR Template | - | - |
 | [001](./001-virtual-actor-model.md) | Virtual Actor Model | Accepted | ✅ Complete |
-| [002](./002-foundationdb-integration.md) | FoundationDB Integration | Accepted | 🚧 Designed (FDB pending) |
+| [002](./002-foundationdb-integration.md) | FoundationDB Integration | Accepted | ✅ Complete |
 | [003](./003-wasm-actor-runtime.md) | WASM Actor Runtime | Proposed | ⏳ Not Started (P3) |
 | [004](./004-linearizability-guarantees.md) | Linearizability Guarantees | Accepted | 🚧 Partial (needs FDB) |
 | [005](./005-dst-framework.md) | DST Framework | Accepted | ✅ Complete |
 | [006](./006-letta-code-compatibility.md) | Letta-Code Compatibility | Accepted | ✅ Complete |
+| [007](./007-fdb-backend-implementation.md) | FDB Backend Implementation | Accepted | ✅ Complete |
+| [008](./008-transaction-api.md) | Transaction API for Actor Storage | Accepted | ✅ Complete |
 
 ## Creating a New ADR
 

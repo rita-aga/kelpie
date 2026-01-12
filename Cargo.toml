@@ -87,7 +87,7 @@ wasmtime = "16"
 wasmtime-wasi = "16"
 
 # FoundationDB (optional, feature-gated)
-# foundationdb = "0.9"
+foundationdb = "0.9"
 
 # Formal verification
 stateright = "0.30"

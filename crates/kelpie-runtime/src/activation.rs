@@ -4,7 +4,9 @@
 
 use crate::mailbox::{Envelope, Mailbox};
 use bytes::Bytes;
-use kelpie_core::actor::{Actor, ActorContext, ActorId};
+use kelpie_core::actor::{
+    Actor, ActorContext, ActorId, ArcContextKV, BufferedKVOp, BufferingContextKV,
+};
 use kelpie_core::constants::{ACTOR_IDLE_TIMEOUT_MS_DEFAULT, ACTOR_INVOCATION_TIMEOUT_MS_MAX};
 use kelpie_core::error::{Error, Result};
 use kelpie_storage::{ActorKV, ScopedKV};
@@ -128,7 +130,7 @@ where
 impl<A, S> ActiveActor<A, S>
 where
     A: Actor<State = S>,
-    S: Serialize + DeserializeOwned + Default + Send + Sync,
+    S: Serialize + DeserializeOwned + Default + Send + Sync + Clone,
 {
     /// Activate an actor
     ///
@@ -208,30 +210,156 @@ where
     }
 
     /// Process an invocation
+    ///
+    /// State AND KV operations are persisted atomically within a single transaction
+    /// after each successful invocation. This ensures crash safety - if the node
+    /// crashes, either all changes (state + KV) are persisted or none are.
+    ///
+    /// TigerStyle: Transactional state + KV persistence, 2+ assertions.
     pub async fn process_invocation(&mut self, operation: &str, payload: Bytes) -> Result<Bytes> {
-        debug_assert!(
+        // Preconditions
+        assert!(
             self.state == ActivationState::Active,
             "Can only process invocations when active"
         );
+        assert!(!operation.is_empty(), "operation cannot be empty");
 
         let start = Instant::now();
+
+        // CRITICAL: Snapshot state BEFORE invoke for rollback on failure
+        // If transaction fails, we must restore state to match what's persisted
+        let state_snapshot = self.context.state.clone();
+
+        // Create a buffering KV to capture all KV operations during invoke
+        let buffering_kv = Arc::new(BufferingContextKV::new(
+            // Create a new ScopedKV for the buffering wrapper to read from
+            Box::new(ScopedKV::new(self.id.clone(), self.kv.underlying_kv())),
+        ));
+
+        // Swap in the buffering KV (wrapped in Arc for sharing)
+        let original_kv = self
+            .context
+            .swap_kv(Box::new(ArcContextKV(buffering_kv.clone())));
+
+        // Execute the actor's invoke with the buffering KV
         let result = tokio::time::timeout(
             Duration::from_millis(ACTOR_INVOCATION_TIMEOUT_MS_MAX),
-            self.actor.invoke(&mut self.context, operation, payload),
+            self.actor
+                .invoke(&mut self.context, operation, payload.clone()),
         )
         .await;
 
-        let duration = start.elapsed();
-        let is_error = result.is_err() || result.as_ref().map(|r| r.is_err()).unwrap_or(false);
-        self.stats.record_invocation(duration, is_error);
+        // Restore the original KV
+        let _ = self.context.swap_kv(original_kv);
 
-        match result {
-            Ok(inner_result) => inner_result,
-            Err(_) => Err(Error::OperationTimedOut {
-                operation: operation.to_string(),
-                timeout_ms: ACTOR_INVOCATION_TIMEOUT_MS_MAX,
-            }),
+        // Drain buffered operations from our Arc reference
+        let buffered_ops = buffering_kv.drain_buffer();
+
+        let duration = start.elapsed();
+
+        // On successful invocation, persist state AND KV atomically in a transaction
+        let final_result = match result {
+            Ok(Ok(response)) => {
+                // Save state + KV in a single transaction (crash-safe, atomic)
+                match self.save_all_transactional(&buffered_ops).await {
+                    Ok(()) => Ok(response),
+                    Err(e) => {
+                        // Transaction failed - neither state nor KV persisted
+                        // ROLLBACK: Restore state to match what's persisted
+                        self.context.state = state_snapshot;
+                        error!(
+                            actor_id = %self.id,
+                            operation = %operation,
+                            error = %e,
+                            "Failed to persist state and KV after invocation, state rolled back"
+                        );
+                        Err(e)
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                // Actor returned an error - don't persist any changes
+                // ROLLBACK: Restore state to match what's persisted
+                self.context.state = state_snapshot;
+                debug!(
+                    actor_id = %self.id,
+                    operation = %operation,
+                    error = %e,
+                    buffered_kv_ops = buffered_ops.len(),
+                    "Invocation failed, state rolled back"
+                );
+                Err(e)
+            }
+            Err(_) => {
+                // Timeout - rollback state as well
+                self.context.state = state_snapshot;
+                Err(Error::OperationTimedOut {
+                    operation: operation.to_string(),
+                    timeout_ms: ACTOR_INVOCATION_TIMEOUT_MS_MAX,
+                })
+            }
+        };
+
+        self.stats
+            .record_invocation(duration, final_result.is_err());
+        final_result
+    }
+
+    /// Save state AND buffered KV operations atomically in a single transaction
+    ///
+    /// This ensures that all changes made during an invocation (both state and KV)
+    /// are persisted atomically. If the transaction fails, neither state nor KV
+    /// changes are persisted.
+    ///
+    /// TigerStyle: Atomic persistence of all invocation changes.
+    async fn save_all_transactional(&mut self, buffered_ops: &[BufferedKVOp]) -> Result<()> {
+        let state_bytes = serde_json::to_vec(&self.context.state).map_err(|e| Error::Internal {
+            message: format!("Failed to serialize actor state: {}", e),
+        })?;
+
+        // Begin transaction
+        let mut txn = self
+            .kv
+            .begin_transaction()
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to begin transaction: {}", e),
+            })?;
+
+        // Apply all buffered KV operations to the transaction
+        for op in buffered_ops {
+            match op {
+                BufferedKVOp::Set { key, value } => {
+                    txn.set(key, value).await.map_err(|e| Error::Internal {
+                        message: format!("Failed to set KV in transaction: {}", e),
+                    })?;
+                }
+                BufferedKVOp::Delete { key } => {
+                    txn.delete(key).await.map_err(|e| Error::Internal {
+                        message: format!("Failed to delete KV in transaction: {}", e),
+                    })?;
+                }
+            }
         }
+
+        // Set state within transaction
+        txn.set(STATE_KEY, &state_bytes)
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to set state in transaction: {}", e),
+            })?;
+
+        // Commit atomically - all KV ops + state together
+        txn.commit().await.map_err(|e| Error::Internal {
+            message: format!("Failed to commit transaction: {}", e),
+        })?;
+
+        debug!(
+            actor_id = %self.id,
+            kv_ops = buffered_ops.len(),
+            "State and KV persisted atomically in transaction"
+        );
+        Ok(())
     }
 
     /// Enqueue a message in the mailbox

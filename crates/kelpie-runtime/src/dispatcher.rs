@@ -160,7 +160,7 @@ where
 impl<A, S> Dispatcher<A, S>
 where
     A: Actor<State = S>,
-    S: Serialize + DeserializeOwned + Default + Send + Sync + 'static,
+    S: Serialize + DeserializeOwned + Default + Send + Sync + Clone + 'static,
 {
     /// Create a new dispatcher
     pub fn new(

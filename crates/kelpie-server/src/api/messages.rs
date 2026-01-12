@@ -441,7 +441,10 @@ async fn generate_sse_events(
     let tools = vec![ToolDefinition::shell()];
 
     // Call LLM
-    match llm.complete_with_tools(messages.clone(), tools.clone()).await {
+    match llm
+        .complete_with_tools(messages.clone(), tools.clone())
+        .await
+    {
         Ok(mut response) => {
             total_prompt_tokens += response.prompt_tokens;
             total_completion_tokens += response.completion_tokens;

@@ -13,13 +13,13 @@ Accepted
 | Component | Status | Location |
 |-----------|--------|----------|
 | Storage abstraction | ✅ Complete | `kelpie-storage/src/lib.rs` |
-| ActorKV trait | ✅ Complete | `kelpie-storage/src/actor_kv.rs` |
+| ActorKV trait | ✅ Complete | `kelpie-storage/src/kv.rs` |
 | MemoryBackend (DST) | ✅ Complete | `kelpie-storage/src/memory.rs` |
-| FDB Backend | ⏳ Not Started | P0 priority |
-| Key space design | 📋 Designed | See ADR |
-| Transaction semantics | 📋 Designed | See ADR |
+| FDB Backend | ✅ Complete | `kelpie-storage/src/fdb.rs` |
+| Key space design | ✅ Implemented | Tuple encoding per ADR |
+| Transaction semantics | ✅ Implemented | Auto-retry on conflicts |
 
-**Note**: FDB integration is designed but not implemented. Currently using MemoryBackend for development and testing. FDB backend is P0 priority for production readiness.
+**Note**: FDB backend implemented with `fdb` feature flag. Requires FDB C client library installed. See [ADR-007](./007-fdb-backend-implementation.md) for implementation decisions.
 
 ## Context
 

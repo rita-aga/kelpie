@@ -1,8 +1,10 @@
 //! In-memory KV storage
 //!
 //! For testing and DST simulations.
+//!
+//! TigerStyle: Simple in-memory implementation with transaction support.
 
-use crate::kv::ActorKV;
+use crate::kv::{ActorKV, ActorTransaction};
 use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::{ActorId, Result};
@@ -17,6 +19,7 @@ type ActorData = HashMap<Vec<u8>, Vec<u8>>;
 type StorageData = HashMap<String, ActorData>;
 
 /// In-memory KV store
+#[derive(Clone)]
 pub struct MemoryKV {
     /// Data storage: actor_id -> (key -> value)
     data: Arc<RwLock<StorageData>>,
@@ -90,6 +93,105 @@ impl ActorKV for MemoryKV {
             })
             .unwrap_or_default())
     }
+
+    async fn begin_transaction(&self, actor_id: &ActorId) -> Result<Box<dyn ActorTransaction>> {
+        Ok(Box::new(MemoryTransaction::new(
+            actor_id.clone(),
+            self.clone(),
+        )))
+    }
+}
+
+/// Transaction for in-memory KV store
+///
+/// Buffers writes until commit. All writes are applied atomically on commit.
+/// TigerStyle: Explicit state tracking, 2+ assertions per method.
+pub struct MemoryTransaction {
+    /// Actor this transaction operates on
+    actor_id: ActorId,
+    /// Reference to the underlying storage
+    storage: MemoryKV,
+    /// Buffered writes: key -> Some(value) for set, None for delete
+    write_buffer: HashMap<Vec<u8>, Option<Vec<u8>>>,
+    /// Whether this transaction has been finalized (committed or aborted)
+    finalized: bool,
+}
+
+impl MemoryTransaction {
+    fn new(actor_id: ActorId, storage: MemoryKV) -> Self {
+        Self {
+            actor_id,
+            storage,
+            write_buffer: HashMap::new(),
+            finalized: false,
+        }
+    }
+}
+
+#[async_trait]
+impl ActorTransaction for MemoryTransaction {
+    async fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
+        // Preconditions
+        assert!(!self.finalized, "transaction already finalized");
+        assert!(!key.is_empty(), "key cannot be empty");
+
+        // Check write buffer first (read-your-writes)
+        if let Some(buffered) = self.write_buffer.get(key) {
+            return Ok(buffered.as_ref().map(|v| Bytes::copy_from_slice(v)));
+        }
+
+        // Fall back to storage
+        self.storage.get(&self.actor_id, key).await
+    }
+
+    async fn set(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
+        // Preconditions
+        assert!(!self.finalized, "transaction already finalized");
+        assert!(!key.is_empty(), "key cannot be empty");
+
+        self.write_buffer.insert(key.to_vec(), Some(value.to_vec()));
+        Ok(())
+    }
+
+    async fn delete(&mut self, key: &[u8]) -> Result<()> {
+        // Preconditions
+        assert!(!self.finalized, "transaction already finalized");
+        assert!(!key.is_empty(), "key cannot be empty");
+
+        self.write_buffer.insert(key.to_vec(), None);
+        Ok(())
+    }
+
+    async fn commit(mut self: Box<Self>) -> Result<()> {
+        // Preconditions
+        assert!(!self.finalized, "transaction already finalized");
+        assert!(
+            self.write_buffer.len() <= 10000,
+            "transaction too large: {} operations",
+            self.write_buffer.len()
+        );
+
+        // Apply all buffered writes
+        for (key, value) in self.write_buffer.drain() {
+            match value {
+                Some(v) => self.storage.set(&self.actor_id, &key, &v).await?,
+                None => self.storage.delete(&self.actor_id, &key).await?,
+            }
+        }
+
+        self.finalized = true;
+        Ok(())
+    }
+
+    async fn abort(mut self: Box<Self>) -> Result<()> {
+        // Preconditions
+        assert!(!self.finalized, "transaction already finalized");
+
+        // Discard all buffered writes
+        self.write_buffer.clear();
+        self.finalized = true;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -129,5 +231,99 @@ mod tests {
             kv.get(&actor2, b"key").await.unwrap(),
             Some(Bytes::from("value2"))
         );
+    }
+
+    #[tokio::test]
+    async fn test_transaction_commit() {
+        let kv = MemoryKV::new();
+        let actor_id = ActorId::new("test", "actor-1").unwrap();
+
+        // Begin transaction and write
+        let mut txn = kv.begin_transaction(&actor_id).await.unwrap();
+        txn.set(b"key1", b"value1").await.unwrap();
+        txn.set(b"key2", b"value2").await.unwrap();
+
+        // Before commit, values not visible via direct KV access
+        assert!(kv.get(&actor_id, b"key1").await.unwrap().is_none());
+
+        // Commit
+        txn.commit().await.unwrap();
+
+        // After commit, values visible
+        assert_eq!(
+            kv.get(&actor_id, b"key1").await.unwrap(),
+            Some(Bytes::from("value1"))
+        );
+        assert_eq!(
+            kv.get(&actor_id, b"key2").await.unwrap(),
+            Some(Bytes::from("value2"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_transaction_abort() {
+        let kv = MemoryKV::new();
+        let actor_id = ActorId::new("test", "actor-1").unwrap();
+
+        // Begin transaction and write
+        let mut txn = kv.begin_transaction(&actor_id).await.unwrap();
+        txn.set(b"key1", b"value1").await.unwrap();
+
+        // Abort
+        txn.abort().await.unwrap();
+
+        // After abort, values not visible
+        assert!(kv.get(&actor_id, b"key1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_transaction_read_your_writes() {
+        let kv = MemoryKV::new();
+        let actor_id = ActorId::new("test", "actor-1").unwrap();
+
+        // Set initial value
+        kv.set(&actor_id, b"key1", b"initial").await.unwrap();
+
+        // Begin transaction
+        let mut txn = kv.begin_transaction(&actor_id).await.unwrap();
+
+        // Read initial value
+        assert_eq!(
+            txn.get(b"key1").await.unwrap(),
+            Some(Bytes::from("initial"))
+        );
+
+        // Write new value
+        txn.set(b"key1", b"updated").await.unwrap();
+
+        // Read updated value (read-your-writes)
+        assert_eq!(
+            txn.get(b"key1").await.unwrap(),
+            Some(Bytes::from("updated"))
+        );
+
+        txn.commit().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_transaction_delete() {
+        let kv = MemoryKV::new();
+        let actor_id = ActorId::new("test", "actor-1").unwrap();
+
+        // Set initial value
+        kv.set(&actor_id, b"key1", b"value1").await.unwrap();
+
+        // Begin transaction and delete
+        let mut txn = kv.begin_transaction(&actor_id).await.unwrap();
+        txn.delete(b"key1").await.unwrap();
+
+        // Read-your-writes: see the delete
+        assert!(txn.get(b"key1").await.unwrap().is_none());
+
+        // Commit
+        txn.commit().await.unwrap();
+
+        // Value deleted
+        assert!(kv.get(&actor_id, b"key1").await.unwrap().is_none());
     }
 }

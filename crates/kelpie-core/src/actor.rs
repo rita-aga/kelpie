@@ -261,6 +261,160 @@ pub trait ContextKV: Send + Sync {
 /// Used when an actor doesn't need KV access or for testing.
 pub struct NoOpKV;
 
+// =============================================================================
+// BufferingContextKV
+// =============================================================================
+
+/// A KV operation that was buffered
+#[derive(Debug, Clone)]
+pub enum BufferedKVOp {
+    Set { key: Vec<u8>, value: Vec<u8> },
+    Delete { key: Vec<u8> },
+}
+
+/// A ContextKV wrapper that buffers writes for transactional commit
+///
+/// This is used to make actor KV operations atomic with state persistence.
+/// All set/delete operations are buffered and can be applied to a transaction
+/// after the actor's invoke() completes.
+///
+/// Supports read-your-writes: get() returns buffered values if present.
+pub struct BufferingContextKV {
+    /// The underlying KV for reads not in the buffer
+    underlying: Box<dyn ContextKV>,
+    /// Buffered operations (set/delete)
+    buffer: std::sync::RwLock<Vec<BufferedKVOp>>,
+    /// Local cache of buffered values for read-your-writes
+    /// Key -> Some(value) for sets, None for deletes
+    cache: std::sync::RwLock<std::collections::HashMap<Vec<u8>, Option<Vec<u8>>>>,
+}
+
+impl BufferingContextKV {
+    /// Create a new buffering KV wrapper
+    pub fn new(underlying: Box<dyn ContextKV>) -> Self {
+        Self {
+            underlying,
+            buffer: std::sync::RwLock::new(Vec::new()),
+            cache: std::sync::RwLock::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Drain all buffered operations
+    ///
+    /// Returns the operations in order and clears the buffer.
+    /// Used by the runtime to apply operations to a transaction.
+    pub fn drain_buffer(&self) -> Vec<BufferedKVOp> {
+        self.buffer.write().unwrap().drain(..).collect()
+    }
+
+    /// Check if there are any buffered operations
+    pub fn has_buffered_ops(&self) -> bool {
+        !self.buffer.read().unwrap().is_empty()
+    }
+
+    /// Take ownership of the underlying KV
+    ///
+    /// Consumes this wrapper and returns the underlying ContextKV.
+    pub fn into_inner(self) -> Box<dyn ContextKV> {
+        self.underlying
+    }
+}
+
+/// Wrapper to use Arc<BufferingContextKV> as Box<dyn ContextKV>
+///
+/// This allows sharing a BufferingContextKV between the context and the runtime
+/// so the runtime can drain the buffer after invoke() completes.
+pub struct ArcContextKV(pub std::sync::Arc<BufferingContextKV>);
+
+#[async_trait]
+impl ContextKV for ArcContextKV {
+    async fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
+        self.0.get(key).await
+    }
+
+    async fn set(&self, key: &[u8], value: &[u8]) -> Result<()> {
+        self.0.set(key, value).await
+    }
+
+    async fn delete(&self, key: &[u8]) -> Result<()> {
+        self.0.delete(key).await
+    }
+
+    async fn exists(&self, key: &[u8]) -> Result<bool> {
+        self.0.exists(key).await
+    }
+
+    async fn list_keys(&self, prefix: &[u8]) -> Result<Vec<Vec<u8>>> {
+        self.0.list_keys(prefix).await
+    }
+}
+
+#[async_trait]
+impl ContextKV for BufferingContextKV {
+    async fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
+        // Check cache first (read-your-writes)
+        if let Some(cached) = self.cache.read().unwrap().get(key).cloned() {
+            return Ok(cached.map(|v| Bytes::copy_from_slice(&v)));
+        }
+        // Fall back to underlying storage
+        self.underlying.get(key).await
+    }
+
+    async fn set(&self, key: &[u8], value: &[u8]) -> Result<()> {
+        // Buffer the operation
+        self.buffer.write().unwrap().push(BufferedKVOp::Set {
+            key: key.to_vec(),
+            value: value.to_vec(),
+        });
+        // Update cache for read-your-writes
+        self.cache
+            .write()
+            .unwrap()
+            .insert(key.to_vec(), Some(value.to_vec()));
+        Ok(())
+    }
+
+    async fn delete(&self, key: &[u8]) -> Result<()> {
+        // Buffer the operation
+        self.buffer
+            .write()
+            .unwrap()
+            .push(BufferedKVOp::Delete { key: key.to_vec() });
+        // Update cache (None means deleted)
+        self.cache.write().unwrap().insert(key.to_vec(), None);
+        Ok(())
+    }
+
+    async fn exists(&self, key: &[u8]) -> Result<bool> {
+        // Check cache first
+        if let Some(cached) = self.cache.read().unwrap().get(key).cloned() {
+            return Ok(cached.is_some());
+        }
+        // Fall back to underlying storage
+        self.underlying.exists(key).await
+    }
+
+    async fn list_keys(&self, prefix: &[u8]) -> Result<Vec<Vec<u8>>> {
+        // Get keys from underlying storage
+        let mut keys = self.underlying.list_keys(prefix).await?;
+
+        // Add any new keys from buffer that match prefix
+        let cache = self.cache.read().unwrap();
+        for (key, value) in cache.iter() {
+            if key.starts_with(prefix) {
+                if value.is_some() && !keys.contains(key) {
+                    keys.push(key.clone());
+                } else if value.is_none() {
+                    // Remove deleted keys
+                    keys.retain(|k| k != key);
+                }
+            }
+        }
+
+        Ok(keys)
+    }
+}
+
 #[async_trait]
 impl ContextKV for NoOpKV {
     async fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
@@ -378,6 +532,14 @@ where
     /// List keys with a given prefix in the actor's KV store
     pub async fn kv_list_keys(&self, prefix: &[u8]) -> Result<Vec<Vec<u8>>> {
         self.kv.list_keys(prefix).await
+    }
+
+    /// Swap the KV implementation
+    ///
+    /// Used by the runtime to inject a buffering KV for transactional operations.
+    /// Returns the previous KV implementation.
+    pub fn swap_kv(&mut self, new_kv: Box<dyn ContextKV>) -> Box<dyn ContextKV> {
+        std::mem::replace(&mut self.kv, new_kv)
     }
 }
 

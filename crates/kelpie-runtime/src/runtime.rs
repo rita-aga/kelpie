@@ -36,7 +36,7 @@ where
 impl<A, S> RuntimeBuilder<A, S>
 where
     A: Actor<State = S>,
-    S: Serialize + DeserializeOwned + Default + Send + Sync + 'static,
+    S: Serialize + DeserializeOwned + Default + Send + Sync + Clone + 'static,
 {
     /// Create a new runtime builder
     pub fn new() -> Self {
@@ -83,7 +83,7 @@ where
 impl<A, S> Default for RuntimeBuilder<A, S>
 where
     A: Actor<State = S>,
-    S: Serialize + DeserializeOwned + Default + Send + Sync + 'static,
+    S: Serialize + DeserializeOwned + Default + Send + Sync + Clone + 'static,
 {
     fn default() -> Self {
         Self::new()
@@ -94,7 +94,7 @@ where
 impl<A, S> RuntimeBuilder<A, S>
 where
     A: Actor<State = S> + Clone,
-    S: Serialize + DeserializeOwned + Default + Send + Sync + 'static,
+    S: Serialize + DeserializeOwned + Default + Send + Sync + Clone + 'static,
 {
     /// Set a prototype actor (will be cloned for each activation)
     pub fn with_actor(self, actor: A) -> Self {
@@ -108,7 +108,7 @@ where
 pub struct Runtime<A, S>
 where
     A: Actor<State = S>,
-    S: Serialize + DeserializeOwned + Default + Send + Sync + 'static,
+    S: Serialize + DeserializeOwned + Default + Send + Sync + Clone + 'static,
 {
     /// The dispatcher
     dispatcher: Option<Dispatcher<A, S>>,
@@ -123,7 +123,7 @@ where
 impl<A, S> Runtime<A, S>
 where
     A: Actor<State = S>,
-    S: Serialize + DeserializeOwned + Default + Send + Sync + 'static,
+    S: Serialize + DeserializeOwned + Default + Send + Sync + Clone + 'static,
 {
     /// Create a new runtime
     pub fn new(
@@ -216,7 +216,7 @@ where
 impl<A, S> Drop for Runtime<A, S>
 where
     A: Actor<State = S>,
-    S: Serialize + DeserializeOwned + Default + Send + Sync + 'static,
+    S: Serialize + DeserializeOwned + Default + Send + Sync + Clone + 'static,
 {
     fn drop(&mut self) {
         if self.task.is_some() {
