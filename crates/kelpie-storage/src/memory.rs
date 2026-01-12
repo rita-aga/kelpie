@@ -11,6 +11,7 @@ use kelpie_core::{ActorId, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::instrument;
 
 /// Per-actor KV data: key -> value
 type ActorData = HashMap<Vec<u8>, Vec<u8>>;
@@ -46,6 +47,7 @@ impl Default for MemoryKV {
 
 #[async_trait]
 impl ActorKV for MemoryKV {
+    #[instrument(skip(self, key), fields(actor_id = %actor_id.qualified_name(), key_len = key.len()))]
     async fn get(&self, actor_id: &ActorId, key: &[u8]) -> Result<Option<Bytes>> {
         let data = self.data.read().await;
         let actor_key = Self::actor_key(actor_id);
@@ -56,6 +58,7 @@ impl ActorKV for MemoryKV {
             .map(|v| Bytes::copy_from_slice(v)))
     }
 
+    #[instrument(skip(self, key, value), fields(actor_id = %actor_id.qualified_name(), key_len = key.len(), value_len = value.len()))]
     async fn set(&self, actor_id: &ActorId, key: &[u8], value: &[u8]) -> Result<()> {
         let mut data = self.data.write().await;
         let actor_key = Self::actor_key(actor_id);
@@ -67,6 +70,7 @@ impl ActorKV for MemoryKV {
         Ok(())
     }
 
+    #[instrument(skip(self, key), fields(actor_id = %actor_id.qualified_name(), key_len = key.len()))]
     async fn delete(&self, actor_id: &ActorId, key: &[u8]) -> Result<()> {
         let mut data = self.data.write().await;
         let actor_key = Self::actor_key(actor_id);
@@ -78,6 +82,7 @@ impl ActorKV for MemoryKV {
         Ok(())
     }
 
+    #[instrument(skip(self, prefix), fields(actor_id = %actor_id.qualified_name(), prefix_len = prefix.len()))]
     async fn list_keys(&self, actor_id: &ActorId, prefix: &[u8]) -> Result<Vec<Vec<u8>>> {
         let data = self.data.read().await;
         let actor_key = Self::actor_key(actor_id);
@@ -94,6 +99,7 @@ impl ActorKV for MemoryKV {
             .unwrap_or_default())
     }
 
+    #[instrument(skip(self), fields(actor_id = %actor_id.qualified_name()))]
     async fn begin_transaction(&self, actor_id: &ActorId) -> Result<Box<dyn ActorTransaction>> {
         Ok(Box::new(MemoryTransaction::new(
             actor_id.clone(),
