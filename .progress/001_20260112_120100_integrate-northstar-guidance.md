@@ -225,5 +225,5 @@ Integrate two key pieces from northstar into kelpie:
 - ✅ All templates customized for Kelpie (cargo commands, kelpie-dst references, DST fault types)
 - ✅ Quick workflow reference diagram added for easy reference
 
-**Commit:** [Pending]
-**PR:** [N/A - will commit directly to main]
+**Commit:** 36cce87
+**PR:** [N/A - committed directly to master]
