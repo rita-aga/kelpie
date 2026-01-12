@@ -323,8 +323,7 @@ mod tests {
 
     #[test]
     fn test_telemetry_config_with_metrics() {
-        let config = TelemetryConfig::new("test-service")
-            .with_metrics(9091);
+        let config = TelemetryConfig::new("test-service").with_metrics(9091);
 
         assert!(config.metrics_enabled);
         assert_eq!(config.metrics_port, 9091);
