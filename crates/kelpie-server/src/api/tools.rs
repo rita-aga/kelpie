@@ -10,6 +10,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 /// Tool definition for API responses
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +74,7 @@ pub fn router() -> Router<AppState> {
 }
 
 /// List all available tools
+#[instrument(skip(state), level = "info")]
 async fn list_tools(State(state): State<AppState>) -> Json<ToolListResponse> {
     let tools = state.list_tools();
     let items: Vec<ToolResponse> = tools.into_iter().map(ToolResponse::from).collect();
@@ -81,6 +83,7 @@ async fn list_tools(State(state): State<AppState>) -> Json<ToolListResponse> {
 }
 
 /// Register a new tool
+#[instrument(skip(state, request), fields(name = %request.name), level = "info")]
 async fn register_tool(
     State(state): State<AppState>,
     Json(request): Json<RegisterToolRequest>,
@@ -115,6 +118,7 @@ async fn register_tool(
 }
 
 /// Get a specific tool
+#[instrument(skip(state), fields(name = %name), level = "info")]
 async fn get_tool(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -127,6 +131,7 @@ async fn get_tool(
 }
 
 /// Delete a tool
+#[instrument(skip(state), fields(name = %name), level = "info")]
 async fn delete_tool(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -137,6 +142,7 @@ async fn delete_tool(
 }
 
 /// Execute a tool
+#[instrument(skip(state, request), fields(name = %name), level = "info")]
 async fn execute_tool(
     State(state): State<AppState>,
     Path(name): Path<String>,

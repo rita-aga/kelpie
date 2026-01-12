@@ -16,6 +16,7 @@ use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::time::Duration;
+use tracing::instrument;
 use uuid::Uuid;
 
 /// Query parameters for streaming messages
@@ -75,6 +76,7 @@ struct StopReasonEvent {
 /// Send a streaming message to an agent
 ///
 /// POST /v1/agents/{agent_id}/messages/stream
+#[instrument(skip(state, _query, request), fields(agent_id = %agent_id), level = "info")]
 pub async fn send_message_stream(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
