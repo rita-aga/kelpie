@@ -6,6 +6,7 @@ use crate::api::archival::ArchivalEntry;
 use crate::llm::LlmClient;
 use crate::models::{AgentState, Block, Message};
 use chrono::Utc;
+use kelpie_core::metrics;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -254,7 +255,71 @@ impl AppState {
             .agents
             .read()
             .map_err(|_| StateError::LockPoisoned)?;
-        Ok(agents.len())
+        let count = agents.len();
+
+        // Record metric (this is called frequently from /metrics endpoint)
+        // No need to record here - we'll record in the endpoint directly
+
+        Ok(count)
+    }
+
+    /// Calculate and record memory usage metrics
+    pub fn record_memory_metrics(&self) -> Result<(), StateError> {
+        let agents = self
+            .inner
+            .agents
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        let messages = self
+            .inner
+            .messages
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        let archival = self
+            .inner
+            .archival
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        // Calculate memory usage by tier
+        let mut core_memory_bytes = 0u64;
+        let mut working_memory_bytes = 0u64;
+        let mut archival_memory_bytes = 0u64;
+        let mut total_blocks = 0u64;
+
+        // Core memory: agent blocks
+        for agent in agents.values() {
+            for block in &agent.blocks {
+                let block_size = block.value.len() + block.label.len();
+                core_memory_bytes += block_size as u64;
+                total_blocks += 1;
+            }
+        }
+
+        // Working memory: messages
+        for msgs in messages.values() {
+            for msg in msgs {
+                let msg_size = msg.content.len();
+                working_memory_bytes += msg_size as u64;
+            }
+        }
+
+        // Archival memory: archival entries
+        for entries in archival.values() {
+            for entry in entries {
+                let entry_size = entry.content.len();
+                archival_memory_bytes += entry_size as u64;
+            }
+        }
+
+        // Record metrics
+        metrics::record_memory_usage("core", core_memory_bytes);
+        metrics::record_memory_usage("working", working_memory_bytes);
+        metrics::record_memory_usage("archival", archival_memory_bytes);
+
+        Ok(())
     }
 
     // =========================================================================

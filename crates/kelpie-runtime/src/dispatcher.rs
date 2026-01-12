@@ -7,10 +7,12 @@ use bytes::Bytes;
 use kelpie_core::actor::{Actor, ActorId};
 use kelpie_core::constants::{ACTOR_CONCURRENT_COUNT_MAX, INVOCATION_PENDING_COUNT_MAX};
 use kelpie_core::error::{Error, Result};
+use kelpie_core::metrics;
 use kelpie_storage::ActorKV;
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info};
 
@@ -225,6 +227,7 @@ where
         operation: &str,
         payload: Bytes,
     ) -> Result<Bytes> {
+        let start = Instant::now();
         let key = actor_id.qualified_name();
 
         // Ensure actor is active
@@ -238,7 +241,14 @@ where
         })?;
 
         // Process the invocation
-        active.process_invocation(operation, payload).await
+        let result = active.process_invocation(operation, payload).await;
+
+        // Record metrics
+        let duration = start.elapsed().as_secs_f64();
+        let status = if result.is_ok() { "success" } else { "error" };
+        metrics::record_invocation(operation, status, duration);
+
+        result
     }
 
     /// Activate an actor
@@ -259,6 +269,9 @@ where
         self.actors.insert(key, active);
         debug!(actor_id = %actor_id, "Actor activated");
 
+        // Record activation metric
+        metrics::record_agent_activated();
+
         Ok(())
     }
 
@@ -271,6 +284,8 @@ where
                 error!(actor_id = %actor_id, error = %e, "Failed to deactivate actor");
             } else {
                 debug!(actor_id = %actor_id, "Actor deactivated");
+                // Record deactivation metric
+                metrics::record_agent_deactivated();
             }
         }
     }

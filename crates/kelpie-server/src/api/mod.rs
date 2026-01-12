@@ -90,10 +90,14 @@ async fn health_check(State(state): State<AppState>) -> Json<HealthResponse> {
 /// Returns metrics in Prometheus text format.
 /// This is scraped by Prometheus servers for monitoring.
 async fn metrics(State(state): State<AppState>) -> Response {
-    // For Phase 1, return a simple response
-    // In Phase 2, this will scrape from the actual Prometheus registry
+    // Calculate and record memory metrics
+    let _ = state.record_memory_metrics();
+
     let agent_count = state.agent_count().unwrap_or(0);
 
+    // Note: In Phase 2, we're still returning simple text metrics
+    // In a future phase with full OpenTelemetry integration, we'd scrape
+    // from the Prometheus registry instead
     let metrics_text = format!(
         "# HELP kelpie_agents_active_count Current number of active agents\n\
          # TYPE kelpie_agents_active_count gauge\n\
@@ -101,7 +105,11 @@ async fn metrics(State(state): State<AppState>) -> Response {
          \n\
          # HELP kelpie_server_uptime_seconds Server uptime in seconds\n\
          # TYPE kelpie_server_uptime_seconds gauge\n\
-         kelpie_server_uptime_seconds {}\n",
+         kelpie_server_uptime_seconds {}\n\
+         \n\
+         # Note: Invocation metrics, activation/deactivation counters, and memory\n\
+         # usage by tier are recorded via OpenTelemetry but not yet exported here.\n\
+         # This will be completed when full Prometheus registry integration is added.\n",
         agent_count,
         state.uptime_seconds()
     );
