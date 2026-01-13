@@ -49,6 +49,16 @@ pub enum FaultType {
     OutOfMemory,
     /// CPU starvation
     CPUStarvation,
+
+    // MCP (Model Context Protocol) faults
+    /// MCP server process crashes
+    McpServerCrash,
+    /// MCP server takes too long to start
+    McpServerSlowStart { delay_ms: u64 },
+    /// MCP tool call times out
+    McpToolTimeout,
+    /// MCP tool execution fails with error
+    McpToolFail,
 }
 
 impl FaultType {
@@ -71,6 +81,10 @@ impl FaultType {
             FaultType::ClockJump { .. } => "clock_jump",
             FaultType::OutOfMemory => "out_of_memory",
             FaultType::CPUStarvation => "cpu_starvation",
+            FaultType::McpServerCrash => "mcp_server_crash",
+            FaultType::McpServerSlowStart { .. } => "mcp_server_slow_start",
+            FaultType::McpToolTimeout => "mcp_tool_timeout",
+            FaultType::McpToolFail => "mcp_tool_fail",
         }
     }
 }
@@ -304,6 +318,16 @@ impl FaultInjectorBuilder {
             .with_fault(FaultConfig::new(
                 FaultType::CrashDuringTransaction,
                 probability,
+            ))
+    }
+
+    /// Add MCP (Model Context Protocol) faults with default probabilities
+    pub fn with_mcp_faults(self, probability: f64) -> Self {
+        self.with_fault(FaultConfig::new(FaultType::McpServerCrash, probability))
+            .with_fault(FaultConfig::new(FaultType::McpToolFail, probability))
+            .with_fault(FaultConfig::new(
+                FaultType::McpToolTimeout,
+                probability / 2.0,
             ))
     }
 

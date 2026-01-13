@@ -12,6 +12,8 @@ authors.workspace = true
 default = []
 # MCP server support (spawn external MCP servers)
 mcp-server = []
+# DST (Deterministic Simulation Testing) support
+dst = ["kelpie-dst"]
 
 [dependencies]
 kelpie-core = { workspace = true }
@@ -32,6 +34,9 @@ reqwest = { workspace = true }
 
 # Eventsource for SSE
 reqwest-eventsource = "0.6"
+
+# Optional DST support
+kelpie-dst = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

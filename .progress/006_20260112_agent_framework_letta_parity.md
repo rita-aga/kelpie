@@ -595,7 +595,7 @@ FDB backend is fully implemented (`kelpie-storage/src/fdb.rs`, 1000 lines) but s
 | Phase | Description | Effort | Dependencies | Status |
 |-------|-------------|--------|--------------|--------|
 | **0** | Umi integration | 5 days | None | ✅ Complete |
-| **1** | MCP tools in loop | 4 days | Phase 0 | 🔴 Not Started |
+| **1** | MCP tools in loop | 4 days | Phase 0 | 🟡 In Progress |
 | **2** | Memory editing tools | 3 days | Phase 0 | 🔴 Not Started |
 | **3** | Heartbeat mechanism | 2 days | Phase 1 | 🔴 Not Started |
 | **4** | Wire FDB to server | 2 days | None | 🔴 Not Started |
@@ -684,6 +684,8 @@ Week 7: Buffer for DST-discovered issues
 | 2026-01-12 | Create lib.rs for tests | Integration tests need library crate access | Dual bin/lib crate |
 | 2026-01-12 | Use seed from SimConfig | Deterministic behavior without full Simulation env integration | Limited fault injection |
 | 2026-01-12 | Use SimEnvironment::create_memory() | Proper fault injection via shared FaultInjector | Requires Umi 4d6324c+ |
+| 2026-01-12 | Add MCP fault types to kelpie-dst | Enable precise MCP failure testing | Extended FaultType enum |
+| 2026-01-12 | Create SimMcpClient in kelpie-tools | DST testing for MCP integration | Feature-gated (dst) |
 
 ---
 

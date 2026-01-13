@@ -30,12 +30,18 @@ mod builtin;
 mod error;
 pub mod mcp;
 mod registry;
+#[cfg(feature = "dst")]
+pub mod sim;
 mod traits;
 
 pub use builtin::{FilesystemTool, GitTool, ShellTool};
 pub use error::{ToolError, ToolResult};
 pub use mcp::{McpClient, McpConfig, McpTool, McpToolDefinition};
 pub use registry::ToolRegistry;
+#[cfg(feature = "dst")]
+pub use sim::{
+    create_test_tools, ConnectionState, SimMcpClient, SimMcpEnvironment, SimMcpServerConfig,
+};
 pub use traits::{Tool, ToolCapability, ToolInput, ToolMetadata, ToolOutput, ToolParam};
 
 #[cfg(test)]
