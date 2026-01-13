@@ -11,6 +11,7 @@ use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use umi_memory::dst::SimEnvironment;
 use umi_memory::storage::SimVectorBackend;
 use umi_memory::{
     Entity, Memory, RecallOptions, RememberOptions, SimEmbeddingProvider, SimLLMProvider,
@@ -85,6 +86,9 @@ impl UmiMemoryBackend {
 
     /// Create a new memory backend for simulation with explicit agent ID.
     ///
+    /// NOTE: This constructor does NOT support fault injection. Use `from_sim_env`
+    /// for DST tests that need fault injection.
+    ///
     /// # Arguments
     /// * `seed` - Random seed for deterministic behavior
     /// * `agent_id` - Agent identifier for scoping
@@ -93,6 +97,41 @@ impl UmiMemoryBackend {
         assert!(!agent_id.is_empty(), "agent_id cannot be empty");
 
         let memory = Memory::sim(seed);
+
+        Ok(Self {
+            agent_id,
+            memory: Arc::new(RwLock::new(memory)),
+            core_blocks: Arc::new(RwLock::new(HashMap::new())),
+        })
+    }
+
+    /// Create a new memory backend from DST simulation environment.
+    ///
+    /// This constructor connects to the Simulation's fault injector, enabling
+    /// proper fault injection testing of memory operations.
+    ///
+    /// # Arguments
+    /// * `env` - DST simulation environment with fault injection
+    /// * `agent_id` - Agent identifier for scoping
+    ///
+    /// # Example
+    /// ```ignore
+    /// Simulation::new(config)
+    ///     .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.1))
+    ///     .run(|env| async move {
+    ///         let backend = UmiMemoryBackend::from_sim_env(&env, "agent_001").await?;
+    ///         backend.append_core("persona", "test").await?; // Faults applied!
+    ///         Ok(())
+    ///     })
+    /// ```
+    pub async fn from_sim_env(env: &SimEnvironment, agent_id: impl Into<String>) -> Result<Self> {
+        let agent_id = agent_id.into();
+
+        // TigerStyle: Preconditions
+        assert!(!agent_id.is_empty(), "agent_id cannot be empty");
+
+        // Create Memory with providers connected to fault injector
+        let memory = env.create_memory();
 
         Ok(Self {
             agent_id,

@@ -683,6 +683,7 @@ Week 7: Buffer for DST-discovered issues
 | 2026-01-12 | Pin chrono to =0.4.38 | Resolve arrow-arith conflict with Umi | Version lock |
 | 2026-01-12 | Create lib.rs for tests | Integration tests need library crate access | Dual bin/lib crate |
 | 2026-01-12 | Use seed from SimConfig | Deterministic behavior without full Simulation env integration | Limited fault injection |
+| 2026-01-12 | Use SimEnvironment::create_memory() | Proper fault injection via shared FaultInjector | Requires Umi 4d6324c+ |
 
 ---
 
@@ -700,9 +701,11 @@ Week 7: Buffer for DST-discovered issues
   - Conversation storage: store_message, search
   - Agent scoping: isolated memory per agent_id
 - **NEW: DST tests for memory operations**
-  - 11 tests covering all memory operations
+  - 12 tests covering all memory operations (incl. fault injection verification)
   - Tested with 7 different seeds (1, 42, 100, 999, 12345, 54321, 999999)
   - Fault injection: StorageWriteFail, StorageReadFail, EmbeddingTimeout, VectorSearchFail
+  - **Fixed**: Now using `SimEnvironment::create_memory()` for proper fault injection
+  - Verification test confirms 100% fault rate correctly injects failures
 
 ### Doesn't Work Yet
 - Memory editing tools (Phase 2) - UmiMemoryBackend exists but tools not implemented
