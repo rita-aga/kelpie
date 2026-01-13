@@ -1,4 +1,4 @@
-# ADR-006: Memory Tools Architecture
+# ADR-009: Memory Tools Architecture
 
 **Date:** 2026-01-13
 **Status:** Accepted
@@ -156,8 +156,23 @@ if block_exists.is_some() {
 
 ## DST Testing Strategy
 
+### Two Testing Approaches
+
+**1. Standalone Fault Injection (memory_tools_real_dst.rs)**
+- Uses `AppState::with_fault_injector()` directly
+- Tests the actual `tools/memory.rs` implementation
+- Injects faults at AppState operation points
+- Lightweight, fast tests
+
+**2. Full Simulation Harness (memory_tools_simulation.rs)**
+- Uses `Simulation::new(config).run(|env| ...)`
+- Tests via `UmiMemoryBackend::from_sim_env(&env, agent_id)`
+- Full simulated environment: SimClock, SimNetwork, SimStorage
+- Proper DST-first testing methodology
+
 ### Fault Types Used
 
+**Standalone Tests (AppState):**
 | Operation | Fault Point | Test Coverage |
 |-----------|------------|---------------|
 | Block read | `block_read` | ✅ 100% fault rate tested |
@@ -167,17 +182,35 @@ if block_exists.is_some() {
 | Archival write | `archival_write` | ✅ 100% fault rate tested |
 | Message read | `message_read` | ✅ 100% fault rate tested |
 
+**Simulation Tests (UmiMemoryBackend):**
+| Operation | Fault Types | Test Coverage |
+|-----------|------------|---------------|
+| Core memory append | StorageWriteFail, StorageReadFail | ✅ 20% rate tested |
+| Core memory replace | StorageReadFail, StorageWriteFail | ✅ 10% rate tested |
+| Archival insert | EmbeddingTimeout, StorageWriteFail | ✅ 10% rate tested |
+| Archival search | VectorSearchFail, EmbeddingTimeout | ✅ 10% rate tested |
+| High load | Mixed faults (5%) | ✅ 50 operations tested |
+| Storage corruption | StorageCorruption | ✅ 10% rate tested |
+
 ### Test Results (seed=42)
 
-- 10 DST tests passing
-- Probabilistic testing: 12 successes, 8 failures at 30% fault rate (as expected)
+**Standalone Tests (10 passing):**
+- Probabilistic testing: 12 successes, 8 failures at 30% fault rate
 - Recovery after transient faults verified
 - Graceful error handling confirmed
 
+**Simulation Tests (12 passing):**
+- Core memory operations: append, replace
+- Archival operations: insert, search
+- Conversation search
+- Multi-agent isolation
+- High load stress test (95 successes, 10 faults)
+- Determinism verified (same seed = same results)
+
 ### TOCTOU Race Testing
 
-The race condition was not triggered in async tests because:
-- `join_all` uses cooperative scheduling
+The race condition was not triggered because:
+- Async tests use cooperative scheduling (`join_all`)
 - True parallelism requires OS threads
 
 **Recommendation:** Add multi-threaded test with `std::thread::spawn` to expose race.

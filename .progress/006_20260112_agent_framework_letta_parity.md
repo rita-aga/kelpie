@@ -478,6 +478,21 @@ impl Tool for CoreMemoryAppend {
 9. `test_memory_tools_recovery_after_fault` - Recovery after transient fault
 10. `test_full_memory_workflow_under_faults` - Full workflow under faults
 
+**DST Simulation Tests (12 total in memory_tools_simulation.rs):**
+Uses full `Simulation::new().run(|env| ...)` harness with UmiMemoryBackend:
+1. `test_sim_core_memory_append` - Append operation baseline
+2. `test_sim_core_memory_append_with_faults` - Append with 20% StorageWriteFail
+3. `test_sim_core_memory_replace` - Replace operation baseline
+4. `test_sim_core_memory_replace_with_faults` - Replace with read/write faults
+5. `test_sim_archival_memory_insert` - Archival insert baseline
+6. `test_sim_archival_memory_search` - Archival search baseline
+7. `test_sim_archival_with_search_faults` - Search with embedding/vector faults
+8. `test_sim_conversation_search` - Conversation search baseline
+9. `test_sim_multi_agent_isolation` - Multi-agent memory isolation
+10. `test_sim_memory_high_load` - 50 operations with 5% mixed faults
+11. `test_sim_determinism` - Same seed = same results verification
+12. `test_sim_storage_corruption` - 10% StorageCorruption fault
+
 ### DST Findings and Bugs
 
 **BUG-001: TOCTOU Race Condition in core_memory_append (Identified, Not Yet Triggered)**
