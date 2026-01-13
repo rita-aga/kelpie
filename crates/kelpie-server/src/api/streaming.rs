@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 /// Query parameters for streaming messages
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct StreamQuery {
     /// Enable step streaming (default: true for letta-code)
     #[serde(default = "default_true")]
@@ -38,6 +39,7 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "message_type")]
 #[allow(clippy::enum_variant_names)]
+#[allow(dead_code)]
 enum SseMessage {
     #[serde(rename = "assistant_message")]
     AssistantMessage { id: String, content: String },

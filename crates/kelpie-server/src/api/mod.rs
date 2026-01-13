@@ -209,6 +209,10 @@ impl From<StateError> for ApiError {
                 ApiError::bad_request(format!("{} limit ({}) exceeded", resource, limit))
             }
             StateError::LockPoisoned => ApiError::internal("internal state error"),
+            StateError::FaultInjected { operation } => {
+                // DST fault injection - return as internal error
+                ApiError::internal(format!("operation failed: {}", operation))
+            }
         }
     }
 }

@@ -440,7 +440,7 @@ async fn test_dst_high_load_with_faults() {
 
             // Final verification: system should be in consistent state
             // At least some operations should have succeeded
-            let blocks = backend.get_core_blocks().await?;
+            let _blocks = backend.get_core_blocks().await?;
             // With low fault rate (2%), we expect most operations to succeed
             // But we don't assert non-empty because ALL could fail with unlucky seed
 

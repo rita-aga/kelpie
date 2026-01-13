@@ -447,7 +447,7 @@ impl Tool for CoreMemoryAppend {
 | `archival_memory_search` | Search archival memory | AppState.search_archival |
 | `conversation_search` | Search conversation history | AppState.list_messages + filter |
 
-**DST Tests (17 total):**
+**DST Tests - Simulated Backend (17 total):**
 1. `test_dst_core_memory_append_basic` - Basic append functionality
 2. `test_dst_core_memory_replace_basic` - Basic replace functionality
 3. `test_dst_archival_memory_insert_and_search` - Archival operations
@@ -465,6 +465,65 @@ impl Tool for CoreMemoryAppend {
 15. `test_core_memory_append_integration` - Integration with AppState
 16. `test_core_memory_replace_integration` - Replace integration
 17. `test_archival_memory_integration` - Archival integration
+
+**DST Tests - Real Implementation (10 total in memory_tools_real_dst.rs):**
+1. `test_core_memory_append_with_block_read_fault` - Read fault injection
+2. `test_core_memory_append_with_block_write_fault` - Write fault injection
+3. `test_core_memory_replace_with_read_fault` - Replace with read fault
+4. `test_archival_memory_insert_with_write_fault` - Archival write fault
+5. `test_archival_memory_search_with_read_fault` - Archival read fault
+6. `test_conversation_search_with_read_fault` - Message read fault
+7. `test_memory_operations_with_probabilistic_faults` - 30% fault rate (12 success, 8 failures)
+8. `test_core_memory_append_toctou_race` - TOCTOU race condition detection
+9. `test_memory_tools_recovery_after_fault` - Recovery after transient fault
+10. `test_full_memory_workflow_under_faults` - Full workflow under faults
+
+### DST Findings and Bugs
+
+**BUG-001: TOCTOU Race Condition in core_memory_append (Identified, Not Yet Triggered)**
+
+Location: `crates/kelpie-server/src/tools/memory.rs:59-85`
+
+The `core_memory_append` tool has a classic Time-of-Check to Time-of-Use (TOCTOU) race condition:
+
+```rust
+// RACE: Check if block exists
+let block_exists = match state.get_block_by_label(&agent_id, &label) {
+    Ok(Some(_)) => true,
+    Ok(None) => false,
+    Err(e) => return format!("Error: {}", e),
+};
+
+// RACE: Thread interleaving can occur here!
+
+if block_exists {
+    state.update_block_by_label(...)  // Append to existing
+} else {
+    state.update_agent(...)  // Create new block
+}
+```
+
+**Vulnerability:** Under concurrent requests:
+1. Thread A: checks "facts" block → doesn't exist
+2. Thread B: checks "facts" block → doesn't exist
+3. Thread A: creates "facts" block
+4. Thread B: creates ANOTHER "facts" block (DUPLICATE!)
+
+**Impact:** Data corruption - agent may have multiple blocks with same label.
+
+**Fix (Not Yet Implemented):**
+```rust
+// Use atomic compare-and-swap operation
+state.append_or_create_block_by_label(&agent_id, &label, &content)
+```
+
+**DST Status:** The race was not triggered in async tests (cooperative scheduling). Would require true parallel threads to expose. The bug exists in code but is difficult to trigger without OS-level thread scheduling.
+
+**Other DST Findings:**
+- Fault injection properly returns errors (no panics)
+- Recovery after transient faults works correctly
+- Probabilistic testing shows expected success/failure ratios
+- Graceful degradation when dependent operations fail
 
 ---
 

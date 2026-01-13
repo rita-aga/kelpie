@@ -41,6 +41,7 @@ const LIST_LIMIT_MAX: usize = 1000;
 
 /// Query parameters for sending messages (streaming support)
 #[derive(Debug, Deserialize, Default)]
+#[allow(dead_code)]
 pub struct SendMessageQuery {
     /// Enable step streaming (letta-code compatibility)
     #[serde(default)]
@@ -57,6 +58,7 @@ pub struct SendMessageQuery {
 /// SSE message types for streaming responses
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "message_type")]
+#[allow(dead_code)]
 enum SseMessage {
     #[serde(rename = "assistant_message")]
     AssistantMessage { id: String, content: String },

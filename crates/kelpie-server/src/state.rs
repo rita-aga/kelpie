@@ -1,9 +1,11 @@
 //! Server state management
 //!
 //! TigerStyle: Thread-safe shared state with explicit locking.
+//!
+//! DST Support: Optional fault injection for deterministic simulation testing.
 
-use crate::models::ArchivalEntry;
 use crate::llm::LlmClient;
+use crate::models::ArchivalEntry;
 use crate::models::{AgentState, Block, Message};
 use crate::tools::UnifiedToolRegistry;
 use chrono::Utc;
@@ -11,6 +13,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use uuid::Uuid;
+
+#[cfg(feature = "dst")]
+use kelpie_dst::fault::FaultInjector;
 
 /// Maximum agents per server instance
 pub const AGENTS_COUNT_MAX: usize = 100_000;
@@ -59,6 +64,9 @@ struct AppStateInner {
     /// Prometheus metrics registry (None if metrics disabled or otel feature not enabled)
     #[cfg(feature = "otel")]
     prometheus_registry: Option<Arc<prometheus::Registry>>,
+    /// Fault injector for DST testing (None in production)
+    #[cfg(feature = "dst")]
+    fault_injector: Option<Arc<FaultInjector>>,
 }
 
 impl AppState {
@@ -92,6 +100,8 @@ impl AppState {
                 start_time: Instant::now(),
                 llm,
                 prometheus_registry: registry.map(|r| Arc::new(r.clone())),
+                #[cfg(feature = "dst")]
+                fault_injector: None,
             }),
         }
     }
@@ -120,8 +130,45 @@ impl AppState {
                 blocks: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm,
+                #[cfg(feature = "dst")]
+                fault_injector: None,
             }),
         }
+    }
+
+    /// Create server state with fault injector for DST testing
+    #[cfg(feature = "dst")]
+    pub fn with_fault_injector(fault_injector: Arc<FaultInjector>) -> Self {
+        let tool_registry = Arc::new(UnifiedToolRegistry::new());
+
+        Self {
+            inner: Arc::new(AppStateInner {
+                agents: RwLock::new(HashMap::new()),
+                messages: RwLock::new(HashMap::new()),
+                tools: RwLock::new(HashMap::new()),
+                tool_registry,
+                archival: RwLock::new(HashMap::new()),
+                blocks: RwLock::new(HashMap::new()),
+                start_time: Instant::now(),
+                llm: None,
+                fault_injector: Some(fault_injector),
+            }),
+        }
+    }
+
+    /// Check if fault should be injected for an operation
+    #[cfg(feature = "dst")]
+    fn should_inject_fault(&self, operation: &str) -> Option<kelpie_dst::fault::FaultType> {
+        self.inner
+            .fault_injector
+            .as_ref()
+            .and_then(|fi| fi.should_inject(operation))
+    }
+
+    /// No fault injection in non-DST builds
+    #[cfg(not(feature = "dst"))]
+    fn should_inject_fault(&self, _operation: &str) -> Option<()> {
+        None
     }
 
     /// Get reference to the LLM client (if configured)
@@ -253,6 +300,13 @@ impl AppState {
         id: &str,
         update: impl FnOnce(&mut AgentState),
     ) -> Result<AgentState, StateError> {
+        // DST: Check for fault injection on agent write
+        if self.should_inject_fault("agent_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "agent_write".to_string(),
+            });
+        }
+
         let mut agents = self
             .inner
             .agents
@@ -456,6 +510,13 @@ impl AppState {
         agent_id: &str,
         label: &str,
     ) -> Result<Option<Block>, StateError> {
+        // DST: Check for fault injection
+        if self.should_inject_fault("block_read").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "block_read".to_string(),
+            });
+        }
+
         let agents = self
             .inner
             .agents
@@ -477,6 +538,13 @@ impl AppState {
         label: &str,
         update: impl FnOnce(&mut Block),
     ) -> Result<Block, StateError> {
+        // DST: Check for fault injection
+        if self.should_inject_fault("block_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "block_write".to_string(),
+            });
+        }
+
         let mut agents = self
             .inner
             .agents
@@ -682,6 +750,13 @@ impl AppState {
         limit: usize,
         before: Option<&str>,
     ) -> Result<Vec<Message>, StateError> {
+        // DST: Check for fault injection on message read
+        if self.should_inject_fault("message_read").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "message_read".to_string(),
+            });
+        }
+
         let messages = self
             .inner
             .messages
@@ -806,6 +881,13 @@ impl AppState {
         content: String,
         metadata: Option<serde_json::Value>,
     ) -> Result<ArchivalEntry, StateError> {
+        // DST: Check for fault injection on archival write
+        if self.should_inject_fault("archival_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "archival_write".to_string(),
+            });
+        }
+
         let mut archival = self
             .inner
             .archival
@@ -845,6 +927,13 @@ impl AppState {
         query: Option<&str>,
         limit: usize,
     ) -> Result<Vec<ArchivalEntry>, StateError> {
+        // DST: Check for fault injection on archival read
+        if self.should_inject_fault("archival_read").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "archival_read".to_string(),
+            });
+        }
+
         let archival = self
             .inner
             .archival
@@ -941,6 +1030,8 @@ pub enum StateError {
     },
     /// Lock poisoned (shouldn't happen in practice)
     LockPoisoned,
+    /// Fault injected (DST testing only)
+    FaultInjected { operation: String },
 }
 
 impl std::fmt::Display for StateError {
@@ -956,6 +1047,9 @@ impl std::fmt::Display for StateError {
                 write!(f, "{} limit ({}) exceeded", resource, limit)
             }
             StateError::LockPoisoned => write!(f, "internal lock error"),
+            StateError::FaultInjected { operation } => {
+                write!(f, "fault injected during operation: {}", operation)
+            }
         }
     }
 }

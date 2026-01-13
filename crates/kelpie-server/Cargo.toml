@@ -11,7 +11,7 @@ authors.workspace = true
 [features]
 default = []
 otel = ["kelpie-core/otel", "prometheus"]
-dst = ["kelpie-tools/dst"]
+dst = ["kelpie-tools/dst", "dep:kelpie-dst"]
 
 [dependencies]
 # Core kelpie crates
@@ -57,6 +57,9 @@ umi-memory = { workspace = true }
 
 # Metrics (optional, with otel feature)
 prometheus = { workspace = true, optional = true }
+
+# DST fault injection (optional, with dst feature)
+kelpie-dst = { workspace = true, optional = true }
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

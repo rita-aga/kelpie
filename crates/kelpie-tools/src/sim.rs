@@ -60,7 +60,8 @@ pub struct SimMcpClient {
     tool_to_server: HashMap<String, String>,
     /// Fault injector for simulating failures
     fault_injector: Arc<FaultInjector>,
-    /// Deterministic RNG
+    /// Deterministic RNG (for future use in randomized tool execution)
+    #[allow(dead_code)]
     rng: Arc<RwLock<DeterministicRng>>,
     /// Connection state per server
     connection_state: RwLock<HashMap<String, ConnectionState>>,
