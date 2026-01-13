@@ -11,11 +11,13 @@ authors.workspace = true
 [features]
 default = []
 otel = ["kelpie-core/otel", "prometheus"]
+dst = ["kelpie-tools/dst"]
 
 [dependencies]
 # Core kelpie crates
 kelpie-core = { workspace = true }
 kelpie-sandbox = { workspace = true }
+kelpie-tools = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }

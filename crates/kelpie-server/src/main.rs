@@ -3,15 +3,21 @@
 //! Standalone Kelpie server with Letta-compatible REST API.
 
 mod api;
-mod llm;
 mod models;
 mod state;
+
+// Re-export from library
+use kelpie_server::{llm, tools};
 
 use axum::extract::Request;
 use axum::ServiceExt;
 use clap::Parser;
+use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
+use serde_json::Value;
 use state::AppState;
 use std::net::SocketAddr;
+use std::sync::Arc;
+use tools::BuiltinToolHandler;
 use tower_http::normalize_path::NormalizePath;
 
 #[cfg(feature = "otel")]
@@ -81,6 +87,9 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "otel"))]
     let state = AppState::new();
 
+    // Register builtin tools
+    register_builtin_tools(&state).await;
+
     // Create router
     let app = api::router(state);
 
@@ -111,4 +120,90 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, ServiceExt::<Request>::into_make_service(app)).await?;
 
     Ok(())
+}
+
+/// Register builtin tools with the unified registry
+async fn register_builtin_tools(state: &AppState) {
+    let registry = state.tool_registry();
+
+    // Register shell tool
+    let shell_handler: BuiltinToolHandler = Arc::new(|input: &Value| {
+        let input = input.clone();
+        Box::pin(async move { execute_shell_command(&input).await })
+    });
+
+    registry
+        .register_builtin(
+            "shell",
+            "Execute a shell command. Use this to run commands, check files, or perform system operations.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The shell command to execute"
+                    }
+                },
+                "required": ["command"]
+            }),
+            shell_handler,
+        )
+        .await;
+
+    tracing::info!("Registered builtin tools: shell");
+}
+
+/// Execute a shell command in a sandboxed environment
+async fn execute_shell_command(input: &Value) -> String {
+    let command = input
+        .get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if command.is_empty() {
+        return "Error: No command provided".to_string();
+    }
+
+    // Create and start sandbox
+    let config = SandboxConfig::default();
+    let mut sandbox = ProcessSandbox::new(config);
+
+    if let Err(e) = sandbox.start().await {
+        return format!("Failed to start sandbox: {}", e);
+    }
+
+    // Execute command via sh -c for shell expansion
+    let exec_opts = ExecOptions::new()
+        .with_timeout(std::time::Duration::from_secs(30))
+        .with_max_output(1024 * 1024);
+
+    match sandbox.exec("sh", &["-c", command], exec_opts).await {
+        Ok(output) => {
+            let stdout = output.stdout_string();
+            let stderr = output.stderr_string();
+
+            if output.is_success() {
+                if stdout.is_empty() {
+                    "Command executed successfully (no output)".to_string()
+                } else {
+                    // Truncate long output
+                    if stdout.len() > 4000 {
+                        format!(
+                            "{}...\n[truncated, {} total bytes]",
+                            &stdout[..4000],
+                            stdout.len()
+                        )
+                    } else {
+                        stdout
+                    }
+                }
+            } else {
+                format!(
+                    "Command failed with exit code {}:\n{}{}",
+                    output.status.code, stdout, stderr
+                )
+            }
+        }
+        Err(e) => format!("Sandbox execution failed: {}", e),
+    }
 }

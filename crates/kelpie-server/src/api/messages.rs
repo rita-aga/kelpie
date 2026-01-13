@@ -3,7 +3,7 @@
 //! TigerStyle: Letta-compatible message operations with SSE streaming support.
 
 use crate::api::ApiError;
-use crate::llm::{ChatMessage, ContentBlock, ToolDefinition};
+use crate::llm::{ChatMessage, ContentBlock};
 use crate::models::{CreateMessageRequest, Message, MessageResponse, MessageRole, UsageStats};
 use crate::state::AppState;
 use axum::{
@@ -16,7 +16,6 @@ use axum::{
 };
 use chrono::Utc;
 use futures::stream::{self, StreamExt};
-use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::time::Duration;
@@ -206,8 +205,8 @@ async fn send_message_json(
             content: content.clone(),
         });
 
-        // Define available tools
-        let tools = vec![ToolDefinition::shell()];
+        // Get available tools from registry
+        let tools = state.tool_registry().get_tool_definitions().await;
 
         // Call LLM with tools
         match llm
@@ -230,16 +229,20 @@ async fn send_message_json(
                         "Executing tools"
                     );
 
-                    // Execute each tool
+                    // Execute each tool via registry
                     let mut tool_results = Vec::new();
                     for tool_call in &response.tool_calls {
-                        let result = execute_tool(&tool_call.name, &tool_call.input);
+                        let exec_result = state
+                            .tool_registry()
+                            .execute(&tool_call.name, &tool_call.input)
+                            .await;
                         tracing::info!(
                             tool = %tool_call.name,
-                            success = result.len() < 1000,
+                            success = exec_result.success,
+                            duration_ms = exec_result.duration_ms,
                             "Tool executed"
                         );
-                        tool_results.push((tool_call.id.clone(), result));
+                        tool_results.push((tool_call.id.clone(), exec_result.output));
                     }
 
                     // Build assistant content blocks for continuation
@@ -443,8 +446,8 @@ async fn generate_sse_events(
         content: content.clone(),
     });
 
-    // Define available tools
-    let tools = vec![ToolDefinition::shell()];
+    // Get available tools from registry
+    let tools = state.tool_registry().get_tool_definitions().await;
 
     // Call LLM
     match llm
@@ -477,22 +480,29 @@ async fn generate_sse_events(
                     }
                 }
 
-                // Execute tools
+                // Execute tools via registry
                 let mut tool_results = Vec::new();
                 for tool_call in &response.tool_calls {
-                    let result = execute_tool_async(&tool_call.name, &tool_call.input).await;
+                    let exec_result = state
+                        .tool_registry()
+                        .execute(&tool_call.name, &tool_call.input)
+                        .await;
 
                     // Send tool return event
                     let return_msg = SseMessage::ToolReturnMessage {
                         id: Uuid::new_v4().to_string(),
-                        tool_return: result.clone(),
-                        status: "success".to_string(),
+                        tool_return: exec_result.output.clone(),
+                        status: if exec_result.success {
+                            "success".to_string()
+                        } else {
+                            "error".to_string()
+                        },
                     };
                     if let Ok(json) = serde_json::to_string(&return_msg) {
                         events.push(Ok(Event::default().data(json)));
                     }
 
-                    tool_results.push((tool_call.id.clone(), result));
+                    tool_results.push((tool_call.id.clone(), exec_result.output));
                 }
 
                 // Build assistant content blocks for continuation
@@ -594,23 +604,6 @@ async fn generate_sse_events(
     events
 }
 
-/// Execute a tool asynchronously and return the result
-#[instrument(skip(input), fields(tool = name), level = "debug")]
-async fn execute_tool_async(name: &str, input: &serde_json::Value) -> String {
-    match name {
-        "shell" => {
-            let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
-
-            if command.is_empty() {
-                return "Error: No command provided".to_string();
-            }
-
-            execute_in_sandbox(command).await
-        }
-        _ => format!("Unknown tool: {}", name),
-    }
-}
-
 /// Build system prompt from agent's system message and memory blocks
 fn build_system_prompt(system: &Option<String>, blocks: &[crate::models::Block]) -> String {
     let mut parts = Vec::new();
@@ -639,75 +632,6 @@ fn build_system_prompt(system: &Option<String>, blocks: &[crate::models::Block])
 #[allow(dead_code)]
 fn estimate_tokens(text: &str) -> u64 {
     (text.len() / 4).max(1) as u64
-}
-
-/// Execute a tool and return the result
-fn execute_tool(name: &str, input: &serde_json::Value) -> String {
-    match name {
-        "shell" => {
-            let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
-
-            if command.is_empty() {
-                return "Error: No command provided".to_string();
-            }
-
-            // Execute via sandbox
-            let result = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current()
-                    .block_on(async { execute_in_sandbox(command).await })
-            });
-
-            result
-        }
-        _ => format!("Unknown tool: {}", name),
-    }
-}
-
-/// Execute a command in a sandboxed environment
-#[instrument(skip(command), level = "debug")]
-async fn execute_in_sandbox(command: &str) -> String {
-    // Create and start sandbox
-    let config = SandboxConfig::default();
-    let mut sandbox = ProcessSandbox::new(config);
-
-    if let Err(e) = sandbox.start().await {
-        return format!("Failed to start sandbox: {}", e);
-    }
-
-    // Execute command via sh -c for shell expansion
-    let exec_opts = ExecOptions::new()
-        .with_timeout(std::time::Duration::from_secs(30))
-        .with_max_output(1024 * 1024);
-
-    match sandbox.exec("sh", &["-c", command], exec_opts).await {
-        Ok(output) => {
-            let stdout = output.stdout_string();
-            let stderr = output.stderr_string();
-
-            if output.is_success() {
-                if stdout.is_empty() {
-                    "Command executed successfully (no output)".to_string()
-                } else {
-                    // Truncate long output
-                    if stdout.len() > 4000 {
-                        format!(
-                            "{}...\n[truncated, {} total bytes]",
-                            &stdout[..4000],
-                            stdout.len()
-                        )
-                    } else {
-                        stdout
-                    }
-                }
-            } else {
-                format!(
-                    "Command failed with exit code {}:\n{}{}",
-                    output.status.code, stdout, stderr
-                )
-            }
-        }
-        Err(e) => format!("Sandbox execution failed: {}", e),
-    }
 }
 
 #[cfg(test)]

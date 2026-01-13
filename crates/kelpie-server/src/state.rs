@@ -5,6 +5,7 @@
 use crate::api::archival::ArchivalEntry;
 use crate::llm::LlmClient;
 use crate::models::{AgentState, Block, Message};
+use crate::tools::UnifiedToolRegistry;
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -43,8 +44,10 @@ struct AppStateInner {
     agents: RwLock<HashMap<String, AgentState>>,
     /// Messages by agent ID
     messages: RwLock<HashMap<String, Vec<Message>>>,
-    /// Tool definitions by name
+    /// Tool definitions by name (legacy, for API compatibility)
     tools: RwLock<HashMap<String, ToolInfo>>,
+    /// Unified tool registry for execution
+    tool_registry: Arc<UnifiedToolRegistry>,
     /// Archival memory entries by agent ID
     archival: RwLock<HashMap<String, Vec<ArchivalEntry>>>,
     /// Standalone blocks by ID (for letta-code compatibility)
@@ -76,11 +79,14 @@ impl AppState {
             );
         }
 
+        let tool_registry = Arc::new(UnifiedToolRegistry::new());
+
         Self {
             inner: Arc::new(AppStateInner {
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
                 tools: RwLock::new(HashMap::new()),
+                tool_registry,
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
@@ -102,11 +108,14 @@ impl AppState {
             );
         }
 
+        let tool_registry = Arc::new(UnifiedToolRegistry::new());
+
         Self {
             inner: Arc::new(AppStateInner {
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
                 tools: RwLock::new(HashMap::new()),
+                tool_registry,
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
@@ -118,6 +127,11 @@ impl AppState {
     /// Get reference to the LLM client (if configured)
     pub fn llm(&self) -> Option<&LlmClient> {
         self.inner.llm.as_ref()
+    }
+
+    /// Get reference to the unified tool registry
+    pub fn tool_registry(&self) -> &UnifiedToolRegistry {
+        &self.inner.tool_registry
     }
 
     /// Get server uptime in seconds
