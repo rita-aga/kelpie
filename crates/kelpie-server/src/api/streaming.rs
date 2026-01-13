@@ -3,9 +3,9 @@
 //! TigerStyle: Implements Letta's SSE streaming protocol.
 
 use crate::api::ApiError;
-use crate::llm::{ChatMessage, ContentBlock, ToolDefinition};
-use crate::models::{CreateMessageRequest, Message, MessageRole};
-use crate::state::AppState;
+use kelpie_server::llm::{ChatMessage, ContentBlock, ToolDefinition};
+use kelpie_server::models::{CreateMessageRequest, Message, MessageRole};
+use kelpie_server::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     response::sse::{Event, KeepAlive, Sse},
@@ -145,7 +145,7 @@ pub async fn send_message_stream(
 async fn generate_response_events(
     state: &AppState,
     agent_id: &str,
-    agent: &crate::models::AgentState,
+    agent: &kelpie_server::models::AgentState,
     llm: &crate::llm::LlmClient,
     content: String,
 ) -> Vec<Result<Event, Infallible>> {
@@ -337,7 +337,7 @@ async fn generate_response_events(
 }
 
 /// Build system prompt from agent's system message and memory blocks
-fn build_system_prompt(system: &Option<String>, blocks: &[crate::models::Block]) -> String {
+fn build_system_prompt(system: &Option<String>, blocks: &[kelpie_server::models::Block]) -> String {
     let mut parts = Vec::new();
 
     if let Some(sys) = system {

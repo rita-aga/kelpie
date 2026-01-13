@@ -3,8 +3,8 @@
 //! TigerStyle: Letta-compatible memory block operations.
 
 use crate::api::ApiError;
-use crate::models::{Block, UpdateBlockRequest};
-use crate::state::AppState;
+use kelpie_server::models::{Block, UpdateBlockRequest};
+use kelpie_server::state::AppState;
 use axum::{
     extract::{Path, State},
     Json,
@@ -135,8 +135,8 @@ pub async fn update_block_by_label(
 #[cfg(test)]
 mod tests {
     use crate::api;
-    use crate::models::AgentState;
-    use crate::state::AppState;
+    use kelpie_server::models::AgentState;
+    use kelpie_server::state::AppState;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
@@ -199,7 +199,7 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let blocks: Vec<crate::models::Block> = serde_json::from_slice(&body).unwrap();
+        let blocks: Vec<kelpie_server::models::Block> = serde_json::from_slice(&body).unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].label, "persona");
     }
@@ -229,7 +229,7 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let block: crate::models::Block = serde_json::from_slice(&body).unwrap();
+        let block: kelpie_server::models::Block = serde_json::from_slice(&body).unwrap();
         assert_eq!(block.value, "Updated persona value");
     }
 }

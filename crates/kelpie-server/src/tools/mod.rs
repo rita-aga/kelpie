@@ -7,8 +7,10 @@
 //! - MCP tools from connected external servers
 //! - DST-compatible simulated tools for testing
 
+mod memory;
 mod registry;
 
+pub use memory::register_memory_tools;
 pub use registry::{
     BuiltinToolHandler, RegisteredTool, RegistryStats, ToolExecutionResult, ToolSource,
     UnifiedToolRegistry,

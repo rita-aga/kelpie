@@ -3,23 +3,14 @@
 //! TigerStyle: RESTful archival memory management with semantic search.
 
 use crate::api::ApiError;
-use crate::state::AppState;
+use kelpie_server::models::ArchivalEntry;
+use kelpie_server::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     Json,
 };
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
-
-/// Archival memory entry
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArchivalEntry {
-    pub id: String,
-    pub content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<serde_json::Value>,
-    pub created_at: String,
-}
 
 /// List archival entries response
 #[derive(Debug, Serialize)]
@@ -151,7 +142,7 @@ pub async fn delete_archival_entry(
 mod tests {
 
     use crate::api;
-    use crate::state::AppState;
+    use kelpie_server::state::AppState;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;

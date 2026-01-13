@@ -4,8 +4,8 @@
 //! These blocks can be created independently and later attached to agents.
 
 use crate::api::ApiError;
-use crate::models::{Block, CreateBlockRequest, ListResponse, UpdateBlockRequest};
-use crate::state::AppState;
+use kelpie_server::models::{Block, CreateBlockRequest, ListResponse, UpdateBlockRequest};
+use kelpie_server::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     routing::get,

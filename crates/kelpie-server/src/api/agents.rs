@@ -3,8 +3,8 @@
 //! TigerStyle: Letta-compatible agent CRUD operations.
 
 use crate::api::ApiError;
-use crate::models::{AgentState, CreateAgentRequest, ListResponse, UpdateAgentRequest};
-use crate::state::AppState;
+use kelpie_server::models::{AgentState, CreateAgentRequest, ListResponse, UpdateAgentRequest};
+use kelpie_server::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     routing::get,
@@ -292,7 +292,7 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let health: crate::models::HealthResponse = serde_json::from_slice(&body).unwrap();
+        let health: kelpie_server::models::HealthResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(health.status, "ok");
     }
 }

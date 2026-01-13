@@ -2,7 +2,7 @@
 //!
 //! TigerStyle: Thread-safe shared state with explicit locking.
 
-use crate::api::archival::ArchivalEntry;
+use crate::models::ArchivalEntry;
 use crate::llm::LlmClient;
 use crate::models::{AgentState, Block, Message};
 use crate::tools::UnifiedToolRegistry;

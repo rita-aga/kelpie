@@ -3,18 +3,17 @@
 //! Standalone Kelpie server with Letta-compatible REST API.
 
 mod api;
-mod models;
-mod state;
 
 // Re-export from library
+use kelpie_server::state::AppState;
 use kelpie_server::{llm, tools};
+use tools::register_memory_tools;
 
 use axum::extract::Request;
 use axum::ServiceExt;
 use clap::Parser;
 use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
 use serde_json::Value;
-use state::AppState;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tools::BuiltinToolHandler;
@@ -89,6 +88,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Register builtin tools
     register_builtin_tools(&state).await;
+
+    // Register memory tools
+    register_memory_tools(state.tool_registry(), state.clone()).await;
 
     // Create router
     let app = api::router(state);

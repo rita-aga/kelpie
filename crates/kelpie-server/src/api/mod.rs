@@ -10,8 +10,8 @@ pub mod standalone_blocks;
 pub mod streaming;
 pub mod tools;
 
-use crate::models::{ErrorResponse, HealthResponse};
-use crate::state::{AppState, StateError};
+use kelpie_server::models::{ErrorResponse, HealthResponse};
+use kelpie_server::state::{AppState, StateError};
 use axum::{
     extract::State,
     http::StatusCode,

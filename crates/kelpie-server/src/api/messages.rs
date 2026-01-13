@@ -3,9 +3,9 @@
 //! TigerStyle: Letta-compatible message operations with SSE streaming support.
 
 use crate::api::ApiError;
-use crate::llm::{ChatMessage, ContentBlock};
-use crate::models::{CreateMessageRequest, Message, MessageResponse, MessageRole, UsageStats};
-use crate::state::AppState;
+use kelpie_server::llm::{ChatMessage, ContentBlock};
+use kelpie_server::models::{CreateMessageRequest, Message, MessageResponse, MessageRole, UsageStats};
+use kelpie_server::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     response::{
@@ -406,7 +406,7 @@ async fn send_message_streaming(
 async fn generate_sse_events(
     state: &AppState,
     agent_id: &str,
-    agent: &crate::models::AgentState,
+    agent: &kelpie_server::models::AgentState,
     llm: &crate::llm::LlmClient,
     content: String,
 ) -> Vec<Result<Event, Infallible>> {
@@ -605,7 +605,7 @@ async fn generate_sse_events(
 }
 
 /// Build system prompt from agent's system message and memory blocks
-fn build_system_prompt(system: &Option<String>, blocks: &[crate::models::Block]) -> String {
+fn build_system_prompt(system: &Option<String>, blocks: &[kelpie_server::models::Block]) -> String {
     let mut parts = Vec::new();
 
     // Add base system prompt
@@ -637,8 +637,8 @@ fn estimate_tokens(text: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use crate::api;
-    use crate::models::AgentState;
-    use crate::state::AppState;
+    use kelpie_server::models::AgentState;
+    use kelpie_server::state::AppState;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
@@ -751,7 +751,7 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let messages: Vec<crate::models::Message> = serde_json::from_slice(&body).unwrap();
+        let messages: Vec<kelpie_server::models::Message> = serde_json::from_slice(&body).unwrap();
 
         // No messages sent yet
         assert_eq!(messages.len(), 0);

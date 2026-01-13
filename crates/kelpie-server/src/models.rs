@@ -198,6 +198,20 @@ pub struct Block {
 }
 
 impl Block {
+    /// Create a new block with label and value
+    pub fn new(label: impl Into<String>, value: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4().to_string(),
+            label: label.into(),
+            value: value.into(),
+            description: None,
+            limit: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
     /// Create a block from a create request
     pub fn from_request(request: CreateBlockRequest) -> Self {
         let now = Utc::now();
@@ -519,6 +533,24 @@ impl ErrorResponse {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new("internal_error", message)
     }
+}
+
+// =============================================================================
+// Archival Memory
+// =============================================================================
+
+/// Archival memory entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchivalEntry {
+    /// Entry ID
+    pub id: String,
+    /// Content stored
+    pub content: String,
+    /// Optional metadata
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+    /// Creation timestamp
+    pub created_at: String,
 }
 
 // =============================================================================
