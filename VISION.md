@@ -174,11 +174,17 @@ Long-running tool operations:
 | Server Wire-up | Complete | Tools, archival memory, capabilities endpoints |
 | Letta Adapter | Complete | letta-code compatible (ADR-006) |
 
+### Implemented but Not Integrated
+
+| Component | Priority | Notes |
+|-----------|----------|-------|
+| FoundationDB Backend | P0 | Backend code complete (`kelpie-storage/src/fdb.rs`, 1000 LOC), **server integration pending** |
+
 ### Not Started
 
 | Component | Priority | Notes |
 |-----------|----------|-------|
-| FoundationDB Backend | P0 | Critical for persistence |
+| FDB Server Integration | P0 | Wire `kelpie-storage` to `kelpie-server` |
 | Agent Framework | P0 | Critical for SDK usability |
 | Authentication | P1 | Required for production |
 | PostgreSQL Backend | P2 | Alternative to FDB |
@@ -251,7 +257,9 @@ Kelpie can run ON Kubernetes, but doesn't use it for actor scheduling.
 | DST Framework | 49 | ✅ Passing |
 | Server API | 22 | ✅ Passing |
 | Tools | 23 | ✅ Passing |
-| **Total** | **300+** | ✅ All Passing |
+| **Total** | **520+** | ✅ All Passing |
+
+> **Note:** Run tests with `cargo test --workspace --features dst` for full coverage.
 
 ---
 
@@ -261,9 +269,12 @@ Kelpie can run ON Kubernetes, but doesn't use it for actor scheduling.
 - [x] Wire new features to REST API (tools, archival, capabilities)
 - [x] Local embeddings via fastembed (optional feature)
 - [x] Letta API compatibility layer
-- [ ] FoundationDB integration for persistence **(P0 - Critical)**
+- [x] FoundationDB backend implementation (`kelpie-storage/src/fdb.rs`)
+- [ ] Wire FDB backend to server (currently uses in-memory HashMap) **(P0 - Critical)**
 - [ ] Agent framework abstraction (kelpie-agent) **(P0 - Critical)**
 - [ ] Authentication and rate limiting **(P1)**
+
+> **Current limitation:** Server uses in-memory storage. Data is lost on restart until FDB integration is wired.
 
 ### Phase 2: Framework Integration
 - [ ] Letta runtime adapter (full integration, not just API compat)

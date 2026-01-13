@@ -229,15 +229,20 @@ Environment variables:
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry endpoint | None |
 | `RUST_LOG` | Log level | `info` |
 
+## Storage
+
+> **Current limitation:** Server uses in-memory storage (HashMap). Data is lost on restart.
+>
+> The FoundationDB backend is implemented (`kelpie-storage/src/fdb.rs`) but not yet wired to the server.
+
 ## Roadmap
 
 See [VISION.md](./VISION.md) for detailed roadmap.
 
 **Next priorities:**
-1. ~~FoundationDB integration~~ ✅ Backend implemented, needs production testing
+1. Wire FDB backend to server (backend code complete, integration pending)
 2. Agent framework abstraction
-3. Local embeddings (fastembed)
-4. Authentication
+3. Authentication
 
 ## Engineering Principles
 
