@@ -9,6 +9,25 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+// =============================================================================
+// Constants (TigerStyle)
+// =============================================================================
+
+/// Minimum pause duration in minutes
+pub const HEARTBEAT_PAUSE_MINUTES_MIN: u64 = 1;
+
+/// Maximum pause duration in minutes
+pub const HEARTBEAT_PAUSE_MINUTES_MAX: u64 = 60;
+
+/// Default pause duration in minutes
+pub const HEARTBEAT_PAUSE_MINUTES_DEFAULT: u64 = 2;
+
+/// Maximum agent loop iterations before forced stop
+pub const AGENT_LOOP_ITERATIONS_MAX: u32 = 5;
+
+/// Milliseconds per minute
+pub const MS_PER_MINUTE: u64 = 60 * 1000;
+
 /// Identifies where a tool comes from
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ToolSource {
@@ -41,6 +60,26 @@ pub struct RegisteredTool {
     pub description: Option<String>,
 }
 
+/// Signals that tools can emit to control agent loop behavior
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToolSignal {
+    /// No signal - normal execution
+    None,
+    /// Pause heartbeats for the specified duration
+    PauseHeartbeats {
+        /// Time (in ms since epoch) when pause expires
+        pause_until_ms: u64,
+        /// Duration in minutes (for logging/display)
+        minutes: u64,
+    },
+}
+
+impl Default for ToolSignal {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
 /// Result of tool execution
 #[derive(Debug, Clone)]
 pub struct ToolExecutionResult {
@@ -52,6 +91,8 @@ pub struct ToolExecutionResult {
     pub duration_ms: u64,
     /// Error message if failed
     pub error: Option<String>,
+    /// Optional signal for agent loop control
+    pub signal: ToolSignal,
 }
 
 impl ToolExecutionResult {
@@ -62,6 +103,7 @@ impl ToolExecutionResult {
             success: true,
             duration_ms,
             error: None,
+            signal: ToolSignal::None,
         }
     }
 
@@ -73,13 +115,26 @@ impl ToolExecutionResult {
             success: false,
             duration_ms,
             error: Some(error_str),
+            signal: ToolSignal::None,
         }
+    }
+
+    /// Add a pause heartbeats signal to this result
+    pub fn with_pause_signal(mut self, pause_until_ms: u64, minutes: u64) -> Self {
+        self.signal = ToolSignal::PauseHeartbeats {
+            pause_until_ms,
+            minutes,
+        };
+        self
     }
 }
 
 /// Handler function type for builtin tools
-pub type BuiltinToolHandler =
-    Arc<dyn Fn(&Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send>> + Send + Sync>;
+pub type BuiltinToolHandler = Arc<
+    dyn Fn(&Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Unified tool registry combining all tool sources
 pub struct UnifiedToolRegistry {
@@ -266,6 +321,7 @@ impl UnifiedToolRegistry {
     }
 
     /// Execute an MCP tool
+    #[allow(unused_variables)]
     async fn execute_mcp(
         &self,
         name: &str,
@@ -369,7 +425,11 @@ mod tests {
         let handler: BuiltinToolHandler = Arc::new(|input| {
             let input = input.clone();
             Box::pin(async move {
-                input.get("message").and_then(|v| v.as_str()).unwrap_or("").to_string()
+                input
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string()
             })
         });
 
@@ -435,9 +495,7 @@ mod tests {
             .register_builtin("echo", "Echo tool", json!({"type": "object"}), handler)
             .await;
 
-        let result = registry
-            .execute("echo", &json!({"message": "hello"}))
-            .await;
+        let result = registry.execute("echo", &json!({"message": "hello"})).await;
 
         assert!(result.success);
         assert_eq!(result.output, "Echo: hello");
@@ -451,7 +509,12 @@ mod tests {
             Arc::new(|_| Box::pin(async move { "result".to_string() }));
 
         registry
-            .register_builtin("tool1", "Tool 1", json!({"type": "object"}), handler.clone())
+            .register_builtin(
+                "tool1",
+                "Tool 1",
+                json!({"type": "object"}),
+                handler.clone(),
+            )
             .await;
 
         registry

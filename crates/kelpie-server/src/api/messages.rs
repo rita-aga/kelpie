@@ -3,9 +3,6 @@
 //! TigerStyle: Letta-compatible message operations with SSE streaming support.
 
 use crate::api::ApiError;
-use kelpie_server::llm::{ChatMessage, ContentBlock};
-use kelpie_server::models::{CreateMessageRequest, Message, MessageResponse, MessageRole, UsageStats};
-use kelpie_server::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     response::{
@@ -16,6 +13,12 @@ use axum::{
 };
 use chrono::Utc;
 use futures::stream::{self, StreamExt};
+use kelpie_server::llm::{ChatMessage, ContentBlock};
+use kelpie_server::models::{
+    CreateMessageRequest, Message, MessageResponse, MessageRole, UsageStats,
+};
+use kelpie_server::state::AppState;
+use kelpie_server::tools::{parse_pause_signal, ToolSignal, AGENT_LOOP_ITERATIONS_MAX};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::time::Duration;
@@ -171,7 +174,7 @@ async fn send_message_json(
         )
     })?;
 
-    let (response_content, prompt_tokens, completion_tokens) = {
+    let (response_content, prompt_tokens, completion_tokens, final_stop_reason, pause_info) = {
         // Build messages for LLM
         let mut messages = Vec::new();
 
@@ -220,31 +223,86 @@ async fn send_message_json(
                 let mut total_completion = response.completion_tokens;
                 let mut final_content = response.content.clone();
 
-                // Handle tool use loop (max 5 iterations)
-                let mut iterations = 0;
-                while response.stop_reason == "tool_use" && iterations < 5 {
+                // Handle tool use loop (max iterations from constant)
+                let mut iterations = 0u32;
+                let mut stop_reason = "end_turn".to_string();
+                let mut pause_signal: Option<(u64, u64)> = None;
+
+                while response.stop_reason == "tool_use"
+                    && iterations < AGENT_LOOP_ITERATIONS_MAX
+                {
                     iterations += 1;
                     tracing::info!(
                         agent_id = %agent_id,
                         tool_count = response.tool_calls.len(),
                         iteration = iterations,
+                        max_iterations = AGENT_LOOP_ITERATIONS_MAX,
                         "Executing tools"
                     );
 
                     // Execute each tool via registry
                     let mut tool_results = Vec::new();
+                    let mut should_break = false;
+
                     for tool_call in &response.tool_calls {
                         let exec_result = state
                             .tool_registry()
                             .execute(&tool_call.name, &tool_call.input)
                             .await;
+
                         tracing::info!(
                             tool = %tool_call.name,
                             success = exec_result.success,
                             duration_ms = exec_result.duration_ms,
                             "Tool executed"
                         );
+
+                        // Check for pause_heartbeats signal
+                        // Parse from output format: "PAUSE_HEARTBEATS:minutes:pause_until_ms"
+                        if let Some((minutes, pause_until_ms)) =
+                            parse_pause_signal(&exec_result.output)
+                        {
+                            tracing::info!(
+                                agent_id = %agent_id,
+                                pause_minutes = minutes,
+                                pause_until_ms = pause_until_ms,
+                                "Agent requested heartbeat pause"
+                            );
+
+                            pause_signal = Some((minutes, pause_until_ms));
+                            stop_reason = "pause_heartbeats".to_string();
+                            should_break = true;
+                        }
+
+                        // Also check signal field
+                        if let ToolSignal::PauseHeartbeats {
+                            minutes,
+                            pause_until_ms,
+                        } = &exec_result.signal
+                        {
+                            tracing::info!(
+                                agent_id = %agent_id,
+                                pause_minutes = minutes,
+                                pause_until_ms = pause_until_ms,
+                                "Agent requested heartbeat pause (via signal)"
+                            );
+
+                            pause_signal = Some((*minutes, *pause_until_ms));
+                            stop_reason = "pause_heartbeats".to_string();
+                            should_break = true;
+                        }
+
                         tool_results.push((tool_call.id.clone(), exec_result.output));
+                    }
+
+                    // Break the loop if pause was requested
+                    if should_break {
+                        tracing::info!(
+                            agent_id = %agent_id,
+                            iteration = iterations,
+                            "Breaking agent loop due to pause_heartbeats"
+                        );
+                        break;
                     }
 
                     // Build assistant content blocks for continuation
@@ -291,9 +349,18 @@ async fn send_message_json(
                     prompt_tokens = total_prompt,
                     completion_tokens = total_completion,
                     tool_iterations = iterations,
+                    stop_reason = %stop_reason,
                     "LLM response received"
                 );
-                (final_content, total_prompt, total_completion)
+
+                // If we hit max iterations without pause, set stop_reason
+                if iterations >= AGENT_LOOP_ITERATIONS_MAX
+                    && stop_reason == "end_turn"
+                {
+                    stop_reason = "max_iterations".to_string();
+                }
+
+                (final_content, total_prompt, total_completion, stop_reason, pause_signal)
             }
             Err(e) => {
                 tracing::error!(agent_id = %agent_id, error = %e, "LLM call failed");
@@ -301,6 +368,16 @@ async fn send_message_json(
             }
         }
     };
+
+    // Log pause info if present
+    if let Some((minutes, pause_until_ms)) = pause_info {
+        tracing::info!(
+            agent_id = %agent_id,
+            pause_minutes = minutes,
+            pause_until_ms = pause_until_ms,
+            "Agent loop paused via pause_heartbeats"
+        );
+    }
 
     // Create assistant message
     let assistant_message = Message {
@@ -321,6 +398,7 @@ async fn send_message_json(
         agent_id = %agent_id,
         user_msg_id = %stored_user_msg.id,
         assistant_msg_id = %stored_assistant_msg.id,
+        stop_reason = %final_stop_reason,
         "processed message"
     );
 
@@ -331,7 +409,7 @@ async fn send_message_json(
             completion_tokens,
             total_tokens: prompt_tokens + completion_tokens,
         }),
-        stop_reason: "end_turn".to_string(),
+        stop_reason: final_stop_reason,
     })
     .into_response())
 }
@@ -416,6 +494,7 @@ async fn generate_sse_events(
     let mut total_prompt_tokens = 0u64;
     let mut total_completion_tokens = 0u64;
     let mut step_count = 0u32;
+    let mut final_stop_reason = "end_turn".to_string();
 
     // Build messages for LLM
     let mut messages = Vec::new();
@@ -462,10 +541,12 @@ async fn generate_sse_events(
             step_count += 1;
 
             let mut final_content = response.content.clone();
-            let mut iterations = 0;
+            let mut iterations = 0u32;
 
             // Handle tool use loop
-            while response.stop_reason == "tool_use" && iterations < 5 {
+            while response.stop_reason == "tool_use"
+                && iterations < AGENT_LOOP_ITERATIONS_MAX
+            {
                 iterations += 1;
 
                 // Send tool call events
@@ -484,11 +565,41 @@ async fn generate_sse_events(
 
                 // Execute tools via registry
                 let mut tool_results = Vec::new();
+                let mut should_break = false;
+
                 for tool_call in &response.tool_calls {
                     let exec_result = state
                         .tool_registry()
                         .execute(&tool_call.name, &tool_call.input)
                         .await;
+
+                    // Check for pause_heartbeats signal
+                    if let Some((minutes, pause_until_ms)) =
+                        parse_pause_signal(&exec_result.output)
+                    {
+                        tracing::info!(
+                            agent_id = %agent_id,
+                            pause_minutes = minutes,
+                            pause_until_ms = pause_until_ms,
+                            "Agent requested heartbeat pause (streaming)"
+                        );
+                        final_stop_reason = "pause_heartbeats".to_string();
+                        should_break = true;
+                    }
+
+                    // Also check signal field
+                    if let ToolSignal::PauseHeartbeats { minutes, pause_until_ms } =
+                        &exec_result.signal
+                    {
+                        tracing::info!(
+                            agent_id = %agent_id,
+                            pause_minutes = minutes,
+                            pause_until_ms = pause_until_ms,
+                            "Agent requested heartbeat pause via signal (streaming)"
+                        );
+                        final_stop_reason = "pause_heartbeats".to_string();
+                        should_break = true;
+                    }
 
                     // Send tool return event
                     let return_msg = SseMessage::ToolReturnMessage {
@@ -505,6 +616,11 @@ async fn generate_sse_events(
                     }
 
                     tool_results.push((tool_call.id.clone(), exec_result.output));
+                }
+
+                // Break if pause was requested
+                if should_break {
+                    break;
                 }
 
                 // Build assistant content blocks for continuation
@@ -546,6 +662,11 @@ async fn generate_sse_events(
                 }
             }
 
+            // Update stop_reason if we hit max iterations
+            if iterations >= AGENT_LOOP_ITERATIONS_MAX && final_stop_reason == "end_turn" {
+                final_stop_reason = "max_iterations".to_string();
+            }
+
             // Send assistant message event
             let assistant_msg = SseMessage::AssistantMessage {
                 id: Uuid::new_v4().to_string(),
@@ -583,7 +704,7 @@ async fn generate_sse_events(
     // Send stop_reason event
     let stop_event = StopReasonEvent {
         message_type: "stop_reason",
-        stop_reason: "end_turn".to_string(),
+        stop_reason: final_stop_reason,
     };
     if let Ok(json) = serde_json::to_string(&stop_event) {
         events.push(Ok(Event::default().data(json)));
@@ -639,11 +760,11 @@ fn estimate_tokens(text: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use crate::api;
-    use kelpie_server::models::AgentState;
-    use kelpie_server::state::AppState;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
+    use kelpie_server::models::AgentState;
+    use kelpie_server::state::AppState;
     use tower::ServiceExt;
 
     async fn test_app_with_agent() -> (Router, String) {

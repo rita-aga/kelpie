@@ -1,15 +1,15 @@
 # Kelpie Agent Framework: Letta Feature Parity Plan
 
-**Date:** 2026-01-12
+**Date:** 2026-01-12 (Updated 2026-01-13)
 **Author:** Claude
-**Status:** Phase 1 Complete - In Progress
+**Status:** Phase 3 Complete - ~90% Done
 **Estimated Effort:** ~6-7 weeks (DST-first)
 
 ---
 
 ## Executive Summary
 
-Kelpie's agent framework is **80-85% complete**. The core agent loop, tool execution, memory blocks, and infrastructure are all working. This plan details the remaining work to achieve Letta feature parity, with **Umi as the memory backend**.
+Kelpie's agent framework is **~90% complete**. Phases 0-3 are done with 95+ DST tests passing. The core agent loop, tool execution, memory blocks, memory tools, and heartbeat mechanism are all working. Only Phase 4 (FDB wiring) and Phase 5 (Agent types) remain.
 
 ### Key Decisions Made
 
@@ -495,26 +495,21 @@ Uses full `Simulation::new().run(|env| ...)` harness with UmiMemoryBackend:
 
 ### DST Findings and Bugs
 
-**BUG-001: TOCTOU Race Condition in core_memory_append (Identified, Not Yet Triggered)**
+**BUG-001: TOCTOU Race Condition in core_memory_append ✅ FIXED**
 
-Location: `crates/kelpie-server/src/tools/memory.rs:59-85`
+Location: `crates/kelpie-server/src/tools/memory.rs` → `crates/kelpie-server/src/state.rs`
 
-The `core_memory_append` tool has a classic Time-of-Check to Time-of-Use (TOCTOU) race condition:
+**Discovery:** Identified during DST implementation review.
 
+**Root Cause:** The old implementation had a check-then-act pattern:
 ```rust
-// RACE: Check if block exists
-let block_exists = match state.get_block_by_label(&agent_id, &label) {
-    Ok(Some(_)) => true,
-    Ok(None) => false,
-    Err(e) => return format!("Error: {}", e),
-};
-
-// RACE: Thread interleaving can occur here!
-
-if block_exists {
-    state.update_block_by_label(...)  // Append to existing
+// OLD CODE (TOCTOU BUG):
+let block_exists = state.get_block_by_label(...)?;  // READ
+// GAP: Another thread could create the block here!
+if block_exists.is_some() {
+    state.update_block_by_label(...)  // WRITE
 } else {
-    state.update_agent(...)  // Create new block
+    state.update_agent(...)  // WRITE - creates new block
 }
 ```
 
@@ -526,13 +521,60 @@ if block_exists {
 
 **Impact:** Data corruption - agent may have multiple blocks with same label.
 
-**Fix (Not Yet Implemented):**
+**Fix (Implemented 2026-01-13):**
 ```rust
-// Use atomic compare-and-swap operation
-state.append_or_create_block_by_label(&agent_id, &label, &content)
+// Use atomic append_or_create operation (single write lock for entire operation)
+pub fn append_or_create_block_by_label(&self, agent_id: &str, label: &str, content: &str)
+    -> Result<Block, StateError>
+{
+    let mut agents = self.inner.agents.write()?;  // SINGLE LOCK
+    let agent = agents.get_mut(agent_id)?;
+
+    if let Some(block) = agent.blocks.iter_mut().find(|b| b.label == label) {
+        block.value.push_str(content);  // Append
+        Ok(block.clone())
+    } else {
+        let block = Block::new(label, content);  // Create
+        agent.blocks.push(block.clone());
+        Ok(block)
+    }
+}
 ```
 
-**DST Status:** The race was not triggered in async tests (cooperative scheduling). Would require true parallel threads to expose. The bug exists in code but is difficult to trigger without OS-level thread scheduling.
+**Verification:** `test_core_memory_append_with_block_read_fault` now passes (operation no longer requires separate read).
+
+---
+
+**BUG-002: Agent Isolation Not Enforced in Archival Search ✅ FIXED**
+
+Location: `crates/kelpie-server/src/memory/umi_backend.rs`
+
+**Discovery:** Found by DST simulation test `test_sim_multi_agent_isolation`.
+
+**Root Cause:** Umi's `recall` function does semantic search across ALL stored data. The agent prefix in the query made results semantically similar but didn't filter out other agents' data:
+```rust
+// OLD CODE (NO ISOLATION):
+let scoped_query = format!("[agent:{}][archival] {}", self.agent_id, query);
+let results = memory.recall(&scoped_query, ...).await?;  // Returns ANY similar content!
+```
+
+**Impact:** Agent 1 searching for "secret" could see Agent 2's data if semantically similar.
+
+**Fix (Implemented 2026-01-13):**
+```rust
+// NEW CODE (ISOLATION ENFORCED):
+let raw_results = memory.recall(&scoped_query, ...).await?;
+let agent_prefix = format!("[agent:{}][archival]", self.agent_id);
+let filtered: Vec<Entity> = raw_results
+    .into_iter()
+    .filter(|entity| entity.content.contains(&agent_prefix))  // FILTER!
+    .take(limit)
+    .collect();
+```
+
+**Verification:** `test_sim_multi_agent_isolation` now verifies strict agent isolation with assertions that fail if cross-agent data is returned.
+
+---
 
 **Other DST Findings:**
 - Fault injection properly returns errors (no panics)
@@ -542,89 +584,72 @@ state.append_or_create_block_by_label(&agent_id, &label, &content)
 
 ---
 
-## Phase 3: Heartbeat/Pause Mechanism (P1 - 2 days)
+## Phase 3: Heartbeat/Pause Mechanism (P1 - 2 days) ✅ Complete
 
 ### What Letta Has
 
 `pause_heartbeats` - Agent can pause autonomous iterations for N minutes.
 
-### Current Kelpie Behavior
+### Implementation Summary (Phase 3)
 
+**Date:** 2026-01-13
+**Status:** ✅ Complete
+
+**Files Created/Changed:**
+- `docs/adr/010-heartbeat-pause-mechanism.md` - **NEW** ADR documenting design decisions
+- `crates/kelpie-server/src/tools/heartbeat.rs` - **NEW** pause_heartbeats tool implementation
+- `crates/kelpie-server/src/tools/registry.rs` - Added ToolSignal enum, constants, with_pause_signal()
+- `crates/kelpie-server/src/tools/mod.rs` - Added heartbeat module exports
+- `crates/kelpie-server/src/main.rs` - Register heartbeat tools at startup
+- `crates/kelpie-server/src/api/messages.rs` - Agent loop now checks for pause signal
+- `crates/kelpie-server/tests/heartbeat_dst.rs` - **NEW** 16 DST tests
+
+**Design Decisions (see ADR-010):**
+1. Used `ToolSignal` enum for control flow (not exceptions or return conventions)
+2. Clock abstraction (`ClockSource`) for DST support
+3. Output format includes pause signal: `PAUSE_HEARTBEATS:minutes:pause_until_ms`
+4. Pause signal breaks loop immediately (doesn't wait for all tools)
+5. Stop reason returned in response: `"pause_heartbeats"` or `"max_iterations"`
+
+**Key Constants (TigerStyle):**
 ```rust
-while response.stop_reason == "tool_use" && iterations < 5 {
-    iterations += 1;
-    // ...
-}
+pub const HEARTBEAT_PAUSE_MINUTES_MIN: u64 = 1;
+pub const HEARTBEAT_PAUSE_MINUTES_MAX: u64 = 60;
+pub const HEARTBEAT_PAUSE_MINUTES_DEFAULT: u64 = 2;
+pub const AGENT_LOOP_ITERATIONS_MAX: u32 = 5;
+pub const MS_PER_MINUTE: u64 = 60 * 1000;
 ```
 
-### Required Changes
+**DST Tests (16 total in heartbeat_dst.rs):**
+1. `test_pause_heartbeats_basic_execution` - Tool execution baseline
+2. `test_pause_heartbeats_custom_duration` - Custom minutes (1, 5, 30, 60)
+3. `test_pause_heartbeats_duration_clamping` - Clamp to [1, 60] range
+4. `test_agent_loop_stops_on_pause` - Loop breaks on pause signal
+5. `test_agent_loop_resumes_after_pause_expires` - Pause expiration
+6. `test_pause_with_clock_skew` - Works with ClockSkew fault
+7. `test_pause_with_clock_jump_forward` - Clock jump forward expires pause
+8. `test_pause_with_clock_jump_backward` - Clock doesn't go backward
+9. `test_pause_heartbeats_determinism` - Same seed = same results
+10. `test_multi_agent_pause_isolation` - Independent pause per agent
+11. `test_pause_at_loop_iteration_limit` - Pause takes precedence over max_iterations
+12. `test_multiple_pause_calls_overwrites` - New pause overwrites old
+13. `test_pause_with_invalid_input` - Invalid input uses defaults
+14. `test_pause_high_frequency` - 100 rapid pause calls
+15. `test_pause_with_time_advancement_stress` - 50 pause/resume cycles
+16. `test_pause_stop_reason_in_response` - Correct stop_reason value
 
-1. **Add pause_heartbeats tool**
-   ```rust
-   pub struct PauseHeartbeats;
-
-   #[async_trait]
-   impl Tool for PauseHeartbeats {
-       fn metadata(&self) -> &ToolMetadata {
-           &PAUSE_HEARTBEATS_METADATA  // minutes param (1-60)
-       }
-
-       async fn execute(&self, input: ToolInput) -> ToolResult<ToolOutput> {
-           let minutes = input.get_i64("minutes").unwrap_or(2);
-           Ok(ToolOutput::pause_heartbeats(minutes))
-       }
-   }
-   ```
-
-2. **Modify loop termination** (`messages.rs`)
-   ```rust
-   let mut heartbeat_paused_until: Option<Instant> = None;
-
-   while response.stop_reason == "tool_use" {
-       // Check if heartbeats are paused
-       if let Some(until) = heartbeat_paused_until {
-           if Instant::now() < until {
-               break;  // Paused, stop iterating
-           }
-           heartbeat_paused_until = None;
-       }
-
-       // Execute tools
-       for tool_call in &response.tool_calls {
-           let result = execute_tool(&tool_call.name, &tool_call.input).await?;
-
-           // Check for pause signal
-           if let Some(pause_minutes) = result.pause_heartbeats {
-               heartbeat_paused_until = Some(
-                   Instant::now() + Duration::from_secs(pause_minutes * 60)
-               );
-           }
-
-           tool_results.push((tool_call.id.clone(), result));
-       }
-
-       iterations += 1;
-       if iterations >= MAX_ITERATIONS {
-           break;
-       }
-
-       // Continue...
-   }
-   ```
-
-### DST Requirements
-
-| Test | Fault Types | Assertion |
-|------|-------------|-----------|
-| pause_heartbeats basic | None | Loop stops after pause |
-| pause duration | ClockSkew (5s) | Duration calculated correctly |
-| pause persistence | CrashAfterWrite | Pause state survives restart |
+**DST-First Approach Followed:**
+1. ✅ Assessed DST harness - ClockSkew, ClockJump faults already available
+2. ✅ Wrote simulation tests BEFORE implementation
+3. ✅ Implemented feature
+4. ✅ Ran simulations with 5 different random seeds (all passed)
+5. ✅ No bugs discovered via DST (clean implementation)
 
 ### Acceptance Criteria
 
-- [ ] `pause_heartbeats` tool available to agents
-- [ ] Agent loop respects pause duration
-- [ ] DST tests pass with clock faults
+- [x] `pause_heartbeats` tool available to agents ✅
+- [x] Agent loop respects pause duration ✅
+- [x] DST tests pass with clock faults ✅ (16 tests, 5 seed runs)
 
 ---
 
@@ -755,24 +780,27 @@ FDB backend is fully implemented (`kelpie-storage/src/fdb.rs`, 1000 lines) but s
 |-------|-------------|--------|--------------|--------|
 | **0** | Umi integration | 5 days | None | ✅ Complete |
 | **1** | MCP tools in loop | 4 days | Phase 0 | ✅ Complete (28 DST tests) |
-| **2** | Memory editing tools | 3 days | Phase 0 | ✅ Complete (17 tests) |
-| **3** | Heartbeat mechanism | 2 days | Phase 1 | 🔴 Not Started |
+| **2** | Memory editing tools | 3 days | Phase 0 | ✅ Complete (39+ tests) |
+| **3** | Heartbeat mechanism | 2 days | Phase 1 | ✅ Complete (16 DST tests) |
 | **4** | Wire FDB to server | 2 days | None | 🔴 Not Started |
 | **5** | Agent types | 5 days | Phases 0-3 | 🔴 Not Started |
 
 **Critical Path:** Phase 0 → Phase 1 → Phase 2 → Phase 3 → Phase 5
 
-**Parallel Track:** Phase 4 can run alongside Phase 1
+**Parallel Track:** Phase 4 can run alongside other phases
 
-**Total:** ~6-7 weeks with DST-first approach
+**Total Progress:** ~90% complete (Phases 0-3 done, only Phase 4 & 5 remaining)
 
 ```
-Week 1: Phase 0 (Umi integration)
-Week 2: Phase 1 (MCP tools) + Phase 4 (FDB wiring) in parallel
-Week 3: Phase 2 (Memory tools) + Phase 3 (Heartbeat)
-Week 4-5: Phase 5 (Agent types)
-Week 6: Integration testing, bug fixes, polish
-Week 7: Buffer for DST-discovered issues
+Completed:
+  ✅ Phase 0: Umi integration
+  ✅ Phase 1: MCP tools (28 DST tests)
+  ✅ Phase 2: Memory tools (39+ DST tests)
+  ✅ Phase 3: Heartbeat mechanism (16 DST tests)
+
+Remaining:
+  🔴 Phase 4: Wire FDB to server (~2 days)
+  🔴 Phase 5: Agent types (~5 days)
 ```
 
 ---
@@ -852,7 +880,7 @@ Week 7: Buffer for DST-discovered issues
 
 ## What to Try (Update After Each Phase)
 
-### Works Now (Phase 1 Complete)
+### Works Now (Phase 3 Complete)
 - Agent loop with dynamic tool loading from registry
 - Memory blocks in system prompt
 - SSE streaming responses
@@ -867,36 +895,51 @@ Week 7: Buffer for DST-discovered issues
   - Tested with 7 different seeds (1, 42, 100, 999, 12345, 54321, 999999)
   - Fault injection: StorageWriteFail, StorageReadFail, EmbeddingTimeout, VectorSearchFail
   - Using `SimEnvironment::create_memory()` for proper fault injection
-- **NEW: UnifiedToolRegistry**
+- **UnifiedToolRegistry**
   - Registers builtin tools with handlers
   - Registers MCP tools (placeholder for real MCP client)
   - Routes execution to correct handler based on tool source
   - DST support via `set_sim_mcp_client()`
-- **NEW: MCP DST tests (12 tests)**
+- **MCP DST tests (12 tests)**
   - SimMcpClient for deterministic MCP testing
   - MCP fault types: McpServerCrash, McpToolFail, McpToolTimeout
   - Tests for discovery, execution, multiple servers, graceful degradation
   - Determinism verified: same seed = same behavior
-- **NEW: Agent Loop DST tests (16 tests)**
+- **Agent Loop DST tests (16 tests)**
   - Comprehensive registry testing with fault injection
   - Concurrent execution (up to 100 parallel)
   - Large input handling (1MB payloads)
   - Dynamic tool registration/unregistration
   - Mixed builtin+MCP tool execution under faults
+- **Memory tools (5 tools)**
+  - core_memory_append, core_memory_replace
+  - archival_memory_insert, archival_memory_search
+  - conversation_search
+- **NEW: pause_heartbeats tool**
+  - Clock abstraction for DST testing (ClockSource)
+  - Duration clamped to [1, 60] minutes
+  - Breaks agent loop immediately when called
+  - Stop reason: "pause_heartbeats" or "max_iterations"
+- **NEW: Heartbeat DST tests (16 tests)**
+  - Clock fault tolerance (ClockSkew, ClockJump)
+  - Multi-agent isolation
+  - Pause duration clamping and defaults
+  - High-frequency stress testing
+  - Determinism verification
 
 ### Doesn't Work Yet
-- Memory editing tools (Phase 2) - UmiMemoryBackend exists but tools not implemented
-- Real MCP tool execution (Phase 1 partial) - registry wired, but real MCP client not connected
+- Real MCP tool execution - registry wired, but real MCP client not connected
 - Agent types (Phase 5) - single hardcoded behavior
-- Heartbeat/pause mechanism (Phase 3)
 - FDB wired to server (Phase 4)
+- Pause state persistence (not stored in FDB yet)
 
 ### Known Limitations
 - UmiMemoryBackend uses SimStorageBackend (in-memory) - no persistence across restarts
 - SimEmbeddingProvider returns deterministic embeddings (not semantically meaningful)
 - Agent scoping is per-backend instance (not shared storage yet)
-- 5-iteration limit (no heartbeat extension)
+- 5-iteration limit (can be paused but not extended)
 - Real MCP servers not yet connected (DST simulation only)
+- pause_heartbeats only works for current request (state not persisted)
 
 ---
 
