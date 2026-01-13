@@ -6,7 +6,6 @@ use crate::api::archival::ArchivalEntry;
 use crate::llm::LlmClient;
 use crate::models::{AgentState, Block, Message};
 use chrono::Utc;
-use kelpie_core::metrics;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -54,11 +53,46 @@ struct AppStateInner {
     start_time: Instant,
     /// LLM client (None if no API key configured)
     llm: Option<LlmClient>,
+    /// Prometheus metrics registry (None if metrics disabled or otel feature not enabled)
+    #[cfg(feature = "otel")]
+    prometheus_registry: Option<Arc<prometheus::Registry>>,
 }
 
 impl AppState {
     /// Create new server state
     pub fn new() -> Self {
+        Self::with_registry(None)
+    }
+
+    /// Create new server state with optional Prometheus registry
+    #[cfg(feature = "otel")]
+    pub fn with_registry(registry: Option<&prometheus::Registry>) -> Self {
+        let llm = LlmClient::from_env();
+        if llm.is_some() {
+            tracing::info!("LLM integration enabled");
+        } else {
+            tracing::warn!(
+                "No LLM API key found. Set ANTHROPIC_API_KEY or OPENAI_API_KEY for real responses."
+            );
+        }
+
+        Self {
+            inner: Arc::new(AppStateInner {
+                agents: RwLock::new(HashMap::new()),
+                messages: RwLock::new(HashMap::new()),
+                tools: RwLock::new(HashMap::new()),
+                archival: RwLock::new(HashMap::new()),
+                blocks: RwLock::new(HashMap::new()),
+                start_time: Instant::now(),
+                llm,
+                prometheus_registry: registry.map(|r| Arc::new(r.clone())),
+            }),
+        }
+    }
+
+    /// Create new server state without Prometheus registry (when otel feature not enabled)
+    #[cfg(not(feature = "otel"))]
+    pub fn with_registry(_registry: Option<()>) -> Self {
         let llm = LlmClient::from_env();
         if llm.is_some() {
             tracing::info!("LLM integration enabled");
@@ -89,6 +123,12 @@ impl AppState {
     /// Get server uptime in seconds
     pub fn uptime_seconds(&self) -> u64 {
         self.inner.start_time.elapsed().as_secs()
+    }
+
+    /// Get reference to the Prometheus registry (if configured)
+    #[cfg(feature = "otel")]
+    pub fn prometheus_registry(&self) -> Option<&prometheus::Registry> {
+        self.inner.prometheus_registry.as_ref().map(|r| r.as_ref())
     }
 
     // =========================================================================
@@ -314,10 +354,10 @@ impl AppState {
             }
         }
 
-        // Record metrics
-        metrics::record_memory_usage("core", core_memory_bytes);
-        metrics::record_memory_usage("working", working_memory_bytes);
-        metrics::record_memory_usage("archival", archival_memory_bytes);
+        // Note: Memory metrics (core, working, archival) are not yet implemented
+        // because they require observable gauges with callbacks, which need proper
+        // lifecycle management. For now, we just calculate the values here for future use.
+        let _ = (core_memory_bytes, working_memory_bytes, archival_memory_bytes, total_blocks);
 
         Ok(())
     }

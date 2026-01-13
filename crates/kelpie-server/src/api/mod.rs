@@ -94,10 +94,46 @@ async fn metrics(State(state): State<AppState>) -> Response {
     let _ = state.record_memory_metrics();
 
     let agent_count = state.agent_count().unwrap_or(0);
+    let uptime_seconds = state.uptime_seconds();
 
-    // Note: In Phase 2, we're still returning simple text metrics
-    // In a future phase with full OpenTelemetry integration, we'd scrape
-    // from the Prometheus registry instead
+    #[cfg(feature = "otel")]
+    {
+        // If we have a Prometheus registry, combine its metrics with manual metrics
+        if let Some(registry) = state.prometheus_registry() {
+            use prometheus::Encoder;
+            let encoder = prometheus::TextEncoder::new();
+            let metric_families = registry.gather();
+            let mut buffer = Vec::new();
+
+            // Encode OpenTelemetry metrics
+            if encoder.encode(&metric_families, &mut buffer).is_ok() {
+                // Append manual metrics that aren't in OpenTelemetry yet
+                let manual_metrics = format!(
+                    "\n# HELP kelpie_agents_active_count Current number of active agents\n\
+                     # TYPE kelpie_agents_active_count gauge\n\
+                     kelpie_agents_active_count {}\n\
+                     \n\
+                     # HELP kelpie_server_uptime_seconds Server uptime in seconds\n\
+                     # TYPE kelpie_server_uptime_seconds gauge\n\
+                     kelpie_server_uptime_seconds {}\n",
+                    agent_count, uptime_seconds
+                );
+                buffer.extend_from_slice(manual_metrics.as_bytes());
+
+                return (
+                    StatusCode::OK,
+                    [(
+                        axum::http::header::CONTENT_TYPE,
+                        "text/plain; version=0.0.4; charset=utf-8",
+                    )],
+                    buffer,
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    // Fallback: manual metrics formatting (when otel feature not enabled or registry not configured)
     let metrics_text = format!(
         "# HELP kelpie_agents_active_count Current number of active agents\n\
          # TYPE kelpie_agents_active_count gauge\n\
@@ -105,13 +141,8 @@ async fn metrics(State(state): State<AppState>) -> Response {
          \n\
          # HELP kelpie_server_uptime_seconds Server uptime in seconds\n\
          # TYPE kelpie_server_uptime_seconds gauge\n\
-         kelpie_server_uptime_seconds {}\n\
-         \n\
-         # Note: Invocation metrics, activation/deactivation counters, and memory\n\
-         # usage by tier are recorded via OpenTelemetry but not yet exported here.\n\
-         # This will be completed when full Prometheus registry integration is added.\n",
-        agent_count,
-        state.uptime_seconds()
+         kelpie_server_uptime_seconds {}\n",
+        agent_count, uptime_seconds
     );
 
     (

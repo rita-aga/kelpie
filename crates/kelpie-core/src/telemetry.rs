@@ -207,7 +207,7 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<TelemetryGuard> {
 
     Ok(TelemetryGuard {
         _has_otel: has_otel,
-        _metrics_registry: metrics_registry,
+        metrics_registry,
     })
 }
 
@@ -215,7 +215,15 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<TelemetryGuard> {
 #[cfg(feature = "otel")]
 pub struct TelemetryGuard {
     _has_otel: bool,
-    _metrics_registry: Option<prometheus::Registry>,
+    metrics_registry: Option<prometheus::Registry>,
+}
+
+#[cfg(feature = "otel")]
+impl TelemetryGuard {
+    /// Get a reference to the Prometheus registry if metrics are enabled
+    pub fn registry(&self) -> Option<&prometheus::Registry> {
+        self.metrics_registry.as_ref()
+    }
 }
 
 /// Initialize Prometheus metrics

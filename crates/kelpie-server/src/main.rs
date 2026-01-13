@@ -13,6 +13,11 @@ use clap::Parser;
 use state::AppState;
 use std::net::SocketAddr;
 use tower_http::normalize_path::NormalizePath;
+
+#[cfg(feature = "otel")]
+use kelpie_core::telemetry::{init_telemetry, TelemetryConfig};
+
+#[cfg(not(feature = "otel"))]
 use tracing_subscriber::EnvFilter;
 
 /// Kelpie server CLI
@@ -38,16 +43,26 @@ struct Cli {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Initialize logging
-    let filter = match cli.verbose {
-        0 => "info,tower_http=debug",
-        1 => "debug",
-        _ => "trace",
+    // Initialize telemetry
+    #[cfg(feature = "otel")]
+    let _telemetry_guard = {
+        let config = TelemetryConfig::from_env().with_metrics(9090);
+        init_telemetry(config).map_err(|e| anyhow::anyhow!("Failed to initialize telemetry: {}", e))?
     };
 
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| filter.into()))
-        .init();
+    // Fallback logging when otel feature not enabled
+    #[cfg(not(feature = "otel"))]
+    {
+        let filter = match cli.verbose {
+            0 => "info,tower_http=debug",
+            1 => "debug",
+            _ => "trace",
+        };
+
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| filter.into()))
+            .init();
+    }
 
     tracing::info!("Kelpie server v{}", env!("CARGO_PKG_VERSION"));
     tracing::info!("Config: {}", cli.config);
@@ -58,7 +73,11 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid bind address '{}': {}", cli.bind, e))?;
 
-    // Create application state
+    // Create application state with Prometheus registry (if available)
+    #[cfg(feature = "otel")]
+    let state = AppState::with_registry(_telemetry_guard.registry());
+
+    #[cfg(not(feature = "otel"))]
     let state = AppState::new();
 
     // Create router

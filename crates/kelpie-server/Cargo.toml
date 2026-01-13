@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+default = []
+otel = ["kelpie-core/otel", "prometheus"]
+
 [dependencies]
 # Core kelpie crates
 kelpie-core = { workspace = true }
@@ -45,6 +49,9 @@ reqwest = { workspace = true }
 # Streaming for SSE
 tokio-stream = { workspace = true }
 futures = { workspace = true }
+
+# Metrics (optional, with otel feature)
+prometheus = { workspace = true, optional = true }
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

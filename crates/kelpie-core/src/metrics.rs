@@ -7,49 +7,76 @@
 
 #[cfg(feature = "otel")]
 use crate::constants::*;
+#[cfg(feature = "otel")]
+use once_cell::sync::Lazy;
+#[cfg(feature = "otel")]
+use opentelemetry::metrics::{Counter, Histogram};
+#[cfg(feature = "otel")]
+use opentelemetry::{global, KeyValue};
+
+// Cached instruments (created once, reused for all recordings)
+#[cfg(feature = "otel")]
+static AGENTS_ACTIVATED_COUNTER: Lazy<Counter<u64>> = Lazy::new(|| {
+    global::meter("kelpie")
+        .u64_counter(METRIC_NAME_AGENTS_ACTIVATED_TOTAL)
+        .with_description("Total number of agent activations")
+        .init()
+});
+
+#[cfg(feature = "otel")]
+static AGENTS_DEACTIVATED_COUNTER: Lazy<Counter<u64>> = Lazy::new(|| {
+    global::meter("kelpie")
+        .u64_counter(METRIC_NAME_AGENTS_DEACTIVATED_TOTAL)
+        .with_description("Total number of agent deactivations")
+        .init()
+});
+
+#[cfg(feature = "otel")]
+static INVOCATIONS_COUNTER: Lazy<Counter<u64>> = Lazy::new(|| {
+    global::meter("kelpie")
+        .u64_counter(METRIC_NAME_INVOCATIONS_TOTAL)
+        .with_description("Total number of invocations")
+        .init()
+});
+
+#[cfg(feature = "otel")]
+static INVOCATION_DURATION_HISTOGRAM: Lazy<Histogram<f64>> = Lazy::new(|| {
+    global::meter("kelpie")
+        .f64_histogram(METRIC_NAME_INVOCATION_DURATION_SECONDS)
+        .with_description("Invocation duration in seconds")
+        .init()
+});
+
+#[cfg(feature = "otel")]
+static STORAGE_OPERATIONS_COUNTER: Lazy<Counter<u64>> = Lazy::new(|| {
+    global::meter("kelpie")
+        .u64_counter(METRIC_NAME_STORAGE_OPERATIONS_TOTAL)
+        .with_description("Total storage operations")
+        .init()
+});
+
+#[cfg(feature = "otel")]
+static STORAGE_DURATION_HISTOGRAM: Lazy<Histogram<f64>> = Lazy::new(|| {
+    global::meter("kelpie")
+        .f64_histogram(METRIC_NAME_STORAGE_DURATION_SECONDS)
+        .with_description("Storage operation duration in seconds")
+        .init()
+});
 
 /// Record agent activation
 ///
-/// Increments both the active agent gauge and the activated counter.
+/// Increments the activated counter.
 #[cfg(feature = "otel")]
 pub fn record_agent_activated() {
-    use opentelemetry::global;
-
-    let meter = global::meter("kelpie");
-
-    // Increment active count
-    let gauge = meter
-        .u64_observable_gauge(METRIC_NAME_AGENTS_ACTIVE_COUNT)
-        .with_description("Current number of active agents")
-        .init();
-
-    // Increment activation counter
-    let counter = meter
-        .u64_counter(METRIC_NAME_AGENTS_ACTIVATED_TOTAL)
-        .with_description("Total number of agent activations")
-        .init();
-
-    counter.add(1, &[]);
+    AGENTS_ACTIVATED_COUNTER.add(1, &[]);
 }
 
 /// Record agent deactivation
 ///
-/// Decrements the active agent gauge and increments the deactivated counter.
+/// Increments the deactivated counter.
 #[cfg(feature = "otel")]
 pub fn record_agent_deactivated() {
-    use opentelemetry::global;
-
-    let meter = global::meter("kelpie");
-
-    // Decrement active count (handled via observable gauge)
-
-    // Increment deactivation counter
-    let counter = meter
-        .u64_counter(METRIC_NAME_AGENTS_DEACTIVATED_TOTAL)
-        .with_description("Total number of agent deactivations")
-        .init();
-
-    counter.add(1, &[]);
+    AGENTS_DEACTIVATED_COUNTER.add(1, &[]);
 }
 
 /// Record an invocation
@@ -60,18 +87,7 @@ pub fn record_agent_deactivated() {
 /// * `duration_seconds` - Duration in seconds
 #[cfg(feature = "otel")]
 pub fn record_invocation(operation: &str, status: &str, duration_seconds: f64) {
-    use opentelemetry::global;
-    use opentelemetry::KeyValue;
-
-    let meter = global::meter("kelpie");
-
-    // Increment invocation counter
-    let counter = meter
-        .u64_counter(METRIC_NAME_INVOCATIONS_TOTAL)
-        .with_description("Total number of invocations")
-        .init();
-
-    counter.add(
+    INVOCATIONS_COUNTER.add(
         1,
         &[
             KeyValue::new("operation", operation.to_string()),
@@ -79,37 +95,10 @@ pub fn record_invocation(operation: &str, status: &str, duration_seconds: f64) {
         ],
     );
 
-    // Record duration histogram
-    let histogram = meter
-        .f64_histogram(METRIC_NAME_INVOCATION_DURATION_SECONDS)
-        .with_description("Invocation duration in seconds")
-        .init();
-
-    histogram.record(
+    INVOCATION_DURATION_HISTOGRAM.record(
         duration_seconds,
         &[KeyValue::new("operation", operation.to_string())],
     );
-}
-
-/// Record memory usage
-///
-/// # Arguments
-/// * `tier` - Memory tier: "core", "working", or "archival"
-/// * `bytes` - Memory usage in bytes
-#[cfg(feature = "otel")]
-pub fn record_memory_usage(tier: &str, bytes: u64) {
-    use opentelemetry::global;
-    use opentelemetry::KeyValue;
-
-    let meter = global::meter("kelpie");
-
-    let gauge = meter
-        .u64_observable_gauge(METRIC_NAME_MEMORY_USAGE_BYTES)
-        .with_description("Memory usage in bytes by tier")
-        .init();
-
-    // Note: Observable gauges require a callback for actual value updates
-    // This is a placeholder - actual implementation needs callbacks
 }
 
 /// Record storage operation
@@ -120,18 +109,7 @@ pub fn record_memory_usage(tier: &str, bytes: u64) {
 /// * `duration_seconds` - Duration in seconds
 #[cfg(feature = "otel")]
 pub fn record_storage_operation(operation: &str, status: &str, duration_seconds: f64) {
-    use opentelemetry::global;
-    use opentelemetry::KeyValue;
-
-    let meter = global::meter("kelpie");
-
-    // Increment operation counter
-    let counter = meter
-        .u64_counter(METRIC_NAME_STORAGE_OPERATIONS_TOTAL)
-        .with_description("Total storage operations")
-        .init();
-
-    counter.add(
+    STORAGE_OPERATIONS_COUNTER.add(
         1,
         &[
             KeyValue::new("operation", operation.to_string()),
@@ -139,13 +117,7 @@ pub fn record_storage_operation(operation: &str, status: &str, duration_seconds:
         ],
     );
 
-    // Record duration histogram
-    let histogram = meter
-        .f64_histogram(METRIC_NAME_STORAGE_DURATION_SECONDS)
-        .with_description("Storage operation duration in seconds")
-        .init();
-
-    histogram.record(
+    STORAGE_DURATION_HISTOGRAM.record(
         duration_seconds,
         &[KeyValue::new("operation", operation.to_string())],
     );
@@ -162,9 +134,6 @@ pub fn record_agent_deactivated() {}
 pub fn record_invocation(_operation: &str, _status: &str, _duration_seconds: f64) {}
 
 #[cfg(not(feature = "otel"))]
-pub fn record_memory_usage(_tier: &str, _bytes: u64) {}
-
-#[cfg(not(feature = "otel"))]
 pub fn record_storage_operation(_operation: &str, _status: &str, _duration_seconds: f64) {}
 
 #[cfg(test)]
@@ -177,7 +146,6 @@ mod tests {
         record_agent_activated();
         record_agent_deactivated();
         record_invocation("test", "success", 0.1);
-        record_memory_usage("core", 1024);
         record_storage_operation("get", "success", 0.05);
     }
 }

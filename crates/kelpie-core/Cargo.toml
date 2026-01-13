@@ -26,10 +26,11 @@ tracing-opentelemetry = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 prometheus = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
+once_cell = { workspace = true, optional = true }
 
 [features]
 default = []
-otel = ["opentelemetry", "opentelemetry-otlp", "opentelemetry_sdk", "opentelemetry-prometheus", "prometheus", "tracing-opentelemetry", "tracing-subscriber", "tokio"]
+otel = ["opentelemetry", "opentelemetry-otlp", "opentelemetry_sdk", "opentelemetry-prometheus", "prometheus", "tracing-opentelemetry", "tracing-subscriber", "tokio", "once_cell"]
 
 [dev-dependencies]
 proptest = { workspace = true }
