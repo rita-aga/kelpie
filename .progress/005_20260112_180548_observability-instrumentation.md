@@ -1,13 +1,18 @@
 # Task: Complete Observability Instrumentation
 
 **Created:** 2026-01-12 18:05:48
-**State:** IMPLEMENTING
+**State:** COMPLETE
 **Phase 1 Complete:** 2026-01-12 18:30:00
 **Phase 1 Committed:** 281ddc1 (2026-01-12 18:40:00)
 **Phase 2 Complete:** 2026-01-12 18:55:00
 **Phase 2 Committed:** 2b0f4e6 (2026-01-12 19:00:00)
 **Phase 3 Complete:** 2026-01-12 19:30:00
 **Phase 3 Committed:** 808cca9 (2026-01-12 19:35:00)
+**Phase 4:** SKIPPED (user agreed - would mostly test OpenTelemetry, not our code)
+**Phase 5 Complete:** 2026-01-12 20:00:00
+**Phase 5 Committed:** f653054 (2026-01-12 20:05:00)
+**Metrics Fix Complete:** 2026-01-12 21:30:00
+**Metrics Fix Committed:** cb0128a (2026-01-12 21:35:00)
 
 ---
 
@@ -250,16 +255,16 @@ Complete the observability instrumentation for Kelpie by addressing three gaps:
 - [x] Phase 1 complete ✅
 - [x] Phase 2 complete ✅
 - [x] Phase 3 complete ✅
-- [ ] Phase 4 complete
-- [ ] Phase 5 complete
-- [ ] Tests passing (`cargo test`)
-- [ ] Clippy clean (`cargo clippy`)
-- [ ] Code formatted (`cargo fmt`)
-- [ ] /no-cap passed
-- [ ] Vision aligned
-- [ ] **DST coverage added** (Phase 4)
-- [ ] **What to Try section updated**
-- [ ] Committed and pushed
+- [x] Phase 4 SKIPPED (user agreed)
+- [x] Phase 5 complete ✅
+- [x] Tests passing (`cargo test`)
+- [x] Clippy clean (only pre-existing warnings)
+- [x] Code formatted (`cargo fmt`)
+- [x] /no-cap run - found issues, fixed them
+- [x] Vision aligned
+- [x] **DST coverage added** (SKIPPED - Phase 4)
+- [x] **What to Try section updated**
+- [x] Committed and pushed
 
 ---
 
@@ -367,16 +372,17 @@ pub const INVOCATION_TIME: &str = "invocation_time";
 | Metrics endpoint | `cargo run -p kelpie-server` then `curl http://localhost:8283/metrics` | Prometheus-format metrics (agent count, uptime) |
 | TelemetryConfig with metrics | `TelemetryConfig::new("test").with_metrics(9090)` | Config includes metrics_enabled=true |
 
-| **Comprehensive spans** | `RUST_LOG=info cargo run -p kelpie-server` | All API requests, activations, invocations traced |
-| **Invocation metrics** | Create agent, send messages, check `/metrics` | See `kelpie_invocations_total`, `kelpie_invocation_duration_seconds` |
-| **Memory metrics** | Create agents with blocks, check `/metrics` | See `kelpie_memory_usage_bytes{tier="core/working/archival"}` |
+| **Comprehensive spans** | `RUST_LOG=info cargo run -p kelpie-server --features otel` | All API requests, activations, invocations traced |
+| **OpenTelemetry metrics export** | `cargo run -p kelpie-server --features otel`, then `curl http://localhost:8283/metrics` | See `target_info{service_name="kelpie"}`, counters/histograms from OTel |
+| **Agent count metrics** | Create 3 agents, check `/metrics` | See `kelpie_agents_active_count 3` |
+| **Server uptime metrics** | Wait a few seconds, check `/metrics` | See `kelpie_server_uptime_seconds` increasing |
 | **Storage spans** | `RUST_LOG=debug cargo test -p kelpie-storage` | See spans for get/set/delete operations |
 
 ### Doesn't Work Yet ❌
 | What | Why | When Expected |
 |------|-----|---------------|
-| DST coverage for observability | Phase 4 not started yet | After Phase 4 |
-| Full documentation | METRICS.md and TRACING.md not created | After Phase 5 |
+| Observable gauge metrics (memory_usage_bytes) | Requires callback-based implementation with proper lifecycle | Future enhancement |
+| DST coverage for observability | SKIPPED - would mostly test OpenTelemetry, not our code | N/A |
 
 ### Known Limitations ⚠️
 - Metrics are in-memory only (lost on restart) - this is standard for Prometheus
@@ -388,22 +394,35 @@ pub const INVOCATION_TIME: &str = "invocation_time";
 ## Completion Notes
 
 **Verification Status:**
-- Tests: [pending]
-- Clippy: [pending]
-- Formatter: [pending]
-- /no-cap: [pending]
-- Vision alignment: [pending]
+- Tests: ✅ PASSING - All 81 tests pass (cargo test)
+- Clippy: ✅ CLEAN - Only pre-existing warnings (unused fields in messages.rs, streaming.rs)
+- Formatter: ✅ FORMATTED - cargo fmt passes
+- /no-cap: ✅ PASSED - Found fake metrics implementation, fixed it
+- Vision alignment: ✅ ALIGNED - Follows TigerStyle (explicit constants, no placeholders)
 
 **DST Coverage:**
-- Fault types tested: [pending]
-- Seeds tested: [pending]
-- Determinism verified: [pending]
+- Phase 4 SKIPPED - User agreed that DST tests would mostly test OpenTelemetry, not our code
+- Existing DST infrastructure remains in place for future use
 
 **Key Decisions Made:**
 - OpenTelemetry for unified observability
 - Pull-based metrics (Prometheus-native)
 - Critical path spans + DEBUG levels for internals
 - Skip Grafana dashboard (users build their own)
+- Skip DST coverage (would test OTel, not our implementation)
+- Use Lazy static for instrument caching (not per-call creation)
 
-**Commit:** [pending]
-**PR:** [pending]
+**Commits:**
+- 281ddc1: Phase 1 - Metrics infrastructure
+- 2b0f4e6: Phase 2 - Core metrics collection
+- 808cca9: Phase 3 - Comprehensive tracing spans
+- f653054: Phase 5 - Documentation (METRICS.md, TRACING.md)
+- cb0128a: Metrics fix - Proper OpenTelemetry Prometheus integration
+
+**Manual Verification:**
+- Started server with `--features otel`
+- Created 3 agents
+- Verified `/metrics` endpoint shows:
+  - `target_info{service_name="kelpie"} 1`
+  - `kelpie_agents_active_count 3`
+  - `kelpie_server_uptime_seconds` (increasing)
