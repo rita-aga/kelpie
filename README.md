@@ -90,6 +90,23 @@ let result = client.execute_tool("read_file", json!({"path": "/tmp/test.txt"})).
 └─────────────────────────────────────────────────────────┘
 ```
 
+## Agent Capabilities
+
+The agent framework is **~80% complete**. Core functionality works today:
+
+| Capability | Status | Notes |
+|------------|--------|-------|
+| Agent loop with LLM | ✅ Working | Claude/GPT support |
+| Tool execution | ✅ Working | Up to 5 chained calls |
+| Memory blocks in context | ✅ Working | Core memory → system prompt |
+| SSE streaming | ✅ Working | Real-time responses |
+| Memory editing tools | ✅ Working | `core_memory_append`, `archival_search`, etc. |
+| MCP tool integration | ✅ Working | Client ready, static config |
+| Agent types (MemGPT/ReAct) | 🔜 Planned | Single behavior currently |
+| Heartbeat/pause | 🔜 Planned | Fixed 5-iteration limit |
+
+> **Current behavior:** All agents use a MemGPT-style loop with memory tools. Agent type selection (`memgpt_agent`, `react_agent`) is planned for Phase 5.
+
 ## Crates
 
 | Crate | Description | Status |
@@ -97,13 +114,13 @@ let result = client.execute_tool("read_file", json!({"path": "/tmp/test.txt"})).
 | `kelpie-core` | Types, errors, constants | Complete |
 | `kelpie-runtime` | Actor dispatcher | Complete |
 | `kelpie-memory` | Memory hierarchy | Complete |
-| `kelpie-storage` | KV storage | Complete |
+| `kelpie-storage` | KV storage (FDB backend) | Complete (not wired) |
 | `kelpie-sandbox` | Process/VM isolation | Complete |
 | `kelpie-tools` | MCP client, tool registry | Complete |
 | `kelpie-cluster` | Node coordination | Complete |
-| `kelpie-server` | REST API server | Complete |
+| `kelpie-server` | REST API + agent loop | Complete |
 | `kelpie-dst` | Simulation testing | Complete |
-| `kelpie-agent` | Agent abstractions | Planned |
+| `kelpie-agent` | Agent type abstractions | Planned (Phase 5) |
 | `kelpie-wasm` | WASM actors | Planned |
 
 ## API Compatibility
@@ -240,9 +257,10 @@ Environment variables:
 See [VISION.md](./VISION.md) for detailed roadmap.
 
 **Next priorities:**
-1. Wire FDB backend to server (backend code complete, integration pending)
-2. Agent framework abstraction
-3. Authentication
+1. **Wire FDB to server** - Persistence (backend complete, integration pending)
+2. **Agent types** - MemGPT, ReAct, LettaV1 behaviors (Phase 5)
+3. **Heartbeat mechanism** - Agent-controlled pause/resume
+4. **Authentication** - API keys, rate limiting
 
 ## Engineering Principles
 
