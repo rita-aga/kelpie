@@ -16,6 +16,9 @@ Thumbs.db
 .env
 .env.local
 
+# Cargo local overrides
+.cargo/
+
 # Python
 __pycache__/
 *.py[cod]

@@ -47,7 +47,8 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(feature = "otel")]
     let _telemetry_guard = {
         let config = TelemetryConfig::from_env().with_metrics(9090);
-        init_telemetry(config).map_err(|e| anyhow::anyhow!("Failed to initialize telemetry: {}", e))?
+        init_telemetry(config)
+            .map_err(|e| anyhow::anyhow!("Failed to initialize telemetry: {}", e))?
     };
 
     // Fallback logging when otel feature not enabled

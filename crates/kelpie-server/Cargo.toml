@@ -50,8 +50,14 @@ reqwest = { workspace = true }
 tokio-stream = { workspace = true }
 futures = { workspace = true }
 
+# Memory backend (Umi)
+umi-memory = { workspace = true }
+
 # Metrics (optional, with otel feature)
 prometheus = { workspace = true, optional = true }
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
+kelpie-dst = { workspace = true }
+anyhow = { workspace = true }
+tokio-test = "0.4"

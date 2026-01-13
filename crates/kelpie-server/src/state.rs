@@ -357,7 +357,12 @@ impl AppState {
         // Note: Memory metrics (core, working, archival) are not yet implemented
         // because they require observable gauges with callbacks, which need proper
         // lifecycle management. For now, we just calculate the values here for future use.
-        let _ = (core_memory_bytes, working_memory_bytes, archival_memory_bytes, total_blocks);
+        let _ = (
+            core_memory_bytes,
+            working_memory_bytes,
+            archival_memory_bytes,
+            total_blocks,
+        );
 
         Ok(())
     }

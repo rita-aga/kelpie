@@ -62,8 +62,8 @@ rand_chacha = "0.3"
 # System utilities
 hostname = "0.4"
 
-# Time
-chrono = { version = "0.4", features = ["serde"] }
+# Time - pin to 0.4.38 for Umi compatibility (arrow-arith conflict)
+chrono = { version = "=0.4.38", features = ["serde"] }
 
 # Hashing and checksums
 crc32fast = "1.3"
@@ -116,6 +116,9 @@ kelpie-dst = { path = "crates/kelpie-dst" }
 kelpie-memory = { path = "crates/kelpie-memory" }
 kelpie-sandbox = { path = "crates/kelpie-sandbox" }
 kelpie-tools = { path = "crates/kelpie-tools" }
+
+# External memory library
+umi-memory = { git = "https://github.com/rita-aga/umi", package = "umi-memory" }
 
 [profile.release]
 lto = true
