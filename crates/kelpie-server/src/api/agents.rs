@@ -92,18 +92,18 @@ async fn create_agent(
     // Extract block_ids before consuming request
     let block_ids = request.block_ids.clone();
 
-    let mut agent = AgentState::from_request(request);
+    // Create agent via dual-mode method
+    let mut created = state.create_agent_async(request).await?;
 
     // Look up and attach standalone blocks by ID (letta-code compatibility)
+    // Note: This is a temporary workaround until standalone blocks are integrated into the actor model
     for block_id in block_ids {
         if let Ok(Some(block)) = state.get_standalone_block(&block_id) {
-            agent.blocks.push(block);
+            created.blocks.push(block);
         } else {
             tracing::warn!(block_id = %block_id, "standalone block not found, skipping");
         }
     }
-
-    let created = state.create_agent(agent)?;
 
     tracing::info!(agent_id = %created.id, name = %created.name, block_count = created.blocks.len(), "created agent");
     Ok(Json(created))

@@ -1,7 +1,7 @@
 # Task: HTTP Handler Migration to AgentService (Plan 007 Phase 6)
 
 **Created:** 2026-01-14 23:45:00
-**State:** PHASE 6.2 COMPLETE (GET /v1/agents/{id} Migrated)
+**State:** PHASE 6.3 IN PROGRESS (POST /v1/agents Migrated, 2/5 handlers done)
 **Parent Plan:** 007_20260113_actor_based_agent_server.md (Phase 6)
 
 ---
@@ -292,6 +292,8 @@ cargo run -p kelpie-server
 | 2026-01-14 23:45 | Dual mode (Option A) | Zero risk, incremental | Temporary complexity |
 | 2026-01-14 23:45 | Complexity order (Option B) | Build confidence gradually | Not logical CRUD order |
 | 2026-01-14 23:45 | Parameterized tests (Option B) | Automated, thorough | More test code |
+| 2026-01-14 | Skip list_agents for now | Requires registry infrastructure, not critical path | List remains HashMap-based |
+| 2026-01-14 | Migrate create before update/delete | More common operation, builds confidence | Not CRUD order |
 
 ---
 
@@ -308,6 +310,17 @@ cargo run -p kelpie-server
 - Handler Migration Verified: First handler successfully using get_agent_async()
 - Doesn't Work Yet: Remaining 5 handlers still use HashMap
 - Known Limitations: Dual-mode adds complexity, but first migration proven safe
+
+**After Phase 6.3a (POST /v1/agents migrated):**
+- Works Now:
+  - GET /v1/agents/{id} uses dual-mode (get_agent_async)
+  - POST /v1/agents uses dual-mode (create_agent_async)
+  - Standalone block lookup still works (temporary workaround)
+- Test Results: 105 tests passing (1 pre-existing flaky delete test)
+- Handlers Migrated: 2/6 (33%)
+- Skipped: GET /v1/agents (list) - requires registry infrastructure
+- Doesn't Work Yet: update, delete, send_message handlers
+- Known Limitations: List operation continues using HashMap
 
 **After Phase 6.3 (All handlers migrated):**
 - Works Now: All handlers work in both modes
