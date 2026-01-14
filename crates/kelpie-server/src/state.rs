@@ -8,6 +8,7 @@
 //! When storage is configured, state is persisted to durable backend (FDB/Sim).
 //! In-memory HashMaps serve as hot cache, storage is source of truth.
 
+use crate::actor::{AgentActor, RealLlmAdapter};
 use crate::llm::LlmClient;
 use crate::models::ArchivalEntry;
 use crate::models::{AgentState, Block, Message};
@@ -15,7 +16,8 @@ use crate::service::AgentService;
 use crate::storage::{AgentStorage, StorageError};
 use crate::tools::UnifiedToolRegistry;
 use chrono::Utc;
-use kelpie_runtime::DispatcherHandle;
+use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig, DispatcherHandle};
+use kelpie_storage::memory::MemoryKV;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -107,11 +109,49 @@ impl AppState {
 
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
 
+        // Phase 6.4: Create AgentService and Dispatcher for production
+        let (agent_service, dispatcher, shutdown_tx) = if let Some(ref llm_client) = llm {
+            tracing::info!("Initializing actor-based agent service");
+
+            // Create LLM adapter for actor
+            let llm_adapter: Arc<dyn crate::actor::LlmClient> =
+                Arc::new(RealLlmAdapter::new(llm_client.clone()));
+
+            // Create AgentActor
+            let actor = AgentActor::new(llm_adapter);
+
+            // Create CloneFactory for dispatcher
+            let factory = Arc::new(CloneFactory::new(actor));
+
+            // Use MemoryKV for actor storage (TODO: production will use FDB)
+            let kv = Arc::new(MemoryKV::new());
+
+            // Create Dispatcher
+            let mut dispatcher = Dispatcher::new(factory, kv, DispatcherConfig::default());
+            let handle = dispatcher.handle();
+
+            // Spawn dispatcher runtime
+            tokio::spawn(async move {
+                dispatcher.run().await;
+            });
+
+            // Create service
+            let service = AgentService::new(handle.clone());
+
+            // Create shutdown channel
+            let (tx, _rx) = tokio::sync::broadcast::channel(1);
+
+            (Some(service), Some(handle), Some(tx))
+        } else {
+            tracing::warn!("Actor service disabled - no LLM client configured");
+            (None, None, None)
+        };
+
         Self {
             inner: Arc::new(AppStateInner {
-                agent_service: None,
-                dispatcher: None,
-                shutdown_tx: None,
+                agent_service,
+                dispatcher,
+                shutdown_tx,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
                 tools: RwLock::new(HashMap::new()),
@@ -142,11 +182,49 @@ impl AppState {
 
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
 
+        // Phase 6.4: Create AgentService and Dispatcher for production
+        let (agent_service, dispatcher, shutdown_tx) = if let Some(ref llm_client) = llm {
+            tracing::info!("Initializing actor-based agent service");
+
+            // Create LLM adapter for actor
+            let llm_adapter: Arc<dyn crate::actor::LlmClient> =
+                Arc::new(RealLlmAdapter::new(llm_client.clone()));
+
+            // Create AgentActor
+            let actor = AgentActor::new(llm_adapter);
+
+            // Create CloneFactory for dispatcher
+            let factory = Arc::new(CloneFactory::new(actor));
+
+            // Use MemoryKV for actor storage (TODO: production will use FDB)
+            let kv = Arc::new(MemoryKV::new());
+
+            // Create Dispatcher
+            let mut dispatcher = Dispatcher::new(factory, kv, DispatcherConfig::default());
+            let handle = dispatcher.handle();
+
+            // Spawn dispatcher runtime
+            tokio::spawn(async move {
+                dispatcher.run().await;
+            });
+
+            // Create service
+            let service = AgentService::new(handle.clone());
+
+            // Create shutdown channel
+            let (tx, _rx) = tokio::sync::broadcast::channel(1);
+
+            (Some(service), Some(handle), Some(tx))
+        } else {
+            tracing::warn!("Actor service disabled - no LLM client configured");
+            (None, None, None)
+        };
+
         Self {
             inner: Arc::new(AppStateInner {
-                agent_service: None,
-                dispatcher: None,
-                shutdown_tx: None,
+                agent_service,
+                dispatcher,
+                shutdown_tx,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
                 tools: RwLock::new(HashMap::new()),

@@ -8,5 +8,5 @@ pub mod llm_trait;
 pub mod state;
 
 pub use agent_actor::AgentActor;
-pub use llm_trait::{LlmClient, LlmMessage, LlmResponse, LlmToolCall};
+pub use llm_trait::{LlmClient, LlmMessage, LlmResponse, LlmToolCall, RealLlmAdapter};
 pub use state::AgentActorState;
