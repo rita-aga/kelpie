@@ -28,7 +28,7 @@ Memory tools are implemented as thin wrappers around `AppState` methods, registe
 ┌─────────────────────────────────────────────────────────────┐
 │                   Memory Tools (tools/memory.rs)            │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │ core_memory_append     → state.update_block_by_label │  │
+│  │ core_memory_append     → state.append_or_create_block│  │  ← BUG-001 FIX (atomic)
 │  │ core_memory_replace    → state.update_block_by_label │  │
 │  │ archival_memory_insert → state.add_archival          │  │
 │  │ archival_memory_search → state.search_archival       │  │
@@ -42,10 +42,19 @@ Memory tools are implemented as thin wrappers around `AppState` methods, registe
 │  │ Fault Injection Points (cfg(feature = "dst")):        │  │
 │  │  - block_read    → get_block_by_label                 │  │
 │  │  - block_write   → update_block_by_label              │  │
+│  │  - block_write   → append_or_create_block_by_label    │  │  ← BUG-001 FIX
 │  │  - agent_write   → update_agent                       │  │
 │  │  - archival_read → search_archival                    │  │
 │  │  - archival_write→ add_archival                       │  │
 │  │  - message_read  → list_messages                      │  │
+│  └──────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+                              │
+┌─────────────────────────────────────────────────────────────┐
+│               UmiMemoryBackend (memory/umi_backend.rs)       │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │ search_archival → recall + FILTER by agent_id        │  │  ← BUG-002 FIX
+│  │ search_conversations → recall + FILTER by agent_id   │  │  ← BUG-002 FIX
 │  └──────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -58,26 +67,78 @@ Memory tools are implemented as thin wrappers around `AppState` methods, registe
 
 3. **Error Handling**: Tools return user-friendly error messages (not panics) when operations fail.
 
-### Known Issue: TOCTOU Race Condition (BUG-001)
+### Bugs Found and Fixed Through DST
 
-The `core_memory_append` implementation has a TOCTOU (Time-of-Check to Time-of-Use) race condition:
+#### BUG-001: TOCTOU Race Condition in core_memory_append (FIXED)
+
+**Discovery:** Identified during DST implementation review.
+
+**Root Cause:** The old implementation had a check-then-act pattern:
 
 ```rust
-// Check if block exists
-let block_exists = state.get_block_by_label(&agent_id, &label)?;
-
-// GAP: Another thread could create the block here!
-
+// OLD CODE (TOCTOU BUG):
+let block_exists = state.get_block_by_label(&agent_id, &label)?;  // READ
+// GAP: Another thread could create/delete the block here!
 if block_exists.is_some() {
-    state.update_block_by_label(...)  // Append
+    state.update_block_by_label(...)  // WRITE - assumes block still exists
 } else {
-    state.update_agent(...)  // Create new block
+    state.update_agent(...)  // WRITE - assumes block still doesn't exist
 }
 ```
 
 **Impact:** Under concurrent requests, duplicate blocks with the same label could be created.
 
-**Recommended Fix:** Atomic `append_or_create_block_by_label()` operation that uses a single write lock.
+**Fix:** Added atomic `append_or_create_block_by_label()` method in `state.rs` that holds a single write lock for the entire operation:
+
+```rust
+// NEW CODE (ATOMIC):
+pub fn append_or_create_block_by_label(&self, agent_id: &str, label: &str, content: &str)
+    -> Result<Block, StateError>
+{
+    let mut agents = self.inner.agents.write()?;  // Single lock for entire operation
+    let agent = agents.get_mut(agent_id)?;
+
+    if let Some(block) = agent.blocks.iter_mut().find(|b| b.label == label) {
+        block.value.push_str(content);  // Append
+        Ok(block.clone())
+    } else {
+        let block = Block::new(label, content);  // Create
+        agent.blocks.push(block.clone());
+        Ok(block)
+    }
+}
+```
+
+**Verification:** `test_core_memory_append_with_block_read_fault` now passes (operation no longer requires separate read).
+
+#### BUG-002: Agent Isolation Not Enforced in Archival Search (FIXED)
+
+**Discovery:** Found by DST simulation test `test_sim_multi_agent_isolation`.
+
+**Root Cause:** Umi's `recall` function does semantic search across ALL stored data. The agent prefix in the query made results semantically similar but didn't filter out other agents' data:
+
+```rust
+// OLD CODE (NO ISOLATION):
+let scoped_query = format!("[agent:{}][archival] {}", self.agent_id, query);
+let results = memory.recall(&scoped_query, ...).await?;  // Returns ANY similar content!
+```
+
+**Impact:** Agent 1 searching for "secret" could see Agent 2's data if semantically similar.
+
+**Fix:** Added post-search filtering in `umi_backend.rs` to only return data belonging to the requesting agent:
+
+```rust
+// NEW CODE (ISOLATION ENFORCED):
+let raw_results = memory.recall(&scoped_query, ...).await?;
+let agent_prefix = format!("[agent:{}][archival]", self.agent_id);
+let filtered: Vec<Entity> = raw_results
+    .into_iter()
+    .filter(|entity| entity.content.contains(&agent_prefix))  // FILTER!
+    .take(limit)
+    .collect();
+```
+
+**Verification:** `test_sim_multi_agent_isolation` now verifies strict agent isolation with assertions that fail if cross-agent data is returned.
 
 ---
 
@@ -140,17 +201,20 @@ if block_exists.is_some() {
 
 ### Negative
 
-1. **TOCTOU Bug:** Race condition in `core_memory_append` needs fixing.
-2. **No Semantic Search:** AppState uses text search, not embeddings. Umi would provide semantic search.
-3. **In-Memory Only:** Current implementation loses data on restart (FDB integration pending).
+1. ~~**TOCTOU Bug:** Race condition in `core_memory_append` needs fixing.~~ **FIXED (BUG-001)**
+2. ~~**Agent Isolation Bug:** Archival search could return other agents' data.~~ **FIXED (BUG-002)**
+3. **No Semantic Search:** AppState uses text search, not embeddings. Umi would provide semantic search.
+4. **In-Memory Only:** Current implementation loses data on restart (FDB integration pending).
 
 ### Risks
 
-1. **Data Corruption:** TOCTOU race could create duplicate blocks under high concurrency.
-   - Mitigation: Atomic operation, or document as limitation until fixed.
+1. ~~**Data Corruption:** TOCTOU race could create duplicate blocks under high concurrency.~~ **MITIGATED (BUG-001 fixed)**
 
 2. **Performance:** RwLock contention under high load.
    - Mitigation: Monitor, add sharding if needed.
+
+3. **Search Performance:** Agent isolation filtering requires over-fetching then filtering.
+   - Mitigation: Acceptable for current scale; add indexed filtering if needed.
 
 ---
 
@@ -219,10 +283,12 @@ The race condition was not triggered because:
 
 ## Future Work
 
-1. **Fix TOCTOU Race (P0):** Implement atomic `append_or_create_block_by_label()`.
-2. **Umi Integration (P1):** Add semantic search via Umi backend.
-3. **FDB Persistence (P1):** Wire FDB for durable storage.
-4. **Performance Testing (P2):** Benchmark under high concurrency.
+1. ~~**Fix TOCTOU Race (P0):**~~ ✅ **DONE** - Implemented atomic `append_or_create_block_by_label()`.
+2. ~~**Fix Agent Isolation (P0):**~~ ✅ **DONE** - Added post-search filtering in UmiMemoryBackend.
+3. **Umi Integration (P1):** Add semantic search via Umi backend.
+4. **FDB Persistence (P1):** Wire FDB for durable storage.
+5. **Performance Testing (P2):** Benchmark under high concurrency.
+6. **Indexed Agent Filtering (P3):** If search performance degrades, add agent_id index to avoid over-fetching.
 
 ---
 
