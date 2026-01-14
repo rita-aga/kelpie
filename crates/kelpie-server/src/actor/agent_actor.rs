@@ -4,7 +4,7 @@
 
 use super::llm_trait::{LlmClient, LlmMessage};
 use super::state::AgentActorState;
-use crate::models::{AgentState, Block, CreateAgentRequest};
+use crate::models::{AgentState, CreateAgentRequest, UpdateAgentRequest};
 use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::actor::{Actor, ActorContext};
@@ -40,7 +40,10 @@ impl AgentActor {
         assert!(ctx.state.agent.is_none(), "Agent already created");
 
         // Create agent state from request
-        let agent_state = AgentState::from_request(request);
+        let mut agent_state = AgentState::from_request(request);
+
+        // Set agent ID to match actor ID (just the id part, not the full namespace:id)
+        agent_state.id = ctx.id.id().to_string();
 
         // Store in actor state
         ctx.state.agent = Some(agent_state);
@@ -91,6 +94,37 @@ impl AgentActor {
                 message: format!("Block '{}' not found", append.label),
             });
         }
+
+        Ok(())
+    }
+
+    /// Handle "update_agent" operation - update agent metadata
+    async fn handle_update_agent(
+        &self,
+        ctx: &mut ActorContext<AgentActorState>,
+        update: UpdateAgentRequest,
+    ) -> Result<AgentState> {
+        // Get mutable agent state
+        let agent = ctx.state.agent_mut().ok_or_else(|| Error::Internal {
+            message: "Agent not created".to_string(),
+        })?;
+
+        // Apply update
+        agent.apply_update(update);
+
+        // Return updated state
+        ctx.state.agent().cloned().ok_or_else(|| Error::Internal {
+            message: "Agent not created".to_string(),
+        })
+    }
+
+    /// Handle "delete_agent" operation - mark agent as deleted
+    async fn handle_delete_agent(&self, ctx: &mut ActorContext<AgentActorState>) -> Result<()> {
+        // Clear agent state to mark as deleted
+        ctx.state.agent = None;
+
+        // Delete state from storage
+        ctx.kv_delete(b"agent_state").await?;
 
         Ok(())
     }
@@ -212,6 +246,18 @@ impl Actor for AgentActor {
                 self.handle_core_memory_append(ctx, append).await?;
                 Ok(Bytes::from("{}"))
             }
+            "update_agent" => {
+                let update: UpdateAgentRequest =
+                    serde_json::from_slice(&payload).map_err(|e| Error::Internal {
+                        message: format!("Failed to deserialize UpdateAgentRequest: {}", e),
+                    })?;
+                let response = self.handle_update_agent(ctx, update).await?;
+                let response_bytes =
+                    serde_json::to_vec(&response).map_err(|e| Error::Internal {
+                        message: format!("Failed to serialize AgentState: {}", e),
+                    })?;
+                Ok(Bytes::from(response_bytes))
+            }
             "handle_message" => {
                 let request: HandleMessageRequest =
                     serde_json::from_slice(&payload).map_err(|e| Error::Internal {
@@ -223,6 +269,10 @@ impl Actor for AgentActor {
                         message: format!("Failed to serialize HandleMessageResponse: {}", e),
                     })?;
                 Ok(Bytes::from(response_bytes))
+            }
+            "delete_agent" => {
+                self.handle_delete_agent(ctx).await?;
+                Ok(Bytes::from("{}"))
             }
             _ => Err(Error::Internal {
                 message: format!("Unknown operation: {}", operation),

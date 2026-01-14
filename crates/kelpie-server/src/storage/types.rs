@@ -25,9 +25,11 @@ pub const PENDING_TOOL_CALLS_MAX: usize = 10;
 pub const TOOL_INPUT_SIZE_BYTES_MAX: usize = 1024 * 1024; // 1MB
 
 /// Maximum messages to load by default
+#[allow(dead_code)]
 pub const MESSAGES_LOAD_LIMIT_DEFAULT: usize = 50;
 
 /// Maximum messages to load
+#[allow(dead_code)]
 pub const MESSAGES_LOAD_LIMIT_MAX: usize = 1000;
 
 // =============================================================================

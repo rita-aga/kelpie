@@ -7,6 +7,7 @@ pub mod actor;
 pub mod llm;
 pub mod memory;
 pub mod models;
+pub mod service;
 pub mod state;
 pub mod storage;
 pub mod tools;
