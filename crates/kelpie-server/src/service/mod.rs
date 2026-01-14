@@ -46,13 +46,19 @@ impl AgentService {
             message: format!("Failed to serialize CreateAgentRequest: {}", e),
         })?;
 
-        // Invoke create operation
-        self.dispatcher
+        // Invoke create operation - returns AgentState directly (BUG-001 fix)
+        let response = self
+            .dispatcher
             .invoke(actor_id.clone(), "create".to_string(), Bytes::from(payload))
             .await?;
 
-        // Get agent state
-        self.get_agent(actor_id.id()).await
+        // Deserialize and return the created agent state
+        serde_json::from_slice(&response).map_err(|e| Error::Internal {
+            message: format!(
+                "Failed to deserialize AgentState from create response: {}",
+                e
+            ),
+        })
     }
 
     /// Send message to agent

@@ -31,11 +31,14 @@ impl AgentActor {
     }
 
     /// Handle "create" operation - initialize agent from request
+    ///
+    /// Returns the created AgentState directly to avoid timing window
+    /// between state creation and persistence (BUG-001 fix)
     async fn handle_create(
         &self,
         ctx: &mut ActorContext<AgentActorState>,
         request: CreateAgentRequest,
-    ) -> Result<()> {
+    ) -> Result<AgentState> {
         // TigerStyle: Assertions for preconditions
         assert!(ctx.state.agent.is_none(), "Agent already created");
 
@@ -46,9 +49,10 @@ impl AgentActor {
         agent_state.id = ctx.id.id().to_string();
 
         // Store in actor state
-        ctx.state.agent = Some(agent_state);
+        ctx.state.agent = Some(agent_state.clone());
 
-        Ok(())
+        // Return the created state directly (BUG-001 fix)
+        Ok(agent_state)
     }
 
     /// Handle "get_state" operation - return current agent state
@@ -220,8 +224,11 @@ impl Actor for AgentActor {
                     serde_json::from_slice(&payload).map_err(|e| Error::Internal {
                         message: format!("Failed to deserialize CreateAgentRequest: {}", e),
                     })?;
-                self.handle_create(ctx, request).await?;
-                Ok(Bytes::from("{}"))
+                let agent_state = self.handle_create(ctx, request).await?;
+                let response = serde_json::to_vec(&agent_state).map_err(|e| Error::Internal {
+                    message: format!("Failed to serialize AgentState: {}", e),
+                })?;
+                Ok(Bytes::from(response))
             }
             "get_state" => {
                 let state = self.handle_get_state(ctx).await?;

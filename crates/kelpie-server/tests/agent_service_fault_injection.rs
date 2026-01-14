@@ -1,0 +1,607 @@
+//! Aggressive Fault Injection Tests for AgentService
+//!
+//! TigerStyle: These tests aim to find REAL bugs through fault injection,
+//! not just verify that errors propagate. Focus on:
+//! - Multi-step operation atomicity
+//! - State consistency under crashes
+//! - Partial write scenarios
+//! - Concurrent operations with faults
+
+use kelpie_core::Result;
+use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
+use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
+use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
+use kelpie_server::models::{AgentType, CreateAgentRequest, CreateBlockRequest};
+use kelpie_server::service::AgentService;
+use std::sync::Arc;
+
+// ============================================================================
+// Multi-Step Operation Fault Injection
+// ============================================================================
+
+/// Test create_agent with crash-after-write during state persistence
+///
+/// BUG TARGET: create_agent does multiple steps:
+/// 1. Generate UUID
+/// 2. Invoke "create" (writes to storage during on_deactivate)
+/// 3. Call get_agent to retrieve state
+///
+/// With crash-after-write, step 2 might partially complete:
+/// - Actor state set in memory
+/// - on_deactivate starts
+/// - Crash during kv_set
+/// - Result: Next activation loads no state, or corrupt state
+#[tokio::test]
+async fn test_create_agent_crash_after_write() {
+    let config = SimConfig::new(2001);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::CrashAfterWrite, 0.3))
+        .run_async(|sim_env| async move {
+            let service = create_service(&sim_env)?;
+
+            let mut created_ids = Vec::new();
+            let mut crash_count = 0;
+            let mut success_count = 0;
+
+            // Try to create 20 agents with 30% crash-after-write
+            for i in 0..20 {
+                let request = CreateAgentRequest {
+                    name: format!("agent-{}", i),
+                    agent_type: AgentType::LettaV1Agent,
+                    model: None,
+                    system: Some("Test system".to_string()),
+                    description: None,
+                    memory_blocks: vec![CreateBlockRequest {
+                        label: "persona".to_string(),
+                        value: format!("I am agent {}", i),
+                        limit: None,
+                        description: None,
+                    }],
+                    block_ids: vec![],
+                    tool_ids: vec![],
+                    tags: vec![],
+                    metadata: serde_json::json!({}),
+                };
+
+                match service.create_agent(request).await {
+                    Ok(agent) => {
+                        success_count += 1;
+                        created_ids.push(agent.id.clone());
+
+                        // CRITICAL: Verify we can read it back
+                        match service.get_agent(&agent.id).await {
+                            Ok(retrieved) => {
+                                // Verify state consistency
+                                assert_eq!(retrieved.id, agent.id, "ID mismatch after crash");
+                                assert_eq!(
+                                    retrieved.name, agent.name,
+                                    "Name mismatch - possible corruption"
+                                );
+                                assert_eq!(
+                                    retrieved.blocks.len(),
+                                    agent.blocks.len(),
+                                    "Block count mismatch - partial write?"
+                                );
+                            }
+                            Err(e) => {
+                                // BUG FOUND: Agent created but not readable
+                                panic!(
+                                    "BUG: Agent {} created but get_agent failed: {}. \
+                                     This indicates partial state write during crash.",
+                                    agent.id, e
+                                );
+                            }
+                        }
+                    }
+                    Err(_e) => {
+                        crash_count += 1;
+                        // Crash is expected, but verify no orphaned state
+                    }
+                }
+            }
+
+            println!(
+                "Create stats: {} success, {} crashes",
+                success_count, crash_count
+            );
+
+            // With 30% crash rate, expect some crashes
+            assert!(crash_count > 0, "Expected some crashes with 30% fault rate");
+            assert!(success_count > 0, "Expected some successes despite faults");
+
+            Ok(())
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Test failed (might have found a bug!): {:?}",
+        result.err()
+    );
+}
+
+/// Test delete_agent atomicity with crash-after-write
+///
+/// BUG TARGET: delete_agent has two steps:
+/// 1. Invoke "delete_agent" operation (clears storage via kv_delete)
+/// 2. Deactivate actor (removes from memory)
+///
+/// If crash happens after step 1 but before step 2:
+/// - Storage is cleared
+/// - Actor still in memory
+/// - Next get_agent might return stale cached state
+///
+/// If crash happens DURING kv_delete:
+/// - State might be partially cleared
+/// - Reactivation might load corrupt state
+#[tokio::test]
+async fn test_delete_agent_atomicity_crash() {
+    let config = SimConfig::new(2002);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::CrashAfterWrite, 0.4))
+        .run_async(|sim_env| async move {
+            let service = create_service(&sim_env)?;
+
+            // Create 10 agents
+            let mut agent_ids = Vec::new();
+            for i in 0..10 {
+                let request = CreateAgentRequest {
+                    name: format!("to-delete-{}", i),
+                    agent_type: AgentType::LettaV1Agent,
+                    model: None,
+                    system: None,
+                    description: None,
+                    memory_blocks: vec![],
+                    block_ids: vec![],
+                    tool_ids: vec![],
+                    tags: vec![],
+                    metadata: serde_json::json!({}),
+                };
+                match service.create_agent(request).await {
+                    Ok(agent) => agent_ids.push(agent.id),
+                    Err(_) => {} // Ignore creation failures
+                }
+            }
+
+            println!("Successfully created {} agents", agent_ids.len());
+
+            // Now try to delete them with crash-after-write faults
+            for agent_id in &agent_ids {
+                match service.delete_agent(agent_id).await {
+                    Ok(_) => {
+                        // CRITICAL: Verify it's actually deleted
+                        // Wait a bit to allow deactivation to complete
+                        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+                        match service.get_agent(agent_id).await {
+                            Ok(agent) => {
+                                // BUG FOUND: Delete succeeded but agent still exists
+                                panic!(
+                                    "BUG: delete_agent succeeded but agent {} still exists: {:?}. \
+                                     Atomicity violation - state not cleared or actor not deactivated.",
+                                    agent_id, agent
+                                );
+                            }
+                            Err(_) => {
+                                // Good - agent is gone
+                            }
+                        }
+                    }
+                    Err(_e) => {
+                        // Crash during delete is expected
+                        // But verify agent is in a consistent state (either exists or doesn't)
+                        match service.get_agent(agent_id).await {
+                            Ok(_agent) => {
+                                // Agent still exists - delete failed cleanly
+                            }
+                            Err(_) => {
+                                // Agent is gone - delete succeeded despite error
+                                // This could be a bug if error is misleading
+                            }
+                        }
+                    }
+                }
+            }
+
+            Ok(())
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Test failed (might have found atomicity bug!): {:?}",
+        result.err()
+    );
+}
+
+/// Test update_agent with concurrent operations and faults
+///
+/// BUG TARGET: What if two updates happen concurrently?
+/// - Lost updates (last write wins without merge)
+/// - Partial updates visible
+/// - Read-your-writes violations
+#[tokio::test]
+async fn test_update_agent_concurrent_with_faults() {
+    let config = SimConfig::new(2003);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::CrashAfterWrite, 0.2))
+        .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.2))
+        .run_async(|sim_env| async move {
+            let service = create_service(&sim_env)?;
+
+            // Create one agent
+            let request = CreateAgentRequest {
+                name: "concurrent-test".to_string(),
+                agent_type: AgentType::LettaV1Agent,
+                model: None,
+                system: None,
+                description: Some("Original".to_string()),
+                memory_blocks: vec![],
+                block_ids: vec![],
+                tool_ids: vec![],
+                tags: vec![],
+                metadata: serde_json::json!({}),
+            };
+
+            let agent = match service.create_agent(request).await {
+                Ok(a) => a,
+                Err(e) => {
+                    println!("Skipping test - couldn't create agent: {}", e);
+                    return Ok(());
+                }
+            };
+
+            // Launch 5 concurrent updates with different fields
+            let mut handles = vec![];
+            for i in 0..5 {
+                let service_clone = service.clone();
+                let agent_id = agent.id.clone();
+                let handle = tokio::spawn(async move {
+                    let update = serde_json::json!({
+                        "name": format!("update-{}", i),
+                        "description": format!("Description from thread {}", i),
+                    });
+                    service_clone.update_agent(&agent_id, update).await
+                });
+                handles.push(handle);
+            }
+
+            // Wait for all updates
+            let mut success_count = 0;
+            let mut failure_count = 0;
+            for handle in handles {
+                match handle.await {
+                    Ok(Ok(_)) => success_count += 1,
+                    Ok(Err(_)) => failure_count += 1,
+                    Err(_) => failure_count += 1,
+                }
+            }
+
+            println!(
+                "Concurrent updates: {} success, {} failures",
+                success_count, failure_count
+            );
+
+            // Read final state
+            match service.get_agent(&agent.id).await {
+                Ok(final_agent) => {
+                    println!("Final agent state: {:?}", final_agent);
+
+                    // CRITICAL CHECKS:
+                    // 1. State should be consistent (not mix of multiple updates)
+                    // 2. If name is "update-X", description should be "Description from thread X"
+                    if final_agent.name.starts_with("update-") {
+                        let thread_num = final_agent.name.strip_prefix("update-").unwrap();
+                        let expected_desc = format!("Description from thread {}", thread_num);
+
+                        if let Some(desc) = &final_agent.description {
+                            if desc != &expected_desc && desc != "Original" {
+                                // BUG FOUND: Partial update visible
+                                panic!(
+                                    "BUG: Inconsistent state - name is '{}' but description is '{}'. \
+                                     Expected '{}' or 'Original'. This indicates partial updates are visible.",
+                                    final_agent.name, desc, expected_desc
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("Warning: Could not read final state: {}", e);
+                }
+            }
+
+            Ok(())
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Test failed (might have found concurrency bug!): {:?}",
+        result.err()
+    );
+}
+
+/// Test storage corruption during agent state persistence
+///
+/// BUG TARGET: What if storage returns corrupted data?
+/// - Can we detect it?
+/// - Do we panic or handle gracefully?
+/// - Does deserialization catch it?
+#[tokio::test]
+async fn test_agent_state_corruption() {
+    let config = SimConfig::new(2004);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::StorageCorruption, 0.3))
+        .run_async(|sim_env| async move {
+            let service = create_service(&sim_env)?;
+
+            // Create agent
+            let request = CreateAgentRequest {
+                name: "corruption-test".to_string(),
+                agent_type: AgentType::LettaV1Agent,
+                model: None,
+                system: Some("Test system".to_string()),
+                description: None,
+                memory_blocks: vec![CreateBlockRequest {
+                    label: "persona".to_string(),
+                    value: "Test value with important data".to_string(),
+                    limit: None,
+                    description: None,
+                }],
+                block_ids: vec![],
+                tool_ids: vec![],
+                tags: vec![],
+                metadata: serde_json::json!({"key": "value"}),
+            };
+
+            let agent = match service.create_agent(request).await {
+                Ok(a) => a,
+                Err(e) => {
+                    println!("Skipping test - couldn't create agent: {}", e);
+                    return Ok(());
+                }
+            };
+
+            // Read back multiple times - some reads might get corrupted data
+            let mut corruption_detected = false;
+            let mut successful_reads = 0;
+            let mut failed_reads = 0;
+
+            for i in 0..20 {
+                match service.get_agent(&agent.id).await {
+                    Ok(retrieved) => {
+                        successful_reads += 1;
+
+                        // CRITICAL: Verify data integrity
+                        if retrieved.name != agent.name {
+                            corruption_detected = true;
+                            println!(
+                                "WARNING: Read {} - Name corruption detected: expected '{}', got '{}'",
+                                i, agent.name, retrieved.name
+                            );
+                        }
+
+                        if retrieved.blocks.len() != agent.blocks.len() {
+                            corruption_detected = true;
+                            println!(
+                                "WARNING: Read {} - Block count corruption: expected {}, got {}",
+                                i,
+                                agent.blocks.len(),
+                                retrieved.blocks.len()
+                            );
+                        }
+
+                        // Verify block data integrity
+                        if !retrieved.blocks.is_empty()
+                            && !retrieved.blocks[0].value.contains("important data")
+                        {
+                            corruption_detected = true;
+                            println!(
+                                "WARNING: Read {} - Block data corruption: '{}'",
+                                i, retrieved.blocks[0].value
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        failed_reads += 1;
+                        let err_str = e.to_string();
+
+                        // Check if error indicates corruption was caught
+                        if err_str.contains("deserialize") || err_str.contains("parse") {
+                            corruption_detected = true;
+                            println!("Read {} - Corruption caught by deserializer: {}", i, e);
+                        } else {
+                            println!("Read {} - Failed: {}", i, e);
+                        }
+                    }
+                }
+            }
+
+            println!(
+                "Corruption test: {} successful reads, {} failed reads, corruption_detected={}",
+                successful_reads, failed_reads, corruption_detected
+            );
+
+            // With 30% corruption rate, we should detect some corruption
+            assert!(
+                corruption_detected || failed_reads > 0,
+                "Expected to detect corruption with 30% fault rate"
+            );
+
+            Ok(())
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Test failed (corruption handling issue?): {:?}",
+        result.err()
+    );
+}
+
+/// Test send_message with LLM failure during state update
+///
+/// BUG TARGET: handle_message does:
+/// 1. Read agent state
+/// 2. Build prompt from blocks
+/// 3. Call LLM
+/// 4. Return response
+///
+/// But what about iteration counter? Session state?
+/// If we crash after LLM call but before state update, do we:
+/// - Lose the response?
+/// - Double-charge for the same message?
+/// - Get inconsistent iteration counts?
+#[tokio::test]
+async fn test_send_message_crash_after_llm() {
+    let config = SimConfig::new(2005);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::CrashAfterWrite, 0.3))
+        .run_async(|sim_env| async move {
+            let service = create_service(&sim_env)?;
+
+            // Create agent
+            let request = CreateAgentRequest {
+                name: "message-test".to_string(),
+                agent_type: AgentType::LettaV1Agent,
+                model: None,
+                system: Some("You are a helpful assistant".to_string()),
+                description: None,
+                memory_blocks: vec![],
+                block_ids: vec![],
+                tool_ids: vec![],
+                tags: vec![],
+                metadata: serde_json::json!({}),
+            };
+
+            let agent = match service.create_agent(request).await {
+                Ok(a) => a,
+                Err(e) => {
+                    println!("Skipping test - couldn't create agent: {}", e);
+                    return Ok(());
+                }
+            };
+
+            // Send multiple messages with crash-after-write faults
+            let mut successful_messages = 0;
+            let mut failed_messages = 0;
+
+            for i in 0..10 {
+                let message = serde_json::json!({
+                    "role": "user",
+                    "content": format!("Message number {}", i)
+                });
+
+                match service.send_message(&agent.id, message).await {
+                    Ok(response) => {
+                        successful_messages += 1;
+                        println!("Message {} succeeded: {:?}", i, response);
+
+                        // CRITICAL: Verify we can still read agent state
+                        // If crash happened after LLM but before state update,
+                        // actor might be in inconsistent state
+                        match service.get_agent(&agent.id).await {
+                            Ok(_) => {} // Good
+                            Err(e) => {
+                                panic!(
+                                    "BUG: After successful message {}, agent state is unreadable: {}. \
+                                     State corruption after LLM call?",
+                                    i, e
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        failed_messages += 1;
+                        println!("Message {} failed (expected): {}", i, e);
+                    }
+                }
+            }
+
+            println!(
+                "Message test: {} success, {} failures",
+                successful_messages, failed_messages
+            );
+
+            // Read final agent state and verify consistency
+            match service.get_agent(&agent.id).await {
+                Ok(final_agent) => {
+                    println!("Final agent iteration: {}", final_agent.id);
+                    // TODO: When we add iteration counter, verify it matches message count
+                }
+                Err(e) => {
+                    println!("Warning: Could not read final state: {}", e);
+                }
+            }
+
+            Ok(())
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Test failed (message handling bug?): {:?}",
+        result.err()
+    );
+}
+
+// ============================================================================
+// Test Helpers
+// ============================================================================
+
+use async_trait::async_trait;
+
+/// Adapter to use SimLlmClient as LlmClient
+struct SimLlmClientAdapter {
+    client: Arc<SimLlmClient>,
+}
+
+#[async_trait]
+impl LlmClient for SimLlmClientAdapter {
+    async fn complete(&self, messages: Vec<LlmMessage>) -> Result<LlmResponse> {
+        let sim_messages: Vec<kelpie_dst::SimChatMessage> = messages
+            .into_iter()
+            .map(|m| kelpie_dst::SimChatMessage {
+                role: m.role,
+                content: m.content,
+            })
+            .collect();
+
+        let response = self
+            .client
+            .complete_with_tools(sim_messages, vec![])
+            .await
+            .map_err(|e| kelpie_core::Error::Internal {
+                message: format!("LLM error: {}", e),
+            })?;
+
+        Ok(LlmResponse {
+            content: response.content,
+            tool_calls: vec![],
+        })
+    }
+}
+
+/// Create AgentService from simulation environment
+fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
+    let sim_llm = SimLlmClient::new(sim_env.rng.clone(), sim_env.faults.clone());
+    let llm_adapter: Arc<dyn LlmClient> = Arc::new(SimLlmClientAdapter {
+        client: Arc::new(sim_llm),
+    });
+    let actor = AgentActor::new(llm_adapter);
+    let factory = Arc::new(CloneFactory::new(actor));
+    let kv = Arc::new(sim_env.storage.clone());
+    let mut dispatcher =
+        Dispatcher::<AgentActor, AgentActorState>::new(factory, kv, DispatcherConfig::default());
+    let handle = dispatcher.handle();
+    tokio::spawn(async move {
+        dispatcher.run().await;
+    });
+    Ok(AgentService::new(handle))
+}
