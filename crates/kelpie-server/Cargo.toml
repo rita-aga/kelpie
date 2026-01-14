@@ -17,6 +17,8 @@ fdb = ["dep:foundationdb"]
 [dependencies]
 # Core kelpie crates
 kelpie-core = { workspace = true }
+kelpie-runtime = { workspace = true }
+kelpie-storage = { workspace = true }
 kelpie-sandbox = { workspace = true }
 kelpie-tools = { workspace = true }
 
@@ -45,6 +47,7 @@ tower-http = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+bytes = { workspace = true }
 
 # UUID and time
 uuid = { workspace = true }

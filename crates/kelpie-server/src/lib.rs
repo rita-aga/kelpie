@@ -3,6 +3,7 @@
 //! This crate provides the Kelpie server components for building
 //! Letta-compatible AI agent systems.
 
+pub mod actor;
 pub mod llm;
 pub mod memory;
 pub mod models;
