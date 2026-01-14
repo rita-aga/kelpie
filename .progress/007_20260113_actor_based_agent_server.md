@@ -1123,6 +1123,8 @@ cargo fmt --check
 | Fault injection | Integration tests | 35% combined fault rate, proper failures observed |
 | Storage Clone bug | Fixed | SimStorage now Clone-able for SimEnvironment |
 | Error type bug | Fixed | SimAgentEnv uses kelpie_core::Error |
+| **Phase 2: Test Contracts** | `cargo test -p kelpie-server agent_actor_dst` | **11 tests written, all `#[ignore]` until Phase 3** |
+| AgentActor DST tests | See agent_actor_dst.rs | Lifecycle, faults, LLM integration, tool execution tests |
 
 ### Doesn't Work Yet ❌
 | What | Why | When Expected |

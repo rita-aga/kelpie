@@ -170,9 +170,11 @@ struct SessionCheckpoint {
    - Added LLM fault types (LlmTimeout, LlmFailure, LlmRateLimited)
    - **Bugs found:** 2 critical bugs caught by integration tests
 
-2. **Phase 2:** Write DST Tests FIRST (tests will fail) - IN PROGRESS
-   - ~25 tests for AgentActor lifecycle and message handling
+2. **Phase 2:** Write DST Tests FIRST (tests will fail) ✅ COMPLETE
+   - 11 tests for AgentActor lifecycle and message handling
    - Tests define the contract before implementation
+   - All tests use full Simulation harness with fault injection
+   - Tests marked `#[ignore]` until Phase 3 implements AgentActor
 
 3. **Phase 3:** Implement AgentActor (iterate until tests pass)
 4. **Phase 4:** Implement AgentService (iterate until tests pass)
