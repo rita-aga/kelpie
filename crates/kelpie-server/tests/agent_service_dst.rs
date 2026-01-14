@@ -102,11 +102,16 @@ async fn test_dst_service_send_message() {
             });
             let response = service.send_message(&agent.id, message_request).await?;
 
-            // Verify response
+            // Verify response (Phase 6.8: now returns messages array)
             assert!(response.is_object(), "Response should be JSON object");
             assert!(
-                response.get("content").is_some(),
-                "Response should have content"
+                response.get("messages").is_some(),
+                "Response should have messages array"
+            );
+            let messages = response.get("messages").unwrap().as_array().unwrap();
+            assert!(
+                !messages.is_empty(),
+                "Messages array should not be empty"
             );
 
             Ok(())

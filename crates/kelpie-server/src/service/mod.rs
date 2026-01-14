@@ -73,15 +73,28 @@ impl AgentService {
     pub async fn send_message(&self, agent_id: &str, message: Value) -> Result<Value> {
         let actor_id = ActorId::new("agents", agent_id)?;
 
-        // Serialize message
-        let payload = serde_json::to_vec(&message).map_err(|e| Error::Internal {
-            message: format!("Failed to serialize message: {}", e),
+        // Extract content from message (Phase 6.8: support multiple formats)
+        let content = message
+            .get("content")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| Error::Internal {
+                message: "Message must have 'content' field".to_string(),
+            })?;
+
+        // Build HandleMessageFullRequest
+        let request = serde_json::json!({
+            "content": content
+        });
+
+        // Serialize request
+        let payload = serde_json::to_vec(&request).map_err(|e| Error::Internal {
+            message: format!("Failed to serialize HandleMessageFullRequest: {}", e),
         })?;
 
-        // Invoke handle_message operation
+        // Invoke handle_message_full operation
         let response = self
             .dispatcher
-            .invoke(actor_id, "handle_message".to_string(), Bytes::from(payload))
+            .invoke(actor_id, "handle_message_full".to_string(), Bytes::from(payload))
             .await?;
 
         // Deserialize response

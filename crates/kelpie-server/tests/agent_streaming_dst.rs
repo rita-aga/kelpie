@@ -100,7 +100,9 @@ async fn test_dst_streaming_basic() {
             let agent_id = agent.id.clone();
             tokio::spawn(async move {
                 // This will fail until send_message_stream is implemented
-                let _ = service.send_message_stream(&agent_id, message_json, tx).await;
+                let _ = service
+                    .send_message_stream(&agent_id, message_json, tx)
+                    .await;
             });
 
             // Collect events with timeout
@@ -144,7 +146,9 @@ async fn test_dst_streaming_basic() {
                 "MessageComplete should be last event"
             );
 
-            let has_error = events.iter().any(|e| matches!(e, StreamEvent::Error { .. }));
+            let has_error = events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::Error { .. }));
             assert!(!has_error, "should not emit error events in happy path");
 
             Ok(())
@@ -202,7 +206,9 @@ async fn test_dst_streaming_with_network_delay() {
             // Start streaming in background
             let agent_id = agent.id.clone();
             tokio::spawn(async move {
-                let _ = service.send_message_stream(&agent_id, message_json, tx).await;
+                let _ = service
+                    .send_message_stream(&agent_id, message_json, tx)
+                    .await;
             });
 
             // Collect events with timeout
@@ -238,10 +244,7 @@ async fn test_dst_streaming_with_network_delay() {
             let has_chunks = events
                 .iter()
                 .any(|e| matches!(e, StreamEvent::MessageChunk { .. }));
-            assert!(
-                has_chunks,
-                "should not lose message chunks due to delays"
-            );
+            assert!(has_chunks, "should not lose message chunks due to delays");
 
             Ok(())
         })
@@ -296,7 +299,9 @@ async fn test_dst_streaming_cancellation() {
             // Start streaming in background
             let agent_id = agent.id.clone();
             let stream_handle = tokio::spawn(async move {
-                let _ = service.send_message_stream(&agent_id, message_json, tx).await;
+                let _ = service
+                    .send_message_stream(&agent_id, message_json, tx)
+                    .await;
             });
 
             // Receive a few events then drop receiver (simulate disconnect)
@@ -383,7 +388,9 @@ async fn test_dst_streaming_backpressure() {
             // Start streaming in background
             let agent_id = agent.id.clone();
             tokio::spawn(async move {
-                let _ = service.send_message_stream(&agent_id, message_json, tx).await;
+                let _ = service
+                    .send_message_stream(&agent_id, message_json, tx)
+                    .await;
             });
 
             // Slow consumer - deliberately delay between reads
@@ -478,7 +485,9 @@ async fn test_dst_streaming_with_tool_calls() {
             // Start streaming in background
             let agent_id = agent.id.clone();
             tokio::spawn(async move {
-                let _ = service.send_message_stream(&agent_id, message_json, tx).await;
+                let _ = service
+                    .send_message_stream(&agent_id, message_json, tx)
+                    .await;
             });
 
             // Collect events with timeout

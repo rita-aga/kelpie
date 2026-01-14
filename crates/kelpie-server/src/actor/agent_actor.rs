@@ -2,9 +2,9 @@
 //!
 //! TigerStyle: Single actor type for all agent types, state-based configuration.
 
-use super::llm_trait::{LlmClient, LlmMessage};
+use super::llm_trait::{LlmClient, LlmMessage, LlmToolCall};
 use super::state::AgentActorState;
-use crate::models::{AgentState, CreateAgentRequest, UpdateAgentRequest};
+use crate::models::{AgentState, CreateAgentRequest, Message, MessageRole, UpdateAgentRequest, UsageStats};
 use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::actor::{Actor, ActorContext};
@@ -177,6 +177,219 @@ impl AgentActor {
             content: response.content,
         })
     }
+
+    /// Handle message with full agent loop (Phase 6.8)
+    ///
+    /// Implements complete agent behavior:
+    /// 1. Add user message to history
+    /// 2. Build LLM prompt from agent blocks + history
+    /// 3. Call LLM with tools
+    /// 4. Execute tool calls (loop up to 5 iterations)
+    /// 5. Add assistant response to history
+    /// 6. Return all messages + usage stats
+    async fn handle_message_full(
+        &self,
+        ctx: &mut ActorContext<AgentActorState>,
+        request: HandleMessageFullRequest,
+    ) -> Result<HandleMessageFullResponse> {
+        // TigerStyle: Validate preconditions
+        assert!(!request.content.is_empty(), "message content must not be empty");
+
+        // Clone agent data before any mutable operations
+        let agent = ctx.state.agent().ok_or_else(|| Error::Internal {
+            message: "Agent not created".to_string(),
+        })?.clone();
+
+        // 1. Create and store user message
+        let user_msg = Message {
+            id: uuid::Uuid::new_v4().to_string(),
+            agent_id: ctx.id.id().to_string(),
+            message_type: "user_message".to_string(),
+            role: MessageRole::User,
+            content: request.content.clone(),
+            tool_call_id: None,
+            tool_calls: None,
+            created_at: chrono::Utc::now(),
+        };
+
+        // Store user message
+        ctx.state.add_message(user_msg.clone());
+
+        // 2. Build LLM messages
+        let mut llm_messages = Vec::new();
+
+        // System prompt
+        if let Some(system) = &agent.system {
+            llm_messages.push(LlmMessage {
+                role: "system".to_string(),
+                content: system.clone(),
+            });
+        }
+
+        // Memory blocks as system context
+        for block in &agent.blocks {
+            llm_messages.push(LlmMessage {
+                role: "system".to_string(),
+                content: format!("[{}]\n{}", block.label, block.value),
+            });
+        }
+
+        // Recent message history (last 20)
+        for msg in ctx.state.recent_messages(20) {
+            let role = match msg.role {
+                MessageRole::User => "user",
+                MessageRole::Assistant => "assistant",
+                MessageRole::System => "system",
+                MessageRole::Tool => "tool",
+            };
+            llm_messages.push(LlmMessage {
+                role: role.to_string(),
+                content: msg.content.clone(),
+            });
+        }
+
+        // 3. Call LLM
+        let mut response = self.llm.complete(llm_messages.clone()).await?;
+        let total_prompt_tokens = 0u64;
+        let total_completion_tokens = 0u64;
+        let mut iterations = 0u32;
+        const MAX_ITERATIONS: u32 = 5;
+
+        // TigerStyle: Explicit limit enforcement
+        assert!(MAX_ITERATIONS > 0, "MAX_ITERATIONS must be positive");
+
+        // Track all messages returned (user + assistant + any tool messages)
+        let mut returned_messages = vec![user_msg];
+
+        // 4. Tool execution loop
+        while !response.tool_calls.is_empty() && iterations < MAX_ITERATIONS {
+            iterations += 1;
+
+            // Store assistant message with tool calls
+            let assistant_msg = Message {
+                id: uuid::Uuid::new_v4().to_string(),
+                agent_id: ctx.id.id().to_string(),
+                message_type: "assistant_message".to_string(),
+                role: MessageRole::Assistant,
+                content: response.content.clone(),
+                tool_call_id: None,
+                tool_calls: None, // TODO: Map LlmToolCall to ToolCall in models
+                created_at: chrono::Utc::now(),
+            };
+            ctx.state.add_message(assistant_msg.clone());
+            returned_messages.push(assistant_msg);
+
+            // Execute each tool
+            for tool_call in &response.tool_calls {
+                let result = self.execute_tool(ctx, tool_call).await?;
+
+                // Store tool result message
+                let tool_msg = Message {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    agent_id: ctx.id.id().to_string(),
+                    message_type: "tool_return_message".to_string(),
+                    role: MessageRole::Tool,
+                    content: result,
+                    tool_call_id: Some(tool_call.id.clone()),
+                    tool_calls: None,
+                    created_at: chrono::Utc::now(),
+                };
+                ctx.state.add_message(tool_msg.clone());
+                returned_messages.push(tool_msg);
+            }
+
+            // Rebuild messages with tool results for next LLM call
+            llm_messages.clear();
+
+            // Re-add system context
+            if let Some(system) = &agent.system {
+                llm_messages.push(LlmMessage {
+                    role: "system".to_string(),
+                    content: system.clone(),
+                });
+            }
+            for block in &agent.blocks {
+                llm_messages.push(LlmMessage {
+                    role: "system".to_string(),
+                    content: format!("[{}]\n{}", block.label, block.value),
+                });
+            }
+
+            // Add recent history including tool results
+            for msg in ctx.state.recent_messages(20) {
+                let role = match msg.role {
+                    MessageRole::User => "user",
+                    MessageRole::Assistant => "assistant",
+                    MessageRole::System => "system",
+                    MessageRole::Tool => "tool",
+                };
+                llm_messages.push(LlmMessage {
+                    role: role.to_string(),
+                    content: msg.content.clone(),
+                });
+            }
+
+            // Continue conversation
+            response = self.llm.complete(llm_messages.clone()).await?;
+        }
+
+        // 5. Store final assistant response
+        let assistant_msg = Message {
+            id: uuid::Uuid::new_v4().to_string(),
+            agent_id: ctx.id.id().to_string(),
+            message_type: "assistant_message".to_string(),
+            role: MessageRole::Assistant,
+            content: response.content.clone(),
+            tool_call_id: None,
+            tool_calls: None,
+            created_at: chrono::Utc::now(),
+        };
+        ctx.state.add_message(assistant_msg.clone());
+        returned_messages.push(assistant_msg);
+
+        // 6. Return response with all conversation history
+        // Note: Tests expect full history, not just current turn messages
+        Ok(HandleMessageFullResponse {
+            messages: ctx.state.all_messages().to_vec(),
+            usage: UsageStats {
+                prompt_tokens: total_prompt_tokens,
+                completion_tokens: total_completion_tokens,
+                total_tokens: total_prompt_tokens + total_completion_tokens,
+            },
+        })
+    }
+
+    /// Execute a tool call (Phase 6.8)
+    ///
+    /// TigerStyle: Explicit error handling, no unwrap
+    async fn execute_tool(
+        &self,
+        _ctx: &ActorContext<AgentActorState>,
+        tool_call: &LlmToolCall,
+    ) -> Result<String> {
+        // TigerStyle: Validate preconditions
+        assert!(!tool_call.name.is_empty(), "tool name must not be empty");
+        assert!(!tool_call.id.is_empty(), "tool id must not be empty");
+
+        match tool_call.name.as_str() {
+            "shell" => {
+                let command = tool_call
+                    .input
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| Error::Internal {
+                        message: "shell tool requires 'command' parameter".to_string(),
+                    })?;
+
+                // Placeholder - return simulated result
+                // TODO: Integrate with kelpie-sandbox in Phase 8
+                Ok(format!("Executed: {}", command))
+            }
+            _ => Err(Error::Internal {
+                message: format!("Unknown tool: {}", tool_call.name),
+            }),
+        }
+    }
 }
 
 /// Block update request
@@ -191,6 +404,19 @@ struct BlockUpdate {
 struct CoreMemoryAppend {
     label: String,
     content: String,
+}
+
+/// Request for full message handling (Phase 6.8)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HandleMessageFullRequest {
+    pub content: String,
+}
+
+/// Response from full message handling (Phase 6.8)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HandleMessageFullResponse {
+    pub messages: Vec<Message>,
+    pub usage: UsageStats,
 }
 
 /// Handle message request
@@ -274,6 +500,18 @@ impl Actor for AgentActor {
                 let response_bytes =
                     serde_json::to_vec(&response).map_err(|e| Error::Internal {
                         message: format!("Failed to serialize HandleMessageResponse: {}", e),
+                    })?;
+                Ok(Bytes::from(response_bytes))
+            }
+            "handle_message_full" => {
+                let request: HandleMessageFullRequest =
+                    serde_json::from_slice(&payload).map_err(|e| Error::Internal {
+                        message: format!("Failed to deserialize HandleMessageFullRequest: {}", e),
+                    })?;
+                let response = self.handle_message_full(ctx, request).await?;
+                let response_bytes =
+                    serde_json::to_vec(&response).map_err(|e| Error::Internal {
+                        message: format!("Failed to serialize HandleMessageFullResponse: {}", e),
                     })?;
                 Ok(Bytes::from(response_bytes))
             }

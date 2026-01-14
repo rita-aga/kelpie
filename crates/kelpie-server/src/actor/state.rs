@@ -14,7 +14,7 @@ const MAX_MESSAGES_DEFAULT: usize = 100;
 /// and persisted on deactivation.
 ///
 /// TigerStyle: All fields have clear purpose and units where applicable.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentActorState {
     /// Agent metadata (id, name, type, model, system prompt, etc.)
     /// This is the source of truth for agent configuration.
@@ -46,6 +46,20 @@ pub struct AgentActorState {
 
 fn default_max_messages() -> usize {
     MAX_MESSAGES_DEFAULT
+}
+
+impl Default for AgentActorState {
+    fn default() -> Self {
+        Self {
+            agent: None,
+            messages: Vec::new(),
+            max_messages: MAX_MESSAGES_DEFAULT,
+            session_id: None,
+            iteration: 0,
+            is_paused: false,
+            pause_until_ms: None,
+        }
+    }
 }
 
 impl AgentActorState {

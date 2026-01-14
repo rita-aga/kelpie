@@ -643,9 +643,7 @@ pub struct HealthResponse {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
     /// LLM thinking (assistant message chunk)
-    MessageChunk {
-        content: String,
-    },
+    MessageChunk { content: String },
 
     /// Tool call starting
     ToolCallStart {
@@ -662,14 +660,10 @@ pub enum StreamEvent {
     },
 
     /// Message processing complete
-    MessageComplete {
-        message_id: String,
-    },
+    MessageComplete { message_id: String },
 
     /// Error occurred during streaming
-    Error {
-        message: String,
-    },
+    Error { message: String },
 }
 
 impl StreamEvent {
