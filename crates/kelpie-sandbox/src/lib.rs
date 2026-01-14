@@ -46,14 +46,21 @@ mod traits;
 #[cfg(feature = "firecracker")]
 mod firecracker;
 
+#[cfg(feature = "libkrun")]
+mod libkrun;
+
 pub use config::{ResourceLimits, SandboxConfig};
 pub use error::{SandboxError, SandboxResult};
 pub use exec::{ExecOptions, ExecOutput, ExitStatus};
 pub use mock::MockSandbox;
 pub use pool::{PoolConfig, SandboxPool};
 pub use process::{ProcessSandbox, ProcessSandboxFactory};
-pub use snapshot::{Snapshot, SnapshotMetadata};
-pub use traits::{Sandbox, SandboxFactory, SandboxState};
+pub use snapshot::{
+    Architecture, Snapshot, SnapshotKind, SnapshotMetadata, SnapshotValidationError,
+    SNAPSHOT_CHECKPOINT_SIZE_BYTES_MAX, SNAPSHOT_FORMAT_VERSION, SNAPSHOT_SUSPEND_SIZE_BYTES_MAX,
+    SNAPSHOT_TELEPORT_SIZE_BYTES_MAX,
+};
+pub use traits::{Sandbox, SandboxFactory, SandboxState, SandboxStats};
 
 #[cfg(feature = "firecracker")]
 pub use firecracker::{
@@ -61,6 +68,11 @@ pub use firecracker::{
     FIRECRACKER_API_TIMEOUT_MS_DEFAULT, FIRECRACKER_BINARY_PATH_DEFAULT,
     FIRECRACKER_BOOT_TIMEOUT_MS_DEFAULT, FIRECRACKER_VSOCK_CID_DEFAULT,
     FIRECRACKER_VSOCK_PORT_DEFAULT,
+};
+
+#[cfg(feature = "libkrun")]
+pub use libkrun::{
+    LibkrunSandbox, LibkrunSandboxConfig, LibkrunSandboxFactory, LIBKRUN_ROOT_DISK_PATH_DEFAULT,
 };
 
 #[cfg(test)]

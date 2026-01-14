@@ -1,7 +1,7 @@
 # Task: Teleportable Sandboxes with libkrun
 
 **Created:** 2026-01-14 10:00:00
-**State:** PLANNING
+**State:** IN_PROGRESS (Phase 1 Complete)
 
 ---
 
@@ -140,6 +140,17 @@ Implement **teleportable sandboxes** using [libkrun](https://github.com/containe
 | Planning | **Phase 0 = DST Harness First** | CONSTRAINTS.md mandates simulation-first | Upfront harness work before any feature code |
 | Planning | DST tests written BEFORE impl | Find bugs through simulation, not production | Tests fail initially (expected) |
 | Planning | 12 new fault types for sandbox/teleport | Need fault injection for VM crashes, snapshot corruption, teleport failures | Harness complexity |
+| Phase 0 | Added 15 fault types (not 12) | Better coverage including timeout variants with params | Slightly more complex |
+| Phase 0 | Factory returns Stopped state | Allows testing full lifecycle (start->run->stop) | Tests must call start() explicitly |
+| Phase 1 | Feature-gated libkrun dependency | libkrun not installed on system | MockVm works for DST testing |
+| Phase 1 | MockVm simulates sleep/echo/etc | Tests need predictable behavior | Limited command support |
+| Phase 1 | CRC32 for snapshot checksums | Fast, good for corruption detection | Not cryptographic |
+| Phase 2 | LibkrunSandbox wraps MockVm | Consistent with existing patterns | Not testing actual FFI |
+| Phase 2 | **BUG-002 FOUND & FIXED** | SnapshotCorruption was failing create, not restore | DST working as designed |
+| Phase 3 | Three SnapshotKind variants | Suspend/Teleport/Checkpoint match planning decision | More code to maintain |
+| Phase 3 | Architecture enum in kelpie-sandbox | Allows compile-time detection + validation | Simple enum, could be more sophisticated |
+| Phase 3 | Validation on restore, not create | Matches real-world: corruption happens in transfer | More complex restore path |
+| Phase 3 | Updated Snapshot::new() API | Requires kind parameter | Breaking change from v1 format |
 
 ---
 
@@ -694,13 +705,24 @@ fn stress_test_rapid_suspend_resume() {
 - [x] **Quick Decision Log maintained**
 
 **DST-First Implementation Order:**
-- [ ] **Phase 0: DST Harness Extension** (MUST DO FIRST)
-  - [ ] Add 12 new fault types (Sandbox*, Snapshot*, Teleport*)
-  - [ ] Implement SimSandbox
-  - [ ] Implement SimTeleportStorage
-  - [ ] Verify harness can run test skeleton
-- [ ] Phase 1: libkrun bindings (DST test first → implement → run DST → fix → verify determinism)
-- [ ] Phase 2: LibkrunSandbox (DST test first → implement → run DST → fix → verify determinism)
+- [x] **Phase 0: DST Harness Extension** ✅ COMPLETE
+  - [x] Add 15 new fault types (Sandbox*, Snapshot*, Teleport*)
+  - [x] Implement SimSandbox in kelpie-dst
+  - [x] Implement SimTeleportStorage in kelpie-dst
+  - [x] Verify harness can run test skeleton - 141 tests passing
+- [x] **Phase 1: libkrun bindings** ✅ COMPLETE
+  - [x] Created kelpie-libkrun crate (36 unit tests passing)
+  - [x] DST tests written first (10 tests in libkrun_dst.rs)
+  - [x] MockVm implementation for testing without libkrun installed
+  - [x] VmConfig, VmSnapshot, VirtioFs types implemented
+  - [x] Determinism verified (same seed = same behavior)
+- [x] **Phase 2: LibkrunSandbox** ✅ COMPLETE
+  - [x] DST tests written first (12 tests in libkrun_sandbox_dst.rs)
+  - [x] ADR-007: LibkrunSandbox Integration with DST - documented design decision
+  - [x] LibkrunSandbox implemented wrapping MockVm (7 unit tests)
+  - [x] BUG-002 FOUND & FIXED: SnapshotCorruption fault was failing create instead of restore
+  - [x] DST with fault injection passing (all 12 tests)
+  - [x] Determinism verified (same seed = same behavior)
 - [ ] Phase 3: Snapshot types (DST test first → implement → run DST → fix → verify determinism)
 - [ ] Phase 4: Teleport service (DST test first → implement → run DST → fix → verify determinism)
 - [ ] Phase 5: Base images
@@ -801,32 +823,72 @@ cargo fmt
 | Firecracker sandbox (Linux) | `cargo test -p kelpie-sandbox --features firecracker` | Tests pass |
 | Process sandbox (cross-platform) | `cargo test -p kelpie-sandbox` | Tests pass |
 | Snapshot serialization | Unit tests | Roundtrip works |
+| **DST fault injection (15 fault types)** | `cargo test -p kelpie-dst` | 150+ tests pass |
+| **MockVm for testing** | `cargo test -p kelpie-libkrun` | 36 tests pass |
+| **SimSandbox lifecycle** | `cargo test -p kelpie-dst --test libkrun_dst` | 10 tests pass |
+| **VmConfig validation** | `cargo test -p kelpie-libkrun config` | Config tests pass |
+| **VmSnapshot checksum verification** | `cargo test -p kelpie-libkrun snapshot` | Checksum tests pass |
+| **LibkrunSandbox (DST)** | `cargo test -p kelpie-dst --test libkrun_sandbox_dst` | 12 tests pass |
+| **Snapshot types (DST)** | `cargo test -p kelpie-dst --test snapshot_types_dst` | 13 tests pass |
+| **SnapshotKind enum** | `cargo test -p kelpie-sandbox snapshot` | 21 tests pass |
+| **Architecture validation** | `cargo test -p kelpie-sandbox test_architecture` | Tests pass |
+| **Suspend snapshot** | `Snapshot::suspend("id")` | Memory-only snapshot |
+| **Teleport snapshot** | `Snapshot::teleport("id")` | Full VM snapshot |
+| **Checkpoint snapshot** | `Snapshot::checkpoint("id")` | App-state only |
 
 ### Doesn't Work Yet ❌
 | What | Why | When Expected |
 |------|-----|---------------|
-| libkrun sandbox | Not implemented | Phase 1-2 |
+| ~~libkrun crate structure~~ | ✅ Done - MockVm available | Phase 1 ✅ |
+| ~~LibkrunSandbox impl~~ | ✅ Done - wraps MockVm | Phase 2 ✅ |
+| ~~Cross-arch checkpoint types~~ | ✅ Done - SnapshotKind::Checkpoint | Phase 3 ✅ |
+| Actual libkrun FFI bindings | libkrun not installed on system | When feature enabled |
 | Teleport between machines | Not implemented | Phase 4 |
-| Cross-arch checkpoint | Not implemented | Phase 3 |
+| Teleport service API | Not implemented | Phase 4 |
 | CLI commands | Not implemented | Phase 7 |
 
 ### Known Limitations ⚠️
 - Firecracker is Linux-only (no Mac support)
 - ProcessSandbox has no true isolation
 - No mid-execution cross-arch teleport (fundamental limitation)
+- libkrun feature-gated (requires libkrun library installed to use real VMs)
+- MockVm simulates VM behavior for testing only
 
 ---
 
 ## Completion Notes
 
-**Verification Status:**
-- Tests: [pending]
-- Clippy: [pending]
-- Formatter: [pending]
-- /no-cap: [pending]
-- Vision alignment: [pending]
+**Phase 3 Verification Status (2026-01-14):**
+- Tests: ✅ All passing (60 sandbox + 13 DST snapshot_types + 65 DST unit + 12 LibkrunSandbox DST)
+- Clippy: ✅ Clean (some unused warnings in teleport.rs - deferred to Phase 4)
+- Formatter: ✅ cargo fmt passed
+- /no-cap: [deferred to final phase]
+- Vision alignment: ✅ Three snapshot types match decision C in planning
+
+**Phase 3 DST Coverage:**
+- New DST tests: 13 in snapshot_types_dst.rs
+- Fault types tested: SnapshotCreateFail, SnapshotCorruption, TeleportUploadFail, TeleportDownloadFail, TeleportArchMismatch, TeleportImageMismatch
+- Seeds tested: Fixed seed 12345 verified deterministic
+- Determinism verified: ✅ Same seed produces identical results
+
+**Files Modified in Phase 3:**
+- `crates/kelpie-sandbox/src/snapshot.rs` - Added SnapshotKind, Architecture, validation
+- `crates/kelpie-sandbox/src/lib.rs` - Exported new types
+- `crates/kelpie-sandbox/src/mock.rs` - Updated to use Snapshot::suspend()
+- `crates/kelpie-sandbox/src/firecracker.rs` - Updated to use Snapshot::teleport()
+- `crates/kelpie-sandbox/src/libkrun.rs` - Updated to use Snapshot::teleport()
+- `crates/kelpie-dst/src/sandbox.rs` - Updated to use Snapshot::suspend()
+- `crates/kelpie-dst/src/lib.rs` - Exported Architecture, SnapshotKind
+- `crates/kelpie-dst/tests/snapshot_types_dst.rs` - NEW: 13 DST tests
+
+**Overall Verification Status:**
+- Tests: [pending final phases]
+- Clippy: [pending final phases]
+- Formatter: [pending final phases]
+- /no-cap: [pending final phases]
+- Vision alignment: [pending final phases]
 
 **DST Coverage (when complete):**
-- Fault types tested: [pending]
-- Seeds tested: [pending]
-- Determinism verified: [pending]
+- Fault types tested: [pending final phases]
+- Seeds tested: [pending final phases]
+- Determinism verified: [pending final phases]

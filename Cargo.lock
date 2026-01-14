@@ -2326,6 +2326,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "futures",
  "kelpie-cluster",
  "kelpie-core",
  "kelpie-memory",
@@ -2344,6 +2345,21 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "kelpie-libkrun"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "crc32fast",
+ "libc",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -2408,8 +2424,10 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "crc32fast",
  "futures",
  "kelpie-core",
+ "kelpie-libkrun",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

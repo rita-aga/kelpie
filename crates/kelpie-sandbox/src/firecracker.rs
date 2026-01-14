@@ -728,8 +728,8 @@ impl Sandbox for FirecrackerSandbox {
             vm.last_snapshot = Some(snapshot_path.clone());
         }
 
-        // Create snapshot object
-        let snapshot = Snapshot::new(&self.id)
+        // Create snapshot object - Firecracker creates full Teleport snapshots
+        let snapshot = Snapshot::teleport(&self.id)
             .with_disk_reference(snapshot_path.to_string_lossy().to_string());
 
         info!(sandbox_id = %self.id, snapshot_id = %snapshot.id(), "Created snapshot");

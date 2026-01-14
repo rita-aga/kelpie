@@ -376,9 +376,11 @@ impl Sandbox for SimSandbox {
 
     async fn snapshot(&self) -> SandboxResult<Snapshot> {
         // Check for snapshot creation failure
+        // NOTE: SnapshotCorruption is NOT checked here - it only affects restore
+        // Corruption happens during storage/transfer, not during creation
         if let Some(fault) = self.check_fault("sandbox_snapshot") {
             match &fault {
-                FaultType::SnapshotCreateFail | FaultType::SnapshotCorruption => {
+                FaultType::SnapshotCreateFail => {
                     return Err(self.fault_to_error(fault));
                 }
                 FaultType::SnapshotTooLarge { .. } => {
@@ -420,7 +422,8 @@ impl Sandbox for SimSandbox {
             });
         }
 
-        let snapshot = Snapshot::new(&self.id)
+        // SimSandbox creates Suspend snapshots (memory-only, same-host)
+        let snapshot = Snapshot::suspend(&self.id)
             .with_memory(Bytes::from(fs_data))
             .with_env_state(env.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
 
@@ -700,11 +703,18 @@ mod tests {
         let faults = create_test_faults(rng.fork());
         let factory = SimSandboxFactory::new(rng, faults);
 
-        let sandbox1 = factory.create(SandboxConfig::default()).await.unwrap();
-        let sandbox2 = factory.create(SandboxConfig::default()).await.unwrap();
+        let mut sandbox1 = factory.create(SandboxConfig::default()).await.unwrap();
+        let mut sandbox2 = factory.create(SandboxConfig::default()).await.unwrap();
 
         assert_eq!(sandbox1.id(), "sim-sandbox-0");
         assert_eq!(sandbox2.id(), "sim-sandbox-1");
+        // Factory returns sandbox in Stopped state - caller must start()
+        assert_eq!(sandbox1.state(), SandboxState::Stopped);
+        assert_eq!(sandbox2.state(), SandboxState::Stopped);
+
+        // Start them manually
+        sandbox1.start().await.unwrap();
+        sandbox2.start().await.unwrap();
         assert_eq!(sandbox1.state(), SandboxState::Running);
         assert_eq!(sandbox2.state(), SandboxState::Running);
     }

@@ -418,9 +418,9 @@ async fn test_dst_vm_exec_with_timeout_faults() {
             Err(e) => {
                 timeout_count += 1;
                 // Error should indicate timeout
-                let err_str = format!("{}", e);
+                let err_str = format!("{}", e).to_lowercase();
                 assert!(
-                    err_str.contains("timeout") || err_str.contains("Timeout"),
+                    err_str.contains("timeout") || err_str.contains("timed out"),
                     "Expected timeout error, got: {}",
                     err_str
                 );

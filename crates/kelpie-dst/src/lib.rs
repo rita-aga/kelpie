@@ -40,16 +40,20 @@ pub mod fault;
 pub mod llm;
 pub mod network;
 pub mod rng;
+pub mod sandbox;
 pub mod simulation;
 pub mod storage;
+pub mod teleport;
 
 pub use agent::{AgentTestConfig, AgentTestState, BlockTestState, SimAgentEnv};
 pub use clock::SimClock;
-pub use fault::{FaultConfig, FaultInjector, FaultType};
+pub use fault::{FaultConfig, FaultInjector, FaultInjectorBuilder, FaultType};
 pub use llm::{
     SimChatMessage, SimCompletionResponse, SimLlmClient, SimToolCall, SimToolDefinition,
 };
 pub use network::SimNetwork;
 pub use rng::DeterministicRng;
+pub use sandbox::{SimSandbox, SimSandboxFactory};
 pub use simulation::{SimConfig, SimEnvironment, Simulation};
 pub use storage::SimStorage;
+pub use teleport::{Architecture, SimTeleportStorage, SnapshotKind, TeleportPackage};

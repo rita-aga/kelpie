@@ -69,6 +69,42 @@ pub enum FaultType {
     LlmRateLimited,
     /// Agent loop panics during execution
     AgentLoopPanic,
+
+    // Sandbox faults (for VM/container isolation)
+    /// Sandbox VM fails to boot
+    SandboxBootFail,
+    /// Sandbox VM crashes unexpectedly
+    SandboxCrash,
+    /// Sandbox pause operation fails
+    SandboxPauseFail,
+    /// Sandbox resume operation fails
+    SandboxResumeFail,
+    /// Sandbox exec operation fails
+    SandboxExecFail,
+    /// Sandbox exec operation times out
+    SandboxExecTimeout { timeout_ms: u64 },
+
+    // Snapshot faults (for VM state capture)
+    /// Snapshot creation fails
+    SnapshotCreateFail,
+    /// Snapshot data is corrupted
+    SnapshotCorruption,
+    /// Restore from snapshot fails
+    SnapshotRestoreFail,
+    /// Snapshot exceeds size limit
+    SnapshotTooLarge { max_bytes: u64 },
+
+    // Teleport faults (for cross-machine migration)
+    /// Upload to teleport storage fails
+    TeleportUploadFail,
+    /// Download from teleport storage fails
+    TeleportDownloadFail,
+    /// Teleport transfer times out
+    TeleportTimeout { timeout_ms: u64 },
+    /// Architecture mismatch on restore
+    TeleportArchMismatch,
+    /// Base image version mismatch on restore
+    TeleportImageMismatch,
 }
 
 impl FaultType {
@@ -99,6 +135,24 @@ impl FaultType {
             FaultType::LlmFailure => "llm_failure",
             FaultType::LlmRateLimited => "llm_rate_limited",
             FaultType::AgentLoopPanic => "agent_loop_panic",
+            // Sandbox faults
+            FaultType::SandboxBootFail => "sandbox_boot_fail",
+            FaultType::SandboxCrash => "sandbox_crash",
+            FaultType::SandboxPauseFail => "sandbox_pause_fail",
+            FaultType::SandboxResumeFail => "sandbox_resume_fail",
+            FaultType::SandboxExecFail => "sandbox_exec_fail",
+            FaultType::SandboxExecTimeout { .. } => "sandbox_exec_timeout",
+            // Snapshot faults
+            FaultType::SnapshotCreateFail => "snapshot_create_fail",
+            FaultType::SnapshotCorruption => "snapshot_corruption",
+            FaultType::SnapshotRestoreFail => "snapshot_restore_fail",
+            FaultType::SnapshotTooLarge { .. } => "snapshot_too_large",
+            // Teleport faults
+            FaultType::TeleportUploadFail => "teleport_upload_fail",
+            FaultType::TeleportDownloadFail => "teleport_download_fail",
+            FaultType::TeleportTimeout { .. } => "teleport_timeout",
+            FaultType::TeleportArchMismatch => "teleport_arch_mismatch",
+            FaultType::TeleportImageMismatch => "teleport_image_mismatch",
         }
     }
 }
@@ -352,6 +406,38 @@ impl FaultInjectorBuilder {
             .with_fault(FaultConfig::new(
                 FaultType::LlmRateLimited,
                 probability / 3.0,
+            ))
+    }
+
+    /// Add sandbox faults with default probabilities
+    pub fn with_sandbox_faults(self, probability: f64) -> Self {
+        self.with_fault(FaultConfig::new(FaultType::SandboxBootFail, probability))
+            .with_fault(FaultConfig::new(FaultType::SandboxCrash, probability))
+            .with_fault(FaultConfig::new(FaultType::SandboxPauseFail, probability))
+            .with_fault(FaultConfig::new(FaultType::SandboxResumeFail, probability))
+            .with_fault(FaultConfig::new(FaultType::SandboxExecFail, probability))
+    }
+
+    /// Add snapshot faults with default probabilities
+    pub fn with_snapshot_faults(self, probability: f64) -> Self {
+        self.with_fault(FaultConfig::new(FaultType::SnapshotCreateFail, probability))
+            .with_fault(FaultConfig::new(FaultType::SnapshotCorruption, probability))
+            .with_fault(FaultConfig::new(
+                FaultType::SnapshotRestoreFail,
+                probability,
+            ))
+    }
+
+    /// Add teleport faults with default probabilities
+    pub fn with_teleport_faults(self, probability: f64) -> Self {
+        self.with_fault(FaultConfig::new(FaultType::TeleportUploadFail, probability))
+            .with_fault(FaultConfig::new(
+                FaultType::TeleportDownloadFail,
+                probability,
+            ))
+            .with_fault(FaultConfig::new(
+                FaultType::TeleportArchMismatch,
+                probability / 2.0,
             ))
     }
 

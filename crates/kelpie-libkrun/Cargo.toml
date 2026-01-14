@@ -1,0 +1,34 @@
+[package]
+name = "kelpie-libkrun"
+description = "Safe Rust bindings for libkrun microVM library"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+# Enable actual libkrun FFI bindings (requires libkrun installed)
+libkrun = ["dep:libc"]
+
+[dependencies]
+async-trait = { workspace = true }
+bytes = { workspace = true }
+crc32fast = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+# Optional: Only needed when libkrun feature is enabled
+libc = { version = "0.2", optional = true }
+
+[build-dependencies]
+# Will be used for bindgen when libkrun feature is enabled
+# bindgen = { version = "0.69", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
