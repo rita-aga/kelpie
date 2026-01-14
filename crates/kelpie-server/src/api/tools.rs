@@ -3,12 +3,12 @@
 //! TigerStyle: RESTful tool management with explicit validation.
 
 use crate::api::ApiError;
-use kelpie_server::state::{AppState, ToolInfo};
 use axum::{
     extract::{Path, State},
     routing::{get, post},
     Json, Router,
 };
+use kelpie_server::state::{AppState, ToolInfo};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -168,10 +168,10 @@ async fn execute_tool(
 mod tests {
 
     use crate::api;
-    use kelpie_server::state::AppState;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
+    use kelpie_server::state::AppState;
     use tower::ServiceExt;
 
     async fn test_app() -> Router {

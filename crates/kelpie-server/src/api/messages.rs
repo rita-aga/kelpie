@@ -210,8 +210,20 @@ async fn send_message_json(
             content: content.clone(),
         });
 
-        // Get available tools from registry
-        let tools = state.tool_registry().get_tool_definitions().await;
+        // Get available tools from registry, filtered by agent type capabilities
+        let capabilities = agent.agent_type.capabilities();
+        let all_tools = state.tool_registry().get_tool_definitions().await;
+        let tools: Vec<_> = all_tools
+            .into_iter()
+            .filter(|t| capabilities.allowed_tools.contains(&t.name))
+            .collect();
+
+        tracing::debug!(
+            agent_id = %agent_id,
+            agent_type = ?agent.agent_type,
+            tool_count = tools.len(),
+            "Filtered tools by agent type capabilities"
+        );
 
         // Call LLM with tools
         match llm
@@ -223,20 +235,19 @@ async fn send_message_json(
                 let mut total_completion = response.completion_tokens;
                 let mut final_content = response.content.clone();
 
-                // Handle tool use loop (max iterations from constant)
+                // Handle tool use loop (max iterations from agent type capabilities)
+                let max_iterations = capabilities.max_iterations;
                 let mut iterations = 0u32;
                 let mut stop_reason = "end_turn".to_string();
                 let mut pause_signal: Option<(u64, u64)> = None;
 
-                while response.stop_reason == "tool_use"
-                    && iterations < AGENT_LOOP_ITERATIONS_MAX
-                {
+                while response.stop_reason == "tool_use" && iterations < max_iterations {
                     iterations += 1;
                     tracing::info!(
                         agent_id = %agent_id,
                         tool_count = response.tool_calls.len(),
                         iteration = iterations,
-                        max_iterations = AGENT_LOOP_ITERATIONS_MAX,
+                        max_iterations = max_iterations,
                         "Executing tools"
                     );
 
@@ -262,16 +273,25 @@ async fn send_message_json(
                         if let Some((minutes, pause_until_ms)) =
                             parse_pause_signal(&exec_result.output)
                         {
-                            tracing::info!(
-                                agent_id = %agent_id,
-                                pause_minutes = minutes,
-                                pause_until_ms = pause_until_ms,
-                                "Agent requested heartbeat pause"
-                            );
+                            // Verify agent type supports heartbeats (defense-in-depth)
+                            if !capabilities.supports_heartbeats {
+                                tracing::warn!(
+                                    agent_id = %agent_id,
+                                    agent_type = ?agent.agent_type,
+                                    "Agent called pause_heartbeats but type doesn't support heartbeats"
+                                );
+                            } else {
+                                tracing::info!(
+                                    agent_id = %agent_id,
+                                    pause_minutes = minutes,
+                                    pause_until_ms = pause_until_ms,
+                                    "Agent requested heartbeat pause"
+                                );
 
-                            pause_signal = Some((minutes, pause_until_ms));
-                            stop_reason = "pause_heartbeats".to_string();
-                            should_break = true;
+                                pause_signal = Some((minutes, pause_until_ms));
+                                stop_reason = "pause_heartbeats".to_string();
+                                should_break = true;
+                            }
                         }
 
                         // Also check signal field
@@ -280,16 +300,25 @@ async fn send_message_json(
                             pause_until_ms,
                         } = &exec_result.signal
                         {
-                            tracing::info!(
-                                agent_id = %agent_id,
-                                pause_minutes = minutes,
-                                pause_until_ms = pause_until_ms,
-                                "Agent requested heartbeat pause (via signal)"
-                            );
+                            // Verify agent type supports heartbeats (defense-in-depth)
+                            if !capabilities.supports_heartbeats {
+                                tracing::warn!(
+                                    agent_id = %agent_id,
+                                    agent_type = ?agent.agent_type,
+                                    "Agent called pause_heartbeats but type doesn't support heartbeats (via signal)"
+                                );
+                            } else {
+                                tracing::info!(
+                                    agent_id = %agent_id,
+                                    pause_minutes = minutes,
+                                    pause_until_ms = pause_until_ms,
+                                    "Agent requested heartbeat pause (via signal)"
+                                );
 
-                            pause_signal = Some((*minutes, *pause_until_ms));
-                            stop_reason = "pause_heartbeats".to_string();
-                            should_break = true;
+                                pause_signal = Some((*minutes, *pause_until_ms));
+                                stop_reason = "pause_heartbeats".to_string();
+                                should_break = true;
+                            }
                         }
 
                         tool_results.push((tool_call.id.clone(), exec_result.output));
@@ -354,13 +383,17 @@ async fn send_message_json(
                 );
 
                 // If we hit max iterations without pause, set stop_reason
-                if iterations >= AGENT_LOOP_ITERATIONS_MAX
-                    && stop_reason == "end_turn"
-                {
+                if iterations >= AGENT_LOOP_ITERATIONS_MAX && stop_reason == "end_turn" {
                     stop_reason = "max_iterations".to_string();
                 }
 
-                (final_content, total_prompt, total_completion, stop_reason, pause_signal)
+                (
+                    final_content,
+                    total_prompt,
+                    total_completion,
+                    stop_reason,
+                    pause_signal,
+                )
             }
             Err(e) => {
                 tracing::error!(agent_id = %agent_id, error = %e, "LLM call failed");
@@ -544,9 +577,7 @@ async fn generate_sse_events(
             let mut iterations = 0u32;
 
             // Handle tool use loop
-            while response.stop_reason == "tool_use"
-                && iterations < AGENT_LOOP_ITERATIONS_MAX
-            {
+            while response.stop_reason == "tool_use" && iterations < AGENT_LOOP_ITERATIONS_MAX {
                 iterations += 1;
 
                 // Send tool call events
@@ -574,8 +605,7 @@ async fn generate_sse_events(
                         .await;
 
                     // Check for pause_heartbeats signal
-                    if let Some((minutes, pause_until_ms)) =
-                        parse_pause_signal(&exec_result.output)
+                    if let Some((minutes, pause_until_ms)) = parse_pause_signal(&exec_result.output)
                     {
                         tracing::info!(
                             agent_id = %agent_id,
@@ -588,8 +618,10 @@ async fn generate_sse_events(
                     }
 
                     // Also check signal field
-                    if let ToolSignal::PauseHeartbeats { minutes, pause_until_ms } =
-                        &exec_result.signal
+                    if let ToolSignal::PauseHeartbeats {
+                        minutes,
+                        pause_until_ms,
+                    } = &exec_result.signal
                     {
                         tracing::info!(
                             agent_id = %agent_id,

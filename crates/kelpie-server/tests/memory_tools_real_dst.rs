@@ -8,7 +8,12 @@
 //! - Test concurrent access patterns to find race conditions
 //!
 //! Bugs found by DST:
-//! - BUG-001: TOCTOU race in core_memory_append (check-then-act not atomic)
+//! - BUG-001: TOCTOU race in core_memory_append (check-then-act not atomic) - FIXED
+//! - BUG-002: Agent isolation not enforced in archival search - FIXED
+//!
+//! NOTE: This test file requires the "dst" feature to compile.
+
+#![cfg(feature = "dst")]
 
 use futures::future::join_all;
 use kelpie_dst::fault::{FaultConfig, FaultInjectorBuilder, FaultType};
@@ -59,6 +64,14 @@ fn create_test_agent(name: &str) -> AgentState {
 // Basic Fault Injection Tests
 // =============================================================================
 
+/// BUG-001 FIX VERIFICATION: core_memory_append no longer uses separate read
+///
+/// After the TOCTOU fix, core_memory_append uses atomic append_or_create_block_by_label
+/// which does NOT perform a separate read operation. This means block_read faults
+/// should NOT affect core_memory_append anymore.
+///
+/// Old behavior (TOCTOU bug): get_block_by_label (read) -> update_block_by_label (write)
+/// New behavior (atomic): append_or_create_block_by_label (single write)
 #[tokio::test]
 async fn test_core_memory_append_with_block_read_fault() {
     let seed = get_seed();
@@ -67,9 +80,7 @@ async fn test_core_memory_append_with_block_read_fault() {
     // Create fault injector that always fails block reads
     let fault_injector = Arc::new(
         FaultInjectorBuilder::new(rng)
-            .with_fault(
-                FaultConfig::new(FaultType::StorageReadFail, 1.0).with_filter("block_read"),
-            )
+            .with_fault(FaultConfig::new(FaultType::StorageReadFail, 1.0).with_filter("block_read"))
             .build(),
     );
 
@@ -84,7 +95,8 @@ async fn test_core_memory_append_with_block_read_fault() {
     let registry = state.tool_registry();
     register_memory_tools(registry, state.clone()).await;
 
-    // Try to append - should fail due to fault injection
+    // BUG-001 FIX: Append should SUCCEED despite block_read faults
+    // The new atomic method doesn't do a separate read operation
     let result = registry
         .execute(
             "core_memory_append",
@@ -96,10 +108,10 @@ async fn test_core_memory_append_with_block_read_fault() {
         )
         .await;
 
-    // The tool should return an error message, not crash
+    // BUG-001 FIX VERIFIED: Operation succeeds because it's now atomic (no separate read)
     assert!(
-        result.output.contains("Error") || result.output.contains("fault"),
-        "Expected error message, got: {}",
+        result.success && result.output.contains("Successfully"),
+        "BUG-001 FIX: Append should succeed without read fault affecting it. Got: {}",
         result.output
     );
 }
@@ -156,9 +168,7 @@ async fn test_core_memory_replace_with_read_fault() {
     // Create fault injector that always fails block reads
     let fault_injector = Arc::new(
         FaultInjectorBuilder::new(rng)
-            .with_fault(
-                FaultConfig::new(FaultType::StorageReadFail, 1.0).with_filter("block_read"),
-            )
+            .with_fault(FaultConfig::new(FaultType::StorageReadFail, 1.0).with_filter("block_read"))
             .build(),
     );
 
@@ -334,9 +344,7 @@ async fn test_memory_operations_with_probabilistic_faults() {
     // 30% chance of fault injection - some operations should succeed, some fail
     let fault_injector = Arc::new(
         FaultInjectorBuilder::new(rng)
-            .with_fault(
-                FaultConfig::new(FaultType::StorageReadFail, 0.3).with_filter("block_read"),
-            )
+            .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.3).with_filter("block_read"))
             .with_fault(
                 FaultConfig::new(FaultType::StorageWriteFail, 0.3).with_filter("block_write"),
             )
@@ -532,7 +540,10 @@ async fn test_memory_tools_recovery_after_fault() {
             }),
         )
         .await;
-    eprintln!("First append result: {} - {}", result1.success, result1.output);
+    eprintln!(
+        "First append result: {} - {}",
+        result1.success, result1.output
+    );
 
     // Second append should fail (fault triggers)
     let result2 = registry
@@ -545,7 +556,10 @@ async fn test_memory_tools_recovery_after_fault() {
             }),
         )
         .await;
-    eprintln!("Second append result: {} - {}", result2.success, result2.output);
+    eprintln!(
+        "Second append result: {} - {}",
+        result2.success, result2.output
+    );
 
     // Third append should succeed (fault exhausted)
     let result3 = registry
@@ -558,7 +572,10 @@ async fn test_memory_tools_recovery_after_fault() {
             }),
         )
         .await;
-    eprintln!("Third append result: {} - {}", result3.success, result3.output);
+    eprintln!(
+        "Third append result: {} - {}",
+        result3.success, result3.output
+    );
 
     // Verify the block has content from append 1 and 3, not 2
     let block = state

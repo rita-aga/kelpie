@@ -3,12 +3,12 @@
 //! TigerStyle: Letta-compatible memory block operations.
 
 use crate::api::ApiError;
-use kelpie_server::models::{Block, UpdateBlockRequest};
-use kelpie_server::state::AppState;
 use axum::{
     extract::{Path, State},
     Json,
 };
+use kelpie_server::models::{Block, UpdateBlockRequest};
+use kelpie_server::state::AppState;
 use tracing::instrument;
 
 /// List all blocks for an agent
@@ -135,11 +135,11 @@ pub async fn update_block_by_label(
 #[cfg(test)]
 mod tests {
     use crate::api;
-    use kelpie_server::models::AgentState;
-    use kelpie_server::state::AppState;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
+    use kelpie_server::models::AgentState;
+    use kelpie_server::state::AppState;
     use tower::ServiceExt;
 
     async fn test_app_with_agent() -> (Router, String, String) {

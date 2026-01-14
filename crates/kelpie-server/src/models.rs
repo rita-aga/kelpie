@@ -11,7 +11,7 @@ use uuid::Uuid;
 // =============================================================================
 
 /// Agent type enumeration (matches Letta's agent types)
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[allow(clippy::enum_variant_names)] // Matches Letta's API naming
 pub enum AgentType {
@@ -19,6 +19,77 @@ pub enum AgentType {
     MemgptAgent,
     LettaV1Agent,
     ReactAgent,
+}
+
+// =============================================================================
+// Agent Capabilities (TigerStyle: Static capabilities per type)
+// =============================================================================
+
+/// Capabilities vary by agent type - determines what tools are available
+///
+/// TigerStyle: Use struct instead of trait for type-specific configuration.
+/// Agent types differ in configuration, not behavior. The agent loop logic
+/// is identical; only the available tools and settings differ.
+#[derive(Debug, Clone)]
+pub struct AgentCapabilities {
+    /// Tools this agent type can use
+    pub allowed_tools: Vec<String>,
+    /// Whether this agent supports pause_heartbeats
+    pub supports_heartbeats: bool,
+    /// Default system prompt template (None = use default)
+    pub system_prompt_template: Option<String>,
+    /// Maximum agent loop iterations
+    pub max_iterations: u32,
+}
+
+/// ReAct-style system prompt template
+const REACT_PROMPT: &str = r#"You are a ReAct agent. Follow this pattern:
+Thought: Think about what to do
+Action: Use a tool
+Observation: Observe the result
+... repeat until done ...
+Thought: I now know the answer
+Final Answer: Your response"#;
+
+impl AgentType {
+    /// Get capabilities for this agent type
+    ///
+    /// TigerStyle: Static mapping - type determines capabilities.
+    /// No per-agent capability persistence needed.
+    pub fn capabilities(&self) -> AgentCapabilities {
+        match self {
+            AgentType::MemgptAgent => AgentCapabilities {
+                allowed_tools: vec![
+                    "shell".to_string(),
+                    "core_memory_append".to_string(),
+                    "core_memory_replace".to_string(),
+                    "archival_memory_insert".to_string(),
+                    "archival_memory_search".to_string(),
+                    "conversation_search".to_string(),
+                    "pause_heartbeats".to_string(),
+                ],
+                supports_heartbeats: true,
+                system_prompt_template: None, // Use default
+                max_iterations: 5,
+            },
+            AgentType::ReactAgent => AgentCapabilities {
+                allowed_tools: vec!["shell".to_string()],
+                supports_heartbeats: false,
+                system_prompt_template: Some(REACT_PROMPT.to_string()),
+                max_iterations: 10, // ReAct may need more iterations
+            },
+            AgentType::LettaV1Agent => AgentCapabilities {
+                allowed_tools: vec![
+                    "shell".to_string(),
+                    "core_memory_append".to_string(),
+                    "core_memory_replace".to_string(),
+                ],
+                supports_heartbeats: false,
+                system_prompt_template: None,
+                max_iterations: 5,
+            },
+        }
+    }
 }
 
 /// Request to create a new agent

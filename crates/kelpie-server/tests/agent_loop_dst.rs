@@ -29,7 +29,9 @@ fn to_core_error<E: std::fmt::Display>(e: E) -> CoreError {
 }
 
 /// Create a registry with a simple builtin tool for testing
-async fn create_registry_with_builtin(fault_injector: Option<Arc<FaultInjector>>) -> UnifiedToolRegistry {
+async fn create_registry_with_builtin(
+    fault_injector: Option<Arc<FaultInjector>>,
+) -> UnifiedToolRegistry {
     let registry = UnifiedToolRegistry::new();
 
     // Register a builtin echo tool that can be faulted
@@ -197,9 +199,7 @@ async fn test_dst_registry_builtin_with_faults() {
                 let registry = create_registry_with_builtin(Some(env.faults.clone())).await;
 
                 // Execute tool - should fail due to fault injection
-                let result = registry
-                    .execute("echo", &json!({"message": "test"}))
-                    .await;
+                let result = registry.execute("echo", &json!({"message": "test"})).await;
 
                 if !result.success {
                     println!("Fault correctly injected: {}", result.output);
@@ -346,9 +346,7 @@ async fn test_dst_registry_mcp_tool_execution() {
             }
 
             // Inject SimMcpClient into registry
-            registry
-                .set_sim_mcp_client(Arc::new(mcp_client))
-                .await;
+            registry.set_sim_mcp_client(Arc::new(mcp_client)).await;
 
             // Verify tools are registered
             assert!(registry.has_tool("server1_echo").await);
@@ -359,9 +357,16 @@ async fn test_dst_registry_mcp_tool_execution() {
                 .execute("server1_echo", &json!({"message": "hello from registry"}))
                 .await;
 
-            println!("MCP tool result: success={}, output={}", result.success, result.output);
+            println!(
+                "MCP tool result: success={}, output={}",
+                result.success, result.output
+            );
 
-            assert!(result.success, "MCP tool execution should succeed: {}", result.output);
+            assert!(
+                result.success,
+                "MCP tool execution should succeed: {}",
+                result.output
+            );
 
             Ok::<(), CoreError>(())
         })
@@ -403,9 +408,7 @@ async fn test_dst_registry_mcp_with_crash_fault() {
                     .await;
 
                 // Inject client
-                registry
-                    .set_sim_mcp_client(Arc::new(mcp_client))
-                    .await;
+                registry.set_sim_mcp_client(Arc::new(mcp_client)).await;
 
                 // Execute - should fail due to fault
                 let result = registry
@@ -474,9 +477,7 @@ async fn test_dst_registry_mixed_tools_under_faults() {
                     )
                     .await;
 
-                registry
-                    .set_sim_mcp_client(Arc::new(mcp_client))
-                    .await;
+                registry.set_sim_mcp_client(Arc::new(mcp_client)).await;
 
                 // Execute both types of tools multiple times
                 for i in 0..10 {
@@ -554,12 +555,16 @@ async fn test_dst_registry_mcp_without_client() {
                 .execute("orphan_tool", &json!({"data": "test"}))
                 .await;
 
-            println!("Orphan tool result: success={}, output={}", result.success, result.output);
+            println!(
+                "Orphan tool result: success={}, output={}",
+                result.success, result.output
+            );
 
             // Should fail, not panic
             assert!(!result.success, "Should fail without MCP client");
             assert!(
-                result.output.contains("not yet implemented") || result.output.contains("not found"),
+                result.output.contains("not yet implemented")
+                    || result.output.contains("not found"),
                 "Error message should be helpful: {}",
                 result.output
             );
@@ -636,9 +641,8 @@ async fn test_dst_registry_unregister_reregister() {
             assert!(result.output.contains("not found"));
 
             // Re-register with different handler
-            let handler: BuiltinToolHandler = Arc::new(|_| {
-                Box::pin(async { "new handler".to_string() })
-            });
+            let handler: BuiltinToolHandler =
+                Arc::new(|_| Box::pin(async { "new handler".to_string() }));
             registry
                 .register_builtin("echo", "Re-registered echo", json!({}), handler)
                 .await;
@@ -707,7 +711,9 @@ async fn test_dst_registry_determinism() {
         let log = execution_log.clone();
 
         let result = Simulation::new(config)
-            .with_fault(FaultConfig::new(FaultType::McpToolFail, 0.5).with_filter("builtin_execute"))
+            .with_fault(
+                FaultConfig::new(FaultType::McpToolFail, 0.5).with_filter("builtin_execute"),
+            )
             .run_async(move |env| {
                 let log = log.clone();
                 async move {

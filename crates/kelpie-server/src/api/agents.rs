@@ -3,13 +3,13 @@
 //! TigerStyle: Letta-compatible agent CRUD operations.
 
 use crate::api::ApiError;
-use kelpie_server::models::{AgentState, CreateAgentRequest, ListResponse, UpdateAgentRequest};
-use kelpie_server::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     routing::get,
     Json, Router,
 };
+use kelpie_server::models::{AgentState, CreateAgentRequest, ListResponse, UpdateAgentRequest};
+use kelpie_server::state::AppState;
 use serde::Deserialize;
 use tracing::instrument;
 

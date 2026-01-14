@@ -3,9 +3,6 @@
 //! TigerStyle: Implements Letta's SSE streaming protocol.
 
 use crate::api::ApiError;
-use kelpie_server::llm::{ChatMessage, ContentBlock, ToolDefinition};
-use kelpie_server::models::{CreateMessageRequest, Message, MessageRole};
-use kelpie_server::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     response::sse::{Event, KeepAlive, Sse},
@@ -13,6 +10,9 @@ use axum::{
 use chrono::Utc;
 use futures::stream::{self, Stream, StreamExt};
 use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
+use kelpie_server::llm::{ChatMessage, ContentBlock, ToolDefinition};
+use kelpie_server::models::{CreateMessageRequest, Message, MessageRole};
+use kelpie_server::state::AppState;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::time::Duration;

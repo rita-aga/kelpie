@@ -19,9 +19,10 @@ use std::sync::Arc;
 /// Clock source for time operations
 ///
 /// Supports both real system time (production) and simulated time (DST testing).
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub enum ClockSource {
     /// Real system clock (production)
+    #[default]
     Real,
     /// Simulated clock function (DST testing)
     Sim(Arc<dyn Fn() -> u64 + Send + Sync>),
@@ -37,12 +38,6 @@ impl ClockSource {
                 .as_millis() as u64,
             ClockSource::Sim(clock_fn) => clock_fn(),
         }
-    }
-}
-
-impl Default for ClockSource {
-    fn default() -> Self {
-        ClockSource::Real
     }
 }
 
@@ -81,8 +76,7 @@ async fn register_pause_heartbeats(registry: &UnifiedToolRegistry, clock: ClockS
                 .unwrap_or(HEARTBEAT_PAUSE_MINUTES_DEFAULT);
 
             // TigerStyle: Clamp to valid range with explicit bounds
-            let minutes =
-                minutes.clamp(HEARTBEAT_PAUSE_MINUTES_MIN, HEARTBEAT_PAUSE_MINUTES_MAX);
+            let minutes = minutes.clamp(HEARTBEAT_PAUSE_MINUTES_MIN, HEARTBEAT_PAUSE_MINUTES_MAX);
 
             // TigerStyle: Assertions
             debug_assert!(minutes >= HEARTBEAT_PAUSE_MINUTES_MIN);

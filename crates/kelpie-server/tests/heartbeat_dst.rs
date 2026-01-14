@@ -181,7 +181,10 @@ impl SimAgentLoop {
 #[test]
 fn test_pause_heartbeats_basic_execution() {
     let config = SimConfig::from_env_or_random();
-    println!("DST seed: {} (set DST_SEED={} to replay)", config.seed, config.seed);
+    println!(
+        "DST seed: {} (set DST_SEED={} to replay)",
+        config.seed, config.seed
+    );
 
     let result = Simulation::new(config).run(|env| async move {
         // Create clock function using SimClock
@@ -196,7 +199,10 @@ fn test_pause_heartbeats_basic_execution() {
         // Assertions
         assert!(result.success, "Tool execution should succeed");
         assert!(
-            matches!(result.signal, ToolSignal::PauseHeartbeats { minutes: 2, .. }),
+            matches!(
+                result.signal,
+                ToolSignal::PauseHeartbeats { minutes: 2, .. }
+            ),
             "Should signal pause for default 2 minutes"
         );
 
@@ -317,10 +323,17 @@ fn test_agent_loop_stops_on_pause() {
         // Check that loop stopped due to pause
         let (should_continue, stop_reason) = agent_loop.should_continue(iteration);
         assert!(!should_continue, "Loop should stop after pause");
-        assert_eq!(stop_reason, "pause_heartbeats", "Stop reason should be pause");
+        assert_eq!(
+            stop_reason, "pause_heartbeats",
+            "Stop reason should be pause"
+        );
 
         // Verify we only did 2 iterations (0 and 1), not all 5
-        assert_eq!(agent_loop.iterations(), 2, "Should have stopped at iteration 2");
+        assert_eq!(
+            agent_loop.iterations(),
+            2,
+            "Should have stopped at iteration 2"
+        );
 
         Ok(())
     });
@@ -392,7 +405,10 @@ fn test_pause_with_clock_skew() {
             // (since we're using SimClock directly, skew doesn't affect the calculation)
             if let ToolSignal::PauseHeartbeats { pause_until_ms, .. } = result.signal {
                 let expected = initial_time + (2 * MS_PER_MINUTE);
-                assert_eq!(pause_until_ms, expected, "Clock skew should not affect pause calculation");
+                assert_eq!(
+                    pause_until_ms, expected,
+                    "Clock skew should not affect pause calculation"
+                );
             }
 
             Ok(())
@@ -420,7 +436,10 @@ fn test_pause_with_clock_jump_forward() {
         env.advance_time_ms(3 * MS_PER_MINUTE);
 
         // Pause should have expired
-        assert!(!agent_loop.is_paused(), "Clock jump forward should expire pause");
+        assert!(
+            !agent_loop.is_paused(),
+            "Clock jump forward should expire pause"
+        );
 
         Ok(())
     });
@@ -453,7 +472,10 @@ fn test_pause_with_clock_jump_backward() {
         // Even if we can't go backward, verify the pause remains
         // (this tests that pause doesn't accidentally get cleared)
         env.advance_time_ms(MS_PER_MINUTE);
-        assert!(agent_loop.is_paused(), "Should still be paused after 1 minute");
+        assert!(
+            agent_loop.is_paused(),
+            "Should still be paused after 1 minute"
+        );
 
         Ok(())
     });
@@ -705,7 +727,11 @@ fn test_pause_with_time_advancement_stress() {
             let minutes = (i % 5) + 1;
             agent_loop.execute_tool("pause_heartbeats", &json!({ "minutes": minutes }));
 
-            assert!(agent_loop.is_paused(), "Should be paused at iteration {}", i);
+            assert!(
+                agent_loop.is_paused(),
+                "Should be paused at iteration {}",
+                i
+            );
 
             // Advance time past pause
             env.advance_time_ms((minutes as u64 + 1) * MS_PER_MINUTE);
@@ -746,7 +772,8 @@ fn test_pause_stop_reason_in_response() {
         let result = agent_loop.execute_tool("pause_heartbeats", &json!({ "minutes": 5 }));
 
         // Build response stop reason
-        let stop_reason = if let ToolSignal::PauseHeartbeats { pause_until_ms, .. } = result.signal {
+        let stop_reason = if let ToolSignal::PauseHeartbeats { pause_until_ms, .. } = result.signal
+        {
             StopReason::PauseHeartbeats { pause_until_ms }
         } else {
             StopReason::EndTurn
