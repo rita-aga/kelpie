@@ -7,6 +7,7 @@ use crate::fault::FaultInjector;
 use crate::llm::{SimChatMessage, SimCompletionResponse, SimLlmClient, SimToolDefinition};
 use crate::rng::DeterministicRng;
 use crate::storage::SimStorage;
+use kelpie_core::{Error, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -104,7 +105,7 @@ impl SimAgentEnv {
     ///
     /// This is a placeholder for Phase 3 when AgentActor is implemented.
     /// For now, it just stores the config in memory for test assertions.
-    pub fn create_agent(&mut self, config: AgentTestConfig) -> Result<String, String> {
+    pub fn create_agent(&mut self, config: AgentTestConfig) -> Result<String> {
         // Generate deterministic agent ID
         let agent_id = format!("agent-{}", self.rng.next_u64());
 
@@ -132,12 +133,11 @@ impl SimAgentEnv {
         &self,
         agent_id: &str,
         message: &str,
-    ) -> Result<SimCompletionResponse, String> {
+    ) -> Result<SimCompletionResponse> {
         // Get agent state
-        let agent = self
-            .agents
-            .get(agent_id)
-            .ok_or_else(|| format!("Agent not found: {}", agent_id))?;
+        let agent = self.agents.get(agent_id).ok_or_else(|| Error::Internal {
+            message: format!("Agent not found: {}", agent_id),
+        })?;
 
         // Build messages
         let mut messages = vec![];
@@ -175,31 +175,40 @@ impl SimAgentEnv {
             .collect();
 
         // Call LLM
-        self.llm.complete_with_tools(messages, tools).await
+        self.llm
+            .complete_with_tools(messages, tools)
+            .await
+            .map_err(|e| Error::Internal { message: e })
     }
 
     /// Get agent state for test assertions
-    pub fn get_agent(&self, agent_id: &str) -> Result<AgentTestState, String> {
+    pub fn get_agent(&self, agent_id: &str) -> Result<AgentTestState> {
         self.agents
             .get(agent_id)
             .cloned()
-            .ok_or_else(|| format!("Agent not found: {}", agent_id))
+            .ok_or_else(|| Error::Internal {
+                message: format!("Agent not found: {}", agent_id),
+            })
     }
 
     /// Update agent state (for testing modifications)
-    pub fn update_agent(&mut self, agent_id: &str, state: AgentTestState) -> Result<(), String> {
+    pub fn update_agent(&mut self, agent_id: &str, state: AgentTestState) -> Result<()> {
         if !self.agents.contains_key(agent_id) {
-            return Err(format!("Agent not found: {}", agent_id));
+            return Err(Error::Internal {
+                message: format!("Agent not found: {}", agent_id),
+            });
         }
         self.agents.insert(agent_id.to_string(), state);
         Ok(())
     }
 
     /// Delete agent
-    pub fn delete_agent(&mut self, agent_id: &str) -> Result<(), String> {
+    pub fn delete_agent(&mut self, agent_id: &str) -> Result<()> {
         self.agents
             .remove(agent_id)
-            .ok_or_else(|| format!("Agent not found: {}", agent_id))?;
+            .ok_or_else(|| Error::Internal {
+                message: format!("Agent not found: {}", agent_id),
+            })?;
         Ok(())
     }
 

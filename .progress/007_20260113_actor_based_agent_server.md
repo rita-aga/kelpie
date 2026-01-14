@@ -1037,7 +1037,49 @@ cargo fmt --check
 - `agent_loop_dst.rs` - Tool registry tests with SimMcpClient
 - `heartbeat_dst.rs` - Pause mechanism with SimClock
 - `memory_tools_dst.rs` - Memory tools with fault injection
-- **Gap:** No end-to-end agent invoke simulation (LLM → tools → response)
+- ~~**Gap:** No end-to-end agent invoke simulation (LLM → tools → response)~~ ✅ **FIXED**
+- `agent_integration_dst.rs` (NEW) - 9 comprehensive integration tests with full Simulation harness
+
+### Integration Testing Results (Phase 1.4)
+
+**Bugs Found by Full Simulation Testing:**
+
+1. **Bug #1: SimStorage Not Clone-able**
+   - **Symptom:** `no method named 'clone' found for struct 'SimStorage'`
+   - **Root Cause:** SimStorage wraps Arc<RwLock<HashMap>> but didn't derive Clone
+   - **Impact:** Cannot share storage across SimEnvironment components
+   - **Fix:** Added `#[derive(Clone)]` to SimStorage (Arc cloning is cheap)
+   - **Severity:** Critical - blocked all integration testing
+
+2. **Bug #2: Error Type Mismatch**
+   - **Symptom:** `the trait 'From<String>' is not implemented for 'kelpie_core::error::Error'`
+   - **Root Cause:** SimAgentEnv returned `Result<_, String>`, Simulation expects `Result<_, kelpie_core::Error>`
+   - **Impact:** Cannot use `?` operator in simulation closures
+   - **Fix:** Changed all SimAgentEnv methods to return `Result<_, kelpie_core::Error>`
+   - **Severity:** Critical - blocked integration with Simulation framework
+
+**Integration Test Coverage:**
+- ✅ `test_agent_env_with_simulation_basic` - Basic agent creation and messaging
+- ✅ `test_agent_env_with_llm_faults` - 30%+20% fault rate, verifies failures occur
+- ✅ `test_agent_env_with_storage_faults` - Storage operations under 10%+10% fault injection
+- ✅ `test_agent_env_with_time_advancement` - Simulated time progression
+- ✅ `test_agent_env_determinism` - Same seed produces same results
+- ✅ `test_agent_env_multiple_agents_concurrent` - 10 agents, all accessible
+- ✅ `test_agent_env_with_tools` - Tool call generation works
+- ✅ `test_agent_env_stress_with_faults` - 20 agents, 100 messages, 35% combined fault rate
+- ✅ `test_llm_client_direct_with_simulation` - Direct LLM testing with 25% failure rate
+
+**Fault Injection Verification:**
+- LLM faults (timeout, failure, rate limit) properly injected and handled
+- Storage faults (read fail, write fail) tested under load
+- Determinism maintained under fault conditions
+- Success/failure ratio matches expected probability
+
+**Test Result Summary:**
+- 59 total tests passing (50 unit + 9 integration)
+- All tests use seeded RNG for reproducibility
+- Multiple fault scenarios validated
+- No flaky tests observed
 
 ### Gaps Identified
 - ❓ Streaming support: Need to investigate if actors can yield intermediate results
@@ -1071,10 +1113,14 @@ cargo fmt --check
 |------|------------|-----------------|
 | Current API (HashMap-based) | `cargo run -p kelpie-server` then `curl POST /v1/agents` | Agent created, stored in memory |
 | Actor runtime standalone | `cargo test -p kelpie-runtime` | 23 tests pass |
-| **Phase 1: DST Harness** | `cargo test -p kelpie-dst` | 50 tests pass (14 new tests) |
+| **Phase 1: DST Harness** | `cargo test -p kelpie-dst` | **59 tests pass** (23 new: 14 unit + 9 integration) |
 | SimLlmClient | `cargo test -p kelpie-dst test_sim_llm` | 6 tests pass, deterministic LLM responses |
 | SimAgentEnv | `cargo test -p kelpie-dst test_sim_agent_env` | 8 tests pass, agent-level test harness |
+| **Integration Tests** | `cargo test -p kelpie-dst agent_integration_dst` | **9 tests pass with full Simulation harness** |
 | LLM fault types | See fault tests | LlmTimeout, LlmFailure, LlmRateLimited work |
+| Fault injection | Integration tests | 35% combined fault rate, proper failures observed |
+| Storage Clone bug | Fixed | SimStorage now Clone-able for SimEnvironment |
+| Error type bug | Fixed | SimAgentEnv uses kelpie_core::Error |
 
 ### Doesn't Work Yet ❌
 | What | Why | When Expected |

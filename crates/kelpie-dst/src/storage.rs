@@ -15,7 +15,7 @@ use tokio::sync::RwLock;
 /// Simulated storage for DST
 ///
 /// Provides an in-memory key-value store with configurable fault injection.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SimStorage {
     /// Storage data
     data: Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>,
