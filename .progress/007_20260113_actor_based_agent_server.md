@@ -605,12 +605,13 @@ async fn test_dst_agent_actor_crash_recovery() {
 }
 ```
 
-- [ ] Write `test_dst_agent_actor_activation_basic`
-- [ ] Write `test_dst_agent_actor_activation_with_storage_fail`
-- [ ] Write `test_dst_agent_actor_deactivation_persists_state`
-- [ ] Write `test_dst_agent_actor_deactivation_with_storage_fail`
-- [ ] Write `test_dst_agent_actor_crash_recovery`
-- [ ] **Run tests, confirm they FAIL** (expected - no implementation)
+- [x] Write `test_dst_agent_actor_activation_basic`
+- [x] Write `test_dst_agent_actor_activation_with_storage_fail`
+- [x] Write `test_dst_agent_actor_deactivation_persists_state`
+- [x] Write `test_dst_agent_actor_deactivation_with_storage_fail`
+- [x] Write `test_dst_agent_actor_crash_recovery`
+- [x] **Tests written** - marked `#[ignore]` until Phase 3 implements AgentActor
+- ⚠️ **Cannot run yet** - blocked by external umi-memory compilation error
 
 **2.2 - AgentActor Message Handling Tests**
 
@@ -648,12 +649,13 @@ async fn test_dst_agent_memory_tools() {
 }
 ```
 
-- [ ] Write `test_dst_agent_handle_message_basic`
-- [ ] Write `test_dst_agent_handle_message_with_llm_timeout`
-- [ ] Write `test_dst_agent_handle_message_with_llm_failure`
-- [ ] Write `test_dst_agent_tool_execution`
-- [ ] Write `test_dst_agent_memory_tools`
-- [ ] **Run tests, confirm they FAIL**
+- [x] Write `test_dst_agent_handle_message_basic`
+- [x] Write `test_dst_agent_handle_message_with_llm_timeout`
+- [x] Write `test_dst_agent_handle_message_with_llm_failure`
+- [x] Write `test_dst_agent_tool_execution`
+- [x] Write `test_dst_agent_memory_tools`
+- [x] **Tests written** - define contract for AgentActor message handling
+- ⚠️ **Cannot run yet** - blocked by external umi-memory compilation error
 
 **2.3 - AgentService Tests**
 
