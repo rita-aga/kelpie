@@ -398,10 +398,23 @@ cargo run -p kelpie-server
 4. List handler dual-mode (Phase 6.5)
 5. Zero deployment risk maintained
 
-**Next Steps:**
-- Migrate send_message handler (agent loop refactoring)
-- Or proceed to Phase 7 (Message streaming)
-- send_message can remain HashMap-based until agent loop redesign
+**Phase 6 Completion Tasks:**
+
+### Remaining Work to Fully Complete Phase 6:
+
+1. **Simplify list_agents** - Current `list_agents_async()` always uses HashMap. For now, accept this limitation since registry support is Phase 8+.
+
+2. **Migrate send_message handler** - Complex because it has agent loop logic (tool execution, message storage). Options:
+   - **Option A:** Move agent loop logic into AgentActor.handle_message (LARGE refactoring)
+   - **Option B:** Keep logic in handler but call through AppState dual-mode method (SIMPLER)
+   - **Decision:** Option B for now - create `send_message_async()` wrapper
+
+3. **Remove HashMap after all handlers migrated** - Once send_message uses service, remove:
+   - `agents: HashMap<String, AgentState>` from AppStateInner
+   - `messages: HashMap<String, Vec<Message>>` from AppStateInner
+   - All HashMap-based methods
+
+**DECISION:** Completing Phase 6 fully requires significant agent loop refactoring. Recommend proceeding with current 83% migration (5/6 handlers) as "Phase 6 Core Complete" and deferring full agent loop redesign to future phase.
 
 ---
 
