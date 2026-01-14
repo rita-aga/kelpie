@@ -636,6 +636,57 @@ pub struct HealthResponse {
     pub uptime_seconds: u64,
 }
 
+/// Streaming event emitted during agent message processing
+///
+/// Phase 7: Letta-compatible SSE events for real-time message streaming
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StreamEvent {
+    /// LLM thinking (assistant message chunk)
+    MessageChunk {
+        content: String,
+    },
+
+    /// Tool call starting
+    ToolCallStart {
+        tool_call_id: String,
+        tool_name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        input: Option<serde_json::Value>,
+    },
+
+    /// Tool call completed
+    ToolCallComplete {
+        tool_call_id: String,
+        result: String,
+    },
+
+    /// Message processing complete
+    MessageComplete {
+        message_id: String,
+    },
+
+    /// Error occurred during streaming
+    Error {
+        message: String,
+    },
+}
+
+impl StreamEvent {
+    /// Get the SSE event name for this event type
+    ///
+    /// Used to set the "event:" field in Server-Sent Events
+    pub fn event_name(&self) -> &'static str {
+        match self {
+            StreamEvent::MessageChunk { .. } => "message_chunk",
+            StreamEvent::ToolCallStart { .. } => "tool_call_start",
+            StreamEvent::ToolCallComplete { .. } => "tool_call_complete",
+            StreamEvent::MessageComplete { .. } => "message_complete",
+            StreamEvent::Error { .. } => "error",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

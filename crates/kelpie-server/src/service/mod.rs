@@ -2,12 +2,13 @@
 //!
 //! TigerStyle: Service wraps dispatcher, provides clean API, handles errors.
 
-use crate::models::{AgentState, CreateAgentRequest, UpdateAgentRequest};
+use crate::models::{AgentState, CreateAgentRequest, StreamEvent, UpdateAgentRequest};
 use bytes::Bytes;
 use kelpie_core::actor::ActorId;
 use kelpie_core::{Error, Result};
 use kelpie_runtime::DispatcherHandle;
 use serde_json::Value;
+use tokio::sync::mpsc;
 
 /// AgentService - service layer for agent operations
 ///
@@ -87,6 +88,118 @@ impl AgentService {
         serde_json::from_slice(&response).map_err(|e| Error::Internal {
             message: format!("Failed to deserialize message response: {}", e),
         })
+    }
+
+    /// Send message to agent with streaming
+    ///
+    /// Phase 7: Streams events (tokens, tool calls) via channel as agent processes message
+    ///
+    /// # Arguments
+    /// * `agent_id` - Agent ID string
+    /// * `message` - Message as JSON value
+    /// * `tx` - Channel sender for streaming events
+    ///
+    /// # Returns
+    /// Ok(()) on success, Err if processing fails
+    ///
+    /// # Errors
+    /// - Invalid agent_id
+    /// - Actor invocation failure
+    /// - Channel send failure (client disconnected)
+    pub async fn send_message_stream(
+        &self,
+        agent_id: &str,
+        message: Value,
+        tx: mpsc::Sender<StreamEvent>,
+    ) -> Result<()> {
+        // Phase 7.4: Simplified implementation that emits synthetic events
+        // Full streaming will require dispatcher.invoke_stream() in future phases
+
+        // Emit a message chunk (simulated streaming)
+        if tx
+            .send(StreamEvent::MessageChunk {
+                content: "Processing your message...".to_string(),
+            })
+            .await
+            .is_err()
+        {
+            // Client disconnected - stop processing
+            return Ok(());
+        }
+
+        // Call the regular send_message (non-streaming)
+        let response = self.send_message(agent_id, message).await?;
+
+        // Parse response and emit events
+        if let Some(content) = response.get("content").and_then(|v| v.as_str()) {
+            // Emit content as chunk
+            if tx
+                .send(StreamEvent::MessageChunk {
+                    content: content.to_string(),
+                })
+                .await
+                .is_err()
+            {
+                return Ok(());
+            }
+        }
+
+        // Check for tool calls in response
+        if let Some(tool_calls) = response.get("tool_calls").and_then(|v| v.as_array()) {
+            for tool_call in tool_calls {
+                let tool_call_id = tool_call
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let tool_name = tool_call
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+
+                // Emit tool call start
+                if tx
+                    .send(StreamEvent::ToolCallStart {
+                        tool_call_id: tool_call_id.to_string(),
+                        tool_name: tool_name.to_string(),
+                        input: tool_call.get("arguments").cloned(),
+                    })
+                    .await
+                    .is_err()
+                {
+                    return Ok(());
+                }
+
+                // Emit tool call complete (simulated)
+                if tx
+                    .send(StreamEvent::ToolCallComplete {
+                        tool_call_id: tool_call_id.to_string(),
+                        result: "Tool executed".to_string(),
+                    })
+                    .await
+                    .is_err()
+                {
+                    return Ok(());
+                }
+            }
+        }
+
+        // Emit completion event
+        let message_id = response
+            .get("message_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("msg_generated");
+
+        if tx
+            .send(StreamEvent::MessageComplete {
+                message_id: message_id.to_string(),
+            })
+            .await
+            .is_err()
+        {
+            return Ok(());
+        }
+
+        Ok(())
     }
 
     /// Get agent state
