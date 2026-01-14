@@ -165,9 +165,10 @@ async fn update_agent(
         }
     }
 
-    let updated = state.update_agent(&agent_id, |agent| {
-        agent.apply_update(request);
-    })?;
+    let update_value = serde_json::to_value(request)
+        .map_err(|e| ApiError::bad_request(format!("Invalid update request: {}", e)))?;
+
+    let updated = state.update_agent_async(&agent_id, update_value).await?;
 
     tracing::info!(agent_id = %updated.id, "updated agent");
     Ok(Json(updated))
@@ -181,7 +182,7 @@ async fn delete_agent(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
 ) -> Result<(), ApiError> {
-    state.delete_agent(&agent_id)?;
+    state.delete_agent_async(&agent_id).await?;
     tracing::info!(agent_id = %agent_id, "deleted agent");
     Ok(())
 }

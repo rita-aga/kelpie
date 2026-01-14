@@ -1,7 +1,7 @@
 # Task: HTTP Handler Migration to AgentService (Plan 007 Phase 6)
 
 **Created:** 2026-01-14 23:45:00
-**State:** PHASE 6.3 IN PROGRESS (POST /v1/agents Migrated, 2/5 handlers done)
+**State:** PHASE 6.3 IN PROGRESS (4/5 handlers migrated: GET, POST, PATCH, DELETE)
 **Parent Plan:** 007_20260113_actor_based_agent_server.md (Phase 6)
 
 ---
@@ -320,6 +320,18 @@ cargo run -p kelpie-server
 - Handlers Migrated: 2/6 (33%)
 - Skipped: GET /v1/agents (list) - requires registry infrastructure
 - Doesn't Work Yet: update, delete, send_message handlers
+- Known Limitations: List operation continues using HashMap
+
+**After Phase 6.3b (PATCH and DELETE migrated):**
+- Works Now:
+  - GET /v1/agents/{id} - dual-mode (get_agent_async)
+  - POST /v1/agents - dual-mode (create_agent_async)
+  - PATCH /v1/agents/{id} - dual-mode (update_agent_async)
+  - DELETE /v1/agents/{id} - dual-mode (delete_agent_async)
+- Test Results: 105 tests passing (1 pre-existing flaky delete test)
+- Handlers Migrated: 4/6 (67%)
+- Remaining: send_message (most complex - LLM integration)
+- Skipped: GET /v1/agents (list) - requires registry
 - Known Limitations: List operation continues using HashMap
 
 **After Phase 6.3 (All handlers migrated):**
