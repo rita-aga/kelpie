@@ -4,7 +4,7 @@
 
 use super::llm_trait::{LlmClient, LlmMessage, LlmToolCall};
 use super::state::AgentActorState;
-use crate::models::{AgentState, CreateAgentRequest, Message, MessageRole, UpdateAgentRequest, UsageStats};
+use crate::models::{AgentState, CreateAgentRequest, Message, MessageRole, ToolCall, UpdateAgentRequest, UsageStats};
 use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::actor::{Actor, ActorContext};
@@ -250,20 +250,35 @@ impl AgentActor {
 
         // 3. Call LLM
         let mut response = self.llm.complete(llm_messages.clone()).await?;
+
+        // TODO(Phase 6.9): Track real token usage from LLM API
+        // Currently returns 0 because LlmClient trait doesn't provide token counts.
+        // Will be fixed when integrating with real LLM API that returns usage metadata.
         let total_prompt_tokens = 0u64;
         let total_completion_tokens = 0u64;
+
         let mut iterations = 0u32;
         const MAX_ITERATIONS: u32 = 5;
 
         // TigerStyle: Explicit limit enforcement
         assert!(MAX_ITERATIONS > 0, "MAX_ITERATIONS must be positive");
 
-        // Track all messages returned (user + assistant + any tool messages)
-        let mut returned_messages = vec![user_msg];
-
         // 4. Tool execution loop
         while !response.tool_calls.is_empty() && iterations < MAX_ITERATIONS {
             iterations += 1;
+
+            // Map LlmToolCall to ToolCall for message storage
+            let tool_calls_mapped = Some(
+                response
+                    .tool_calls
+                    .iter()
+                    .map(|tc| ToolCall {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        arguments: tc.input.clone(),
+                    })
+                    .collect(),
+            );
 
             // Store assistant message with tool calls
             let assistant_msg = Message {
@@ -273,11 +288,10 @@ impl AgentActor {
                 role: MessageRole::Assistant,
                 content: response.content.clone(),
                 tool_call_id: None,
-                tool_calls: None, // TODO: Map LlmToolCall to ToolCall in models
+                tool_calls: tool_calls_mapped,
                 created_at: chrono::Utc::now(),
             };
-            ctx.state.add_message(assistant_msg.clone());
-            returned_messages.push(assistant_msg);
+            ctx.state.add_message(assistant_msg);
 
             // Execute each tool
             for tool_call in &response.tool_calls {
@@ -294,8 +308,7 @@ impl AgentActor {
                     tool_calls: None,
                     created_at: chrono::Utc::now(),
                 };
-                ctx.state.add_message(tool_msg.clone());
-                returned_messages.push(tool_msg);
+                ctx.state.add_message(tool_msg);
             }
 
             // Rebuild messages with tool results for next LLM call
@@ -344,8 +357,7 @@ impl AgentActor {
             tool_calls: None,
             created_at: chrono::Utc::now(),
         };
-        ctx.state.add_message(assistant_msg.clone());
-        returned_messages.push(assistant_msg);
+        ctx.state.add_message(assistant_msg);
 
         // 6. Return response with all conversation history
         // Note: Tests expect full history, not just current turn messages
