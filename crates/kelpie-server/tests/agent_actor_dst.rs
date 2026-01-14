@@ -2,20 +2,66 @@
 //!
 //! TigerStyle: Tests define the contract BEFORE implementation (DST-first).
 
+use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::actor::ActorId;
 use kelpie_core::Result;
-use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, Simulation};
+use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig, DispatcherHandle};
-use kelpie_server::actor::{AgentActor, AgentActorState};
+use kelpie_server::actor::{
+    AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse, LlmToolCall,
+};
 use kelpie_server::models::{AgentState, AgentType, CreateAgentRequest, CreateBlockRequest};
-use serde_json::json;
 use std::sync::Arc;
+
+/// Adapter to use SimLlmClient as LlmClient
+struct SimLlmClientAdapter {
+    client: Arc<SimLlmClient>,
+}
+
+#[async_trait]
+impl LlmClient for SimLlmClientAdapter {
+    async fn complete(&self, messages: Vec<LlmMessage>) -> Result<LlmResponse> {
+        // Convert LlmMessage to SimChatMessage
+        let sim_messages: Vec<kelpie_dst::SimChatMessage> = messages
+            .into_iter()
+            .map(|m| kelpie_dst::SimChatMessage {
+                role: m.role,
+                content: m.content,
+            })
+            .collect();
+
+        // Call sim LLM (no tools for now - simplified)
+        let response = self
+            .client
+            .complete_with_tools(sim_messages, vec![])
+            .await
+            .map_err(|e| kelpie_core::Error::Internal {
+                message: format!("LLM error: {}", e),
+            })?;
+
+        Ok(LlmResponse {
+            content: response.content,
+            tool_calls: vec![], // No tool calls for now
+        })
+    }
+}
 
 /// Helper to create a dispatcher with AgentActor
 fn create_dispatcher(sim_env: &SimEnvironment) -> Result<DispatcherHandle> {
+    // Create SimLlmClient from environment
+    let sim_llm = SimLlmClient::new(sim_env.rng.clone(), sim_env.faults.clone());
+
+    // Create LLM client adapter
+    let llm_adapter: Arc<dyn LlmClient> = Arc::new(SimLlmClientAdapter {
+        client: Arc::new(sim_llm),
+    });
+
+    // Create actor with LLM client
+    let actor = AgentActor::new(llm_adapter);
+
     // Create actor factory
-    let factory = Arc::new(CloneFactory::new(AgentActor::new()));
+    let factory = Arc::new(CloneFactory::new(actor));
 
     // Use SimStorage as ActorKV
     let kv = Arc::new(sim_env.storage.clone());
@@ -434,6 +480,289 @@ async fn test_dst_agent_memory_tools() {
                 state.blocks[0].value,
                 "I am helpful. I remember everything."
             );
+
+            Ok(())
+        })
+        .await;
+
+    assert!(result.is_ok(), "Test failed: {:?}", result.err());
+}
+
+/// Simple message types for testing
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct MessageRequest {
+    role: String,
+    content: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct MessageResponse {
+    role: String,
+    content: String,
+}
+
+/// Test agent actor handles message with LLM
+///
+/// Contract:
+/// - Send user message → actor builds prompt → calls LLM → returns response
+/// - Message stored in conversation history
+/// - State updated correctly
+#[tokio::test]
+async fn test_dst_agent_handle_message_basic() {
+    let config = SimConfig::new(11111);
+
+    let result = Simulation::new(config)
+        .run_async(|sim_env| async move {
+            let dispatcher = create_dispatcher(&sim_env)?;
+            let actor_id = ActorId::new("agents", "agent-chat-test")?;
+
+            // Create agent
+            let request = CreateAgentRequest {
+                name: "chat-agent".to_string(),
+                agent_type: AgentType::LettaV1Agent,
+                model: None,
+                system: None,
+                description: None,
+                memory_blocks: vec![CreateBlockRequest {
+                    label: "persona".to_string(),
+                    value: "I am helpful".to_string(),
+                    description: None,
+                    limit: None,
+                }],
+                block_ids: vec![],
+                tool_ids: vec![],
+                tags: vec![],
+                metadata: serde_json::json!({}),
+            };
+            dispatcher
+                .invoke(actor_id.clone(), "create".to_string(), to_bytes(&request)?)
+                .await?;
+
+            // Send message
+            let message = MessageRequest {
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+            };
+            let response: MessageResponse = invoke_deserialize(
+                &dispatcher,
+                actor_id.clone(),
+                "handle_message",
+                to_bytes(&message)?,
+            )
+            .await?;
+
+            // Verify response
+            assert!(!response.content.is_empty(), "Response should not be empty");
+            assert_eq!(response.role, "assistant");
+
+            Ok(())
+        })
+        .await;
+
+    assert!(result.is_ok(), "Test failed: {:?}", result.err());
+}
+
+/// Test agent actor handles LLM timeout
+///
+/// Contract:
+/// - LlmTimeout fault → actor returns error gracefully
+/// - State remains consistent
+/// - Agent can retry on next message
+#[tokio::test]
+async fn test_dst_agent_handle_message_with_llm_timeout() {
+    let config = SimConfig::new(22222);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::LlmTimeout, 0.3))
+        .run_async(|sim_env| async move {
+            let dispatcher = create_dispatcher(&sim_env)?;
+            let actor_id = ActorId::new("agents", "agent-timeout-test")?;
+
+            // Create agent
+            let request = CreateAgentRequest {
+                name: "timeout-agent".to_string(),
+                agent_type: AgentType::LettaV1Agent,
+                model: None,
+                system: None,
+                description: None,
+                memory_blocks: vec![],
+                block_ids: vec![],
+                tool_ids: vec![],
+                tags: vec![],
+                metadata: serde_json::json!({}),
+            };
+            dispatcher
+                .invoke(actor_id.clone(), "create".to_string(), to_bytes(&request)?)
+                .await?;
+
+            let mut success_count = 0;
+            let mut timeout_count = 0;
+
+            for i in 0..10 {
+                let message = MessageRequest {
+                    role: "user".to_string(),
+                    content: format!("Message {}", i),
+                };
+                match invoke_deserialize::<MessageResponse>(
+                    &dispatcher,
+                    actor_id.clone(),
+                    "handle_message",
+                    to_bytes(&message)?,
+                )
+                .await
+                {
+                    Ok(_) => success_count += 1,
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        assert!(
+                            err_str.contains("timeout")
+                                || err_str.contains("timed out")
+                                || err_str.contains("Timeout"),
+                            "Expected LLM timeout error, got: {}",
+                            e
+                        );
+                        timeout_count += 1;
+                    }
+                }
+            }
+
+            // With 30% timeout rate, should see some timeouts
+            assert!(timeout_count > 0, "Expected some LLM timeouts");
+            assert!(success_count > 0, "Expected some successes");
+
+            Ok(())
+        })
+        .await;
+
+    assert!(result.is_ok(), "Test failed: {:?}", result.err());
+}
+
+/// Test agent actor handles LLM failure
+///
+/// Contract:
+/// - LlmFailure fault → actor returns error gracefully
+/// - Error message is informative
+/// - Agent state not corrupted
+#[tokio::test]
+async fn test_dst_agent_handle_message_with_llm_failure() {
+    let config = SimConfig::new(33333);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::LlmFailure, 0.5))
+        .run_async(|sim_env| async move {
+            let dispatcher = create_dispatcher(&sim_env)?;
+            let actor_id = ActorId::new("agents", "agent-failure-test")?;
+
+            // Create agent
+            let request = CreateAgentRequest {
+                name: "failure-agent".to_string(),
+                agent_type: AgentType::LettaV1Agent,
+                model: None,
+                system: None,
+                description: None,
+                memory_blocks: vec![],
+                block_ids: vec![],
+                tool_ids: vec![],
+                tags: vec![],
+                metadata: serde_json::json!({}),
+            };
+            dispatcher
+                .invoke(actor_id.clone(), "create".to_string(), to_bytes(&request)?)
+                .await?;
+
+            let mut success_count = 0;
+            let mut failure_count = 0;
+
+            for i in 0..10 {
+                let message = MessageRequest {
+                    role: "user".to_string(),
+                    content: format!("Message {}", i),
+                };
+                match invoke_deserialize::<MessageResponse>(
+                    &dispatcher,
+                    actor_id.clone(),
+                    "handle_message",
+                    to_bytes(&message)?,
+                )
+                .await
+                {
+                    Ok(_) => success_count += 1,
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        assert!(
+                            err_str.contains("failure")
+                                || err_str.contains("failed")
+                                || err_str.contains("error")
+                                || err_str.contains("LLM"),
+                            "Expected LLM failure error, got: {}",
+                            e
+                        );
+                        failure_count += 1;
+                    }
+                }
+            }
+
+            // With 50% failure rate, should see some failures
+            assert!(
+                failure_count > 0,
+                "Expected some LLM failures with 50% rate"
+            );
+            assert!(success_count > 0, "Expected some successes");
+
+            Ok(())
+        })
+        .await;
+
+    assert!(result.is_ok(), "Test failed: {:?}", result.err());
+}
+
+/// Test agent actor tool execution
+///
+/// Contract:
+/// - LLM requests tool → actor executes tool → returns result to LLM
+/// - Tool result included in next LLM call
+/// - Conversation history includes tool calls
+#[tokio::test]
+async fn test_dst_agent_tool_execution() {
+    let config = SimConfig::new(44444);
+
+    let result = Simulation::new(config)
+        .run_async(|sim_env| async move {
+            let dispatcher = create_dispatcher(&sim_env)?;
+            let actor_id = ActorId::new("agents", "agent-tool-test")?;
+
+            // Create agent with tools
+            let request = CreateAgentRequest {
+                name: "tool-agent".to_string(),
+                agent_type: AgentType::LettaV1Agent,
+                model: None,
+                system: None,
+                description: None,
+                memory_blocks: vec![],
+                block_ids: vec![],
+                tool_ids: vec!["shell".to_string()],
+                tags: vec![],
+                metadata: serde_json::json!({}),
+            };
+            dispatcher
+                .invoke(actor_id.clone(), "create".to_string(), to_bytes(&request)?)
+                .await?;
+
+            // Send message that should trigger tool use
+            let message = MessageRequest {
+                role: "user".to_string(),
+                content: "Execute a shell command".to_string(),
+            };
+            let response: MessageResponse = invoke_deserialize(
+                &dispatcher,
+                actor_id.clone(),
+                "handle_message",
+                to_bytes(&message)?,
+            )
+            .await?;
+
+            // Verify we got a response (tool execution details depend on implementation)
+            assert!(!response.content.is_empty());
 
             Ok(())
         })

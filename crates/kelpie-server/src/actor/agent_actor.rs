@@ -2,6 +2,7 @@
 //!
 //! TigerStyle: Single actor type for all agent types, state-based configuration.
 
+use super::llm_trait::{LlmClient, LlmMessage};
 use super::state::AgentActorState;
 use crate::models::{AgentState, Block, CreateAgentRequest};
 use async_trait::async_trait;
@@ -9,6 +10,7 @@ use bytes::Bytes;
 use kelpie_core::actor::{Actor, ActorContext};
 use kelpie_core::{Error, Result};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// AgentActor - implements virtual actor for agents
 ///
@@ -17,12 +19,15 @@ use serde::{Deserialize, Serialize};
 ///
 /// TigerStyle: Explicit operations, serializable state, assertions for invariants.
 #[derive(Clone)]
-pub struct AgentActor;
+pub struct AgentActor {
+    /// LLM client for message handling
+    llm: Arc<dyn LlmClient>,
+}
 
 impl AgentActor {
-    /// Create a new AgentActor
-    pub fn new() -> Self {
-        Self
+    /// Create a new AgentActor with LLM client
+    pub fn new(llm: Arc<dyn LlmClient>) -> Self {
+        Self { llm }
     }
 
     /// Handle "create" operation - initialize agent from request
@@ -89,6 +94,51 @@ impl AgentActor {
 
         Ok(())
     }
+
+    /// Handle "handle_message" operation - process user message with LLM
+    async fn handle_handle_message(
+        &self,
+        ctx: &ActorContext<AgentActorState>,
+        request: HandleMessageRequest,
+    ) -> Result<HandleMessageResponse> {
+        // TigerStyle: Validate agent exists
+        let agent = ctx.state.agent().ok_or_else(|| Error::Internal {
+            message: "Agent not created".to_string(),
+        })?;
+
+        // Build prompt from agent blocks
+        let mut messages = Vec::new();
+
+        // Add system prompt if present
+        if let Some(system) = &agent.system {
+            messages.push(LlmMessage {
+                role: "system".to_string(),
+                content: system.clone(),
+            });
+        }
+
+        // Add memory blocks as system context
+        for block in &agent.blocks {
+            messages.push(LlmMessage {
+                role: "system".to_string(),
+                content: format!("[{}]\n{}", block.label, block.value),
+            });
+        }
+
+        // Add user message
+        messages.push(LlmMessage {
+            role: request.role,
+            content: request.content,
+        });
+
+        // Call LLM
+        let response = self.llm.complete(messages).await?;
+
+        Ok(HandleMessageResponse {
+            role: "assistant".to_string(),
+            content: response.content,
+        })
+    }
 }
 
 /// Block update request
@@ -102,6 +152,20 @@ struct BlockUpdate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CoreMemoryAppend {
     label: String,
+    content: String,
+}
+
+/// Handle message request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HandleMessageRequest {
+    role: String,
+    content: String,
+}
+
+/// Handle message response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HandleMessageResponse {
+    role: String,
     content: String,
 }
 
@@ -148,6 +212,18 @@ impl Actor for AgentActor {
                 self.handle_core_memory_append(ctx, append).await?;
                 Ok(Bytes::from("{}"))
             }
+            "handle_message" => {
+                let request: HandleMessageRequest =
+                    serde_json::from_slice(&payload).map_err(|e| Error::Internal {
+                        message: format!("Failed to deserialize HandleMessageRequest: {}", e),
+                    })?;
+                let response = self.handle_handle_message(ctx, request).await?;
+                let response_bytes =
+                    serde_json::to_vec(&response).map_err(|e| Error::Internal {
+                        message: format!("Failed to serialize HandleMessageResponse: {}", e),
+                    })?;
+                Ok(Bytes::from(response_bytes))
+            }
             _ => Err(Error::Internal {
                 message: format!("Unknown operation: {}", operation),
             }),
@@ -181,11 +257,5 @@ impl Actor for AgentActor {
         ctx.kv_set(state_key, &state_bytes).await?;
 
         Ok(())
-    }
-}
-
-impl Default for AgentActor {
-    fn default() -> Self {
-        Self::new()
     }
 }
