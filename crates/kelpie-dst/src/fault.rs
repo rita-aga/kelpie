@@ -59,6 +59,16 @@ pub enum FaultType {
     McpToolTimeout,
     /// MCP tool execution fails with error
     McpToolFail,
+
+    // LLM (Language Model) faults
+    /// LLM provider request times out
+    LlmTimeout,
+    /// LLM provider returns error
+    LlmFailure,
+    /// LLM provider rate limits the request
+    LlmRateLimited,
+    /// Agent loop panics during execution
+    AgentLoopPanic,
 }
 
 impl FaultType {
@@ -85,6 +95,10 @@ impl FaultType {
             FaultType::McpServerSlowStart { .. } => "mcp_server_slow_start",
             FaultType::McpToolTimeout => "mcp_tool_timeout",
             FaultType::McpToolFail => "mcp_tool_fail",
+            FaultType::LlmTimeout => "llm_timeout",
+            FaultType::LlmFailure => "llm_failure",
+            FaultType::LlmRateLimited => "llm_rate_limited",
+            FaultType::AgentLoopPanic => "agent_loop_panic",
         }
     }
 }
@@ -328,6 +342,16 @@ impl FaultInjectorBuilder {
             .with_fault(FaultConfig::new(
                 FaultType::McpToolTimeout,
                 probability / 2.0,
+            ))
+    }
+
+    /// Add LLM (Language Model) faults with default probabilities
+    pub fn with_llm_faults(self, probability: f64) -> Self {
+        self.with_fault(FaultConfig::new(FaultType::LlmTimeout, probability / 2.0))
+            .with_fault(FaultConfig::new(FaultType::LlmFailure, probability))
+            .with_fault(FaultConfig::new(
+                FaultType::LlmRateLimited,
+                probability / 3.0,
             ))
     }
 

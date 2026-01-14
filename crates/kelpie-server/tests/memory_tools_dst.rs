@@ -71,7 +71,9 @@ async fn create_memory_registry(
             }
 
             let mut agents = mem.write().await;
-            let agent = agents.entry(agent_id.to_string()).or_insert_with(SimAgentMemory::new);
+            let agent = agents
+                .entry(agent_id.to_string())
+                .or_insert_with(SimAgentMemory::new);
 
             if let Some(existing) = agent.blocks.get_mut(label) {
                 existing.push('\n');
@@ -117,8 +119,14 @@ async fn create_memory_registry(
 
             let agent_id = input.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
             let label = input.get("label").and_then(|v| v.as_str()).unwrap_or("");
-            let old_content = input.get("old_content").and_then(|v| v.as_str()).unwrap_or("");
-            let new_content = input.get("new_content").and_then(|v| v.as_str()).unwrap_or("");
+            let old_content = input
+                .get("old_content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let new_content = input
+                .get("new_content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
 
             if agent_id.is_empty() || label.is_empty() || old_content.is_empty() {
                 return "Error: missing required parameters".to_string();
@@ -133,7 +141,10 @@ async fn create_memory_registry(
             match agent.blocks.get_mut(label) {
                 Some(block) => {
                     if !block.contains(old_content) {
-                        return format!("Error: content '{}' not found in block '{}'", old_content, label);
+                        return format!(
+                            "Error: content '{}' not found in block '{}'",
+                            old_content, label
+                        );
                     }
                     *block = block.replace(old_content, new_content);
                     format!("Successfully replaced content in memory block '{}'", label)
@@ -183,12 +194,17 @@ async fn create_memory_registry(
             }
 
             let mut agents = mem.write().await;
-            let agent = agents.entry(agent_id.to_string()).or_insert_with(SimAgentMemory::new);
+            let agent = agents
+                .entry(agent_id.to_string())
+                .or_insert_with(SimAgentMemory::new);
 
             let entry_id = uuid::Uuid::new_v4().to_string();
             agent.archival.push(content.to_string());
 
-            format!("Successfully inserted into archival memory. Entry ID: {}", entry_id)
+            format!(
+                "Successfully inserted into archival memory. Entry ID: {}",
+                entry_id
+            )
         })
     });
 
@@ -248,7 +264,11 @@ async fn create_memory_registry(
                 "No results found".to_string()
             } else {
                 let joined: Vec<String> = results.iter().map(|s| s.to_string()).collect();
-                format!("Found {} results:\n{}", joined.len(), joined.join("\n---\n"))
+                format!(
+                    "Found {} results:\n{}",
+                    joined.len(),
+                    joined.join("\n---\n")
+                )
             }
         })
     });
@@ -309,7 +329,11 @@ async fn create_memory_registry(
             if results.is_empty() {
                 "No matching conversations found".to_string()
             } else {
-                format!("Found {} results:\n{}", results.len(), results.join("\n---\n"))
+                format!(
+                    "Found {} results:\n{}",
+                    results.len(),
+                    results.join("\n---\n")
+                )
             }
         })
     });
@@ -380,7 +404,12 @@ async fn test_dst_core_memory_append_basic() {
 
     // Verify memory state
     let agents = agent_memory.read().await;
-    let persona = agents.get("agent_001").unwrap().blocks.get("persona").unwrap();
+    let persona = agents
+        .get("agent_001")
+        .unwrap()
+        .blocks
+        .get("persona")
+        .unwrap();
     assert!(persona.contains("helpful assistant"));
     assert!(persona.contains("enjoy helping"));
 }
@@ -426,7 +455,12 @@ async fn test_dst_core_memory_replace_basic() {
 
     // Verify
     let agents = agent_memory.read().await;
-    let persona = agents.get("agent_001").unwrap().blocks.get("persona").unwrap();
+    let persona = agents
+        .get("agent_001")
+        .unwrap()
+        .blocks
+        .get("persona")
+        .unwrap();
     assert!(persona.contains("friendly"));
     assert!(!persona.contains("helpful"));
 }
@@ -485,11 +519,23 @@ async fn test_dst_conversation_search() {
     // Pre-populate conversations
     {
         let mut agents = agent_memory.write().await;
-        let agent = agents.entry("agent_001".to_string()).or_insert_with(SimAgentMemory::new);
-        agent.conversations.push(("user".to_string(), "What's the weather like?".to_string()));
-        agent.conversations.push(("assistant".to_string(), "I don't have weather data.".to_string()));
-        agent.conversations.push(("user".to_string(), "Tell me about cats".to_string()));
-        agent.conversations.push(("assistant".to_string(), "Cats are wonderful pets!".to_string()));
+        let agent = agents
+            .entry("agent_001".to_string())
+            .or_insert_with(SimAgentMemory::new);
+        agent
+            .conversations
+            .push(("user".to_string(), "What's the weather like?".to_string()));
+        agent.conversations.push((
+            "assistant".to_string(),
+            "I don't have weather data.".to_string(),
+        ));
+        agent
+            .conversations
+            .push(("user".to_string(), "Tell me about cats".to_string()));
+        agent.conversations.push((
+            "assistant".to_string(),
+            "Cats are wonderful pets!".to_string(),
+        ));
     }
 
     let registry = create_memory_registry(agent_memory.clone(), None).await;
@@ -526,7 +572,7 @@ async fn test_dst_core_memory_append_with_faults() {
     let injector = Arc::new(
         FaultInjectorBuilder::new(rng)
             .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0)) // Always fail
-            .build()
+            .build(),
     );
 
     let agent_memory = Arc::new(RwLock::new(HashMap::new()));
@@ -560,7 +606,7 @@ async fn test_dst_archival_search_with_faults() {
     let injector = Arc::new(
         FaultInjectorBuilder::new(rng)
             .with_fault(FaultConfig::new(FaultType::StorageReadFail, 1.0)) // Always fail
-            .build()
+            .build(),
     );
 
     let agent_memory = Arc::new(RwLock::new(HashMap::new()));
@@ -592,7 +638,7 @@ async fn test_dst_memory_tools_partial_faults() {
     let injector = Arc::new(
         FaultInjectorBuilder::new(rng)
             .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.3)) // 30% failure
-            .build()
+            .build(),
     );
 
     let agent_memory = Arc::new(RwLock::new(HashMap::new()));
@@ -620,7 +666,10 @@ async fn test_dst_memory_tools_partial_faults() {
         }
     }
 
-    println!("Partial faults: {} successes, {} failures out of 20", successes, failures);
+    println!(
+        "Partial faults: {} successes, {} failures out of 20",
+        successes, failures
+    );
     // With 30% failure rate, we expect ~6 failures on average
     assert!(failures > 0, "Should have some failures");
     assert!(successes > 0, "Should have some successes");
@@ -710,7 +759,7 @@ async fn test_dst_memory_tools_determinism() {
         let injector = Arc::new(
             FaultInjectorBuilder::new(rng)
                 .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.5))
-                .build()
+                .build(),
         );
 
         let agent_memory = Arc::new(RwLock::new(HashMap::new()));
@@ -733,7 +782,10 @@ async fn test_dst_memory_tools_determinism() {
 
     println!("Run 1: {:?}", results_run1);
     println!("Run 2: {:?}", results_run2);
-    assert_eq!(results_run1, results_run2, "Same seed should produce same results");
+    assert_eq!(
+        results_run1, results_run2,
+        "Same seed should produce same results"
+    );
 }
 
 // =============================================================================
@@ -778,15 +830,28 @@ async fn test_dst_memory_agent_isolation() {
     // Verify isolation
     let agents = agent_memory.read().await;
 
-    let agent1_persona = agents.get("agent_001").unwrap().blocks.get("persona").unwrap();
-    let agent2_persona = agents.get("agent_002").unwrap().blocks.get("persona").unwrap();
+    let agent1_persona = agents
+        .get("agent_001")
+        .unwrap()
+        .blocks
+        .get("persona")
+        .unwrap();
+    let agent2_persona = agents
+        .get("agent_002")
+        .unwrap()
+        .blocks
+        .get("persona")
+        .unwrap();
 
     assert!(agent1_persona.contains("coder"));
     assert!(!agent1_persona.contains("writer"));
     assert!(agent2_persona.contains("writer"));
     assert!(!agent2_persona.contains("coder"));
 
-    println!("Agent isolation verified: Agent 1 = '{}', Agent 2 = '{}'", agent1_persona, agent2_persona);
+    println!(
+        "Agent isolation verified: Agent 1 = '{}', Agent 2 = '{}'",
+        agent1_persona, agent2_persona
+    );
 }
 
 // =============================================================================
@@ -824,15 +889,27 @@ async fn test_dst_memory_concurrent_access() {
 
     // Wait for all
     let results: Vec<_> = futures::future::join_all(handles).await;
-    let success_count = results.iter().filter(|r| r.as_ref().map(|r| r.success).unwrap_or(false)).count();
+    let success_count = results
+        .iter()
+        .filter(|r| r.as_ref().map(|r| r.success).unwrap_or(false))
+        .count();
 
     println!("Concurrent access: {} / 10 succeeded", success_count);
     assert_eq!(success_count, 10, "All concurrent appends should succeed");
 
     // Verify all facts were stored
     let agents = agent_memory.read().await;
-    let facts = agents.get("agent_001").unwrap().blocks.get("facts").unwrap();
+    let facts = agents
+        .get("agent_001")
+        .unwrap()
+        .blocks
+        .get("facts")
+        .unwrap();
     for i in 0..10 {
-        assert!(facts.contains(&format!("Concurrent fact {}", i)), "Missing fact {}", i);
+        assert!(
+            facts.contains(&format!("Concurrent fact {}", i)),
+            "Missing fact {}",
+            i
+        );
     }
 }

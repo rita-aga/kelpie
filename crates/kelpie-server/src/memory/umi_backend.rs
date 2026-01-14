@@ -64,10 +64,8 @@ pub struct UmiMemoryBackend {
     /// Agent identifier for scoping
     agent_id: String,
 
-    /// Umi memory instance (L, E, S, V generics)
-    memory: Arc<
-        RwLock<Memory<SimLLMProvider, SimEmbeddingProvider, SimStorageBackend, SimVectorBackend>>,
-    >,
+    /// Umi memory instance (uses trait objects now)
+    memory: Arc<RwLock<Memory>>,
 
     /// Core memory blocks (in-memory cache, synced to Umi)
     core_blocks: Arc<RwLock<HashMap<String, CoreBlock>>>,
@@ -331,7 +329,7 @@ impl UmiMemoryBackend {
     /// * `limit` - Maximum number of results
     ///
     /// # Returns
-    /// List of matching entities
+    /// List of matching entities belonging to this agent only
     pub async fn search_archival(&self, query: &str, limit: usize) -> Result<Vec<Entity>> {
         // TigerStyle: Preconditions
         assert!(!query.is_empty(), "query cannot be empty");
@@ -345,18 +343,35 @@ impl UmiMemoryBackend {
 
         let memory = self.memory.read().await;
 
-        // Search with agent scoping
+        // Search with agent scoping in query (helps with semantic similarity)
         let scoped_query = format!("[agent:{}][archival] {}", self.agent_id, query);
 
-        let results = memory
-            .recall(&scoped_query, RecallOptions::default().with_limit(limit)?)
+        // Request more results than needed because we'll filter by agent
+        // TigerStyle: Over-fetch to account for filtering
+        let fetch_limit = (limit * 3).min(ARCHIVAL_SEARCH_RESULTS_MAX);
+
+        let raw_results = memory
+            .recall(
+                &scoped_query,
+                RecallOptions::default().with_limit(fetch_limit)?,
+            )
             .await
             .map_err(|e| anyhow!("archival search failed: {}", e))?;
 
-        // TigerStyle: Postcondition - results within limit
-        debug_assert!(results.len() <= limit);
+        // BUG-002 FIX: Filter results to only include this agent's data
+        // Semantic search returns ALL similar content, so we must enforce isolation
+        let agent_prefix = format!("[agent:{}][archival]", self.agent_id);
+        let filtered: Vec<Entity> = raw_results
+            .into_iter()
+            .filter(|entity| entity.content.contains(&agent_prefix))
+            .take(limit)
+            .collect();
 
-        Ok(results)
+        // TigerStyle: Postcondition - results within limit and all belong to this agent
+        debug_assert!(filtered.len() <= limit);
+        debug_assert!(filtered.iter().all(|e| e.content.contains(&agent_prefix)));
+
+        Ok(filtered)
     }
 
     // =========================================================================
@@ -400,7 +415,7 @@ impl UmiMemoryBackend {
     /// * `limit` - Maximum number of results
     ///
     /// # Returns
-    /// List of matching entities (conversation messages)
+    /// List of matching entities (conversation messages) belonging to this agent only
     pub async fn search_conversations(&self, query: &str, limit: usize) -> Result<Vec<Entity>> {
         // TigerStyle: Preconditions
         assert!(!query.is_empty(), "query cannot be empty");
@@ -417,15 +432,30 @@ impl UmiMemoryBackend {
         // Search with agent and conversation scoping
         let scoped_query = format!("[agent:{}][conversation] {}", self.agent_id, query);
 
-        let results = memory
-            .recall(&scoped_query, RecallOptions::default().with_limit(limit)?)
+        // TigerStyle: Over-fetch to account for filtering
+        let fetch_limit = (limit * 3).min(CONVERSATION_SEARCH_RESULTS_MAX);
+
+        let raw_results = memory
+            .recall(
+                &scoped_query,
+                RecallOptions::default().with_limit(fetch_limit)?,
+            )
             .await
             .map_err(|e| anyhow!("conversation search failed: {}", e))?;
 
-        // TigerStyle: Postcondition - results within limit
-        debug_assert!(results.len() <= limit);
+        // BUG-002 FIX: Filter results to only include this agent's conversations
+        let agent_prefix = format!("[agent:{}][conversation]", self.agent_id);
+        let filtered: Vec<Entity> = raw_results
+            .into_iter()
+            .filter(|entity| entity.content.contains(&agent_prefix))
+            .take(limit)
+            .collect();
 
-        Ok(results)
+        // TigerStyle: Postcondition - results within limit and all belong to this agent
+        debug_assert!(filtered.len() <= limit);
+        debug_assert!(filtered.iter().all(|e| e.content.contains(&agent_prefix)));
+
+        Ok(filtered)
     }
 
     // =========================================================================

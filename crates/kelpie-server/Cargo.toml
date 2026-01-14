@@ -12,6 +12,7 @@ authors.workspace = true
 default = []
 otel = ["kelpie-core/otel", "prometheus"]
 dst = ["kelpie-tools/dst", "dep:kelpie-dst"]
+fdb = ["dep:foundationdb"]
 
 [dependencies]
 # Core kelpie crates
@@ -31,6 +32,10 @@ tracing-subscriber = { workspace = true }
 
 # Error handling
 anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Async traits
+async-trait = { workspace = true }
 
 # Web framework
 axum = { workspace = true }
@@ -60,6 +65,9 @@ prometheus = { workspace = true, optional = true }
 
 # DST fault injection (optional, with dst feature)
 kelpie-dst = { workspace = true, optional = true }
+
+# FoundationDB storage (optional, with fdb feature)
+foundationdb = { workspace = true, optional = true }
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

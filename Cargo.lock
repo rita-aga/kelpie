@@ -2423,9 +2423,11 @@ name = "kelpie-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum 0.7.9",
  "chrono",
  "clap",
+ "foundationdb",
  "futures",
  "kelpie-core",
  "kelpie-dst",
@@ -2435,6 +2437,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
  "tokio-test",

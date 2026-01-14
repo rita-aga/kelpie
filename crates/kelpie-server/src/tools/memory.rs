@@ -56,32 +56,17 @@ async fn register_core_memory_append(registry: &UnifiedToolRegistry, state: AppS
                 None => return "Error: missing required parameter 'content'".to_string(),
             };
 
-            // Check if block exists
-            let block_exists = match state.get_block_by_label(&agent_id, &label) {
-                Ok(Some(_)) => true,
-                Ok(None) => false,
-                Err(e) => return format!("Error: {}", e),
-            };
-
-            if block_exists {
-                // Append to existing block
-                match state.update_block_by_label(&agent_id, &label, |block| {
-                    block.value.push('\n');
-                    block.value.push_str(&content);
-                }) {
-                    Ok(_) => format!("Successfully appended to memory block '{}'", label),
-                    Err(e) => format!("Error: {}", e),
-                }
-            } else {
-                // Create new block via agent update
-                match state.update_agent(&agent_id, |agent| {
-                    use crate::models::Block;
-                    let block = Block::new(&label, &content);
-                    agent.blocks.push(block);
-                }) {
-                    Ok(_) => format!("Successfully created memory block '{}' with content", label),
-                    Err(e) => format!("Error: {}", e),
-                }
+            // BUG-001 FIX: Use atomic append_or_create to eliminate TOCTOU race
+            // The old implementation had a race between get_block_by_label and update:
+            //   1. Thread A checks: block doesn't exist
+            //   2. Thread B checks: block doesn't exist
+            //   3. Thread A creates block
+            //   4. Thread B creates duplicate block (race condition!)
+            //
+            // The new atomic method holds the write lock for the entire operation.
+            match state.append_or_create_block_by_label(&agent_id, &label, &content) {
+                Ok(_) => format!("Successfully updated memory block '{}'", label),
+                Err(e) => format!("Error: {}", e),
             }
         })
     });
@@ -258,17 +243,15 @@ async fn register_archival_memory_search(registry: &UnifiedToolRegistry, state: 
                 None => return "Error: missing required parameter 'query'".to_string(),
             };
 
-            let page = input
-                .get("page")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0) as usize;
+            let page = input.get("page").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
 
             let page_size = 10;
             let offset = page * page_size;
 
             match state.search_archival(&agent_id, Some(&query), page_size + offset) {
                 Ok(entries) => {
-                    let page_entries: Vec<_> = entries.into_iter().skip(offset).take(page_size).collect();
+                    let page_entries: Vec<_> =
+                        entries.into_iter().skip(offset).take(page_size).collect();
 
                     if page_entries.is_empty() {
                         "No results found".to_string()
@@ -333,10 +316,7 @@ async fn register_conversation_search(registry: &UnifiedToolRegistry, state: App
                 None => return "Error: missing required parameter 'query'".to_string(),
             };
 
-            let page = input
-                .get("page")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0) as usize;
+            let page = input.get("page").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
 
             let page_size = 10;
 
@@ -502,7 +482,10 @@ mod tests {
         assert!(result.success, "Replace failed: {}", result.output);
 
         // Verify replacement
-        let block = state.get_block_by_label(&agent_id, "persona").unwrap().unwrap();
+        let block = state
+            .get_block_by_label(&agent_id, "persona")
+            .unwrap()
+            .unwrap();
         assert!(block.value.contains("helpful assistant"));
         assert!(!block.value.contains("test agent"));
     }

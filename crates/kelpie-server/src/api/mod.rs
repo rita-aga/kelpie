@@ -10,8 +10,6 @@ pub mod standalone_blocks;
 pub mod streaming;
 pub mod tools;
 
-use kelpie_server::models::{ErrorResponse, HealthResponse};
-use kelpie_server::state::{AppState, StateError};
 use axum::{
     extract::State,
     http::StatusCode,
@@ -19,6 +17,8 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use kelpie_server::models::{ErrorResponse, HealthResponse};
+use kelpie_server::state::{AppState, StateError};
 use serde::Serialize;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;

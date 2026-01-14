@@ -3,10 +3,15 @@
 //! TigerStyle: Thread-safe shared state with explicit locking.
 //!
 //! DST Support: Optional fault injection for deterministic simulation testing.
+//!
+//! Storage Integration: Optional AgentStorage backend for persistence.
+//! When storage is configured, state is persisted to durable backend (FDB/Sim).
+//! In-memory HashMaps serve as hot cache, storage is source of truth.
 
 use crate::llm::LlmClient;
 use crate::models::ArchivalEntry;
 use crate::models::{AgentState, Block, Message};
+use crate::storage::{AgentStorage, StorageError};
 use crate::tools::UnifiedToolRegistry;
 use chrono::Utc;
 use std::collections::HashMap;
@@ -45,9 +50,9 @@ pub struct AppState {
 }
 
 struct AppStateInner {
-    /// Agent storage by ID
+    /// Agent storage by ID (in-memory hot cache)
     agents: RwLock<HashMap<String, AgentState>>,
-    /// Messages by agent ID
+    /// Messages by agent ID (in-memory hot cache)
     messages: RwLock<HashMap<String, Vec<Message>>>,
     /// Tool definitions by name (legacy, for API compatibility)
     tools: RwLock<HashMap<String, ToolInfo>>,
@@ -61,6 +66,9 @@ struct AppStateInner {
     start_time: Instant,
     /// LLM client (None if no API key configured)
     llm: Option<LlmClient>,
+    /// Durable storage backend (None = in-memory only)
+    /// When present, state is persisted to storage (FDB/Sim)
+    storage: Option<Arc<dyn AgentStorage>>,
     /// Prometheus metrics registry (None if metrics disabled or otel feature not enabled)
     #[cfg(feature = "otel")]
     prometheus_registry: Option<Arc<prometheus::Registry>>,
@@ -99,6 +107,7 @@ impl AppState {
                 blocks: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm,
+                storage: None,
                 prometheus_registry: registry.map(|r| Arc::new(r.clone())),
                 #[cfg(feature = "dst")]
                 fault_injector: None,
@@ -130,6 +139,33 @@ impl AppState {
                 blocks: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm,
+                storage: None,
+                #[cfg(feature = "dst")]
+                fault_injector: None,
+            }),
+        }
+    }
+
+    /// Create server state with durable storage backend
+    ///
+    /// TigerStyle: Storage enables persistence for crash recovery.
+    pub fn with_storage(storage: Arc<dyn AgentStorage>) -> Self {
+        let llm = LlmClient::from_env();
+        let tool_registry = Arc::new(UnifiedToolRegistry::new());
+
+        Self {
+            inner: Arc::new(AppStateInner {
+                agents: RwLock::new(HashMap::new()),
+                messages: RwLock::new(HashMap::new()),
+                tools: RwLock::new(HashMap::new()),
+                tool_registry,
+                archival: RwLock::new(HashMap::new()),
+                blocks: RwLock::new(HashMap::new()),
+                start_time: Instant::now(),
+                llm,
+                storage: Some(storage),
+                #[cfg(feature = "otel")]
+                prometheus_registry: None,
                 #[cfg(feature = "dst")]
                 fault_injector: None,
             }),
@@ -151,6 +187,35 @@ impl AppState {
                 blocks: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm: None,
+                storage: None,
+                #[cfg(feature = "otel")]
+                prometheus_registry: None,
+                fault_injector: Some(fault_injector),
+            }),
+        }
+    }
+
+    /// Create server state with both storage and fault injector for DST testing
+    #[cfg(feature = "dst")]
+    pub fn with_storage_and_faults(
+        storage: Arc<dyn AgentStorage>,
+        fault_injector: Arc<FaultInjector>,
+    ) -> Self {
+        let tool_registry = Arc::new(UnifiedToolRegistry::new());
+
+        Self {
+            inner: Arc::new(AppStateInner {
+                agents: RwLock::new(HashMap::new()),
+                messages: RwLock::new(HashMap::new()),
+                tools: RwLock::new(HashMap::new()),
+                tool_registry,
+                archival: RwLock::new(HashMap::new()),
+                blocks: RwLock::new(HashMap::new()),
+                start_time: Instant::now(),
+                llm: None,
+                storage: Some(storage),
+                #[cfg(feature = "otel")]
+                prometheus_registry: None,
                 fault_injector: Some(fault_injector),
             }),
         }
@@ -190,6 +255,127 @@ impl AppState {
     #[cfg(feature = "otel")]
     pub fn prometheus_registry(&self) -> Option<&prometheus::Registry> {
         self.inner.prometheus_registry.as_ref().map(|r| r.as_ref())
+    }
+
+    /// Check if durable storage is configured
+    pub fn has_storage(&self) -> bool {
+        self.inner.storage.is_some()
+    }
+
+    /// Get reference to the storage backend (if configured)
+    pub fn storage(&self) -> Option<&dyn AgentStorage> {
+        self.inner.storage.as_ref().map(|s| s.as_ref())
+    }
+
+    // =========================================================================
+    // Async Persistence Operations (for durable storage)
+    // =========================================================================
+
+    /// Persist agent metadata to durable storage
+    ///
+    /// TigerStyle: Async operation for storage backend writes.
+    /// Returns Ok(()) if no storage configured (in-memory only mode).
+    pub async fn persist_agent(&self, agent: &AgentState) -> Result<(), StorageError> {
+        if let Some(storage) = &self.inner.storage {
+            use crate::storage::AgentMetadata;
+
+            let metadata = AgentMetadata {
+                id: agent.id.clone(),
+                name: agent.name.clone(),
+                agent_type: agent.agent_type.clone(),
+                model: agent.model.clone(),
+                system: agent.system.clone(),
+                description: agent.description.clone(),
+                tool_ids: agent.tool_ids.clone(),
+                tags: agent.tags.clone(),
+                metadata: agent.metadata.clone(),
+                created_at: agent.created_at,
+                updated_at: agent.updated_at,
+            };
+            storage.save_agent(&metadata).await?;
+
+            // Also persist blocks
+            storage.save_blocks(&agent.id, &agent.blocks).await?;
+        }
+        Ok(())
+    }
+
+    /// Persist a message to durable storage
+    pub async fn persist_message(
+        &self,
+        agent_id: &str,
+        message: &Message,
+    ) -> Result<(), StorageError> {
+        if let Some(storage) = &self.inner.storage {
+            storage.append_message(agent_id, message).await?;
+        }
+        Ok(())
+    }
+
+    /// Persist a block update to durable storage
+    pub async fn persist_block(&self, agent_id: &str, block: &Block) -> Result<(), StorageError> {
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .update_block(agent_id, &block.label, &block.value)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Load agent from storage and populate in-memory cache
+    ///
+    /// TigerStyle: Loads from durable storage on cache miss.
+    pub async fn load_agent_from_storage(
+        &self,
+        agent_id: &str,
+    ) -> Result<Option<AgentState>, StorageError> {
+        let Some(storage) = &self.inner.storage else {
+            return Ok(None);
+        };
+
+        // Load agent metadata
+        let Some(metadata) = storage.load_agent(agent_id).await? else {
+            return Ok(None);
+        };
+
+        // Load blocks
+        let blocks = storage.load_blocks(agent_id).await?;
+
+        // Reconstruct AgentState from metadata + blocks
+        let agent = AgentState {
+            id: metadata.id,
+            name: metadata.name,
+            agent_type: metadata.agent_type,
+            model: metadata.model,
+            system: metadata.system,
+            description: metadata.description,
+            blocks,
+            tool_ids: metadata.tool_ids,
+            tags: metadata.tags,
+            metadata: metadata.metadata,
+            created_at: metadata.created_at,
+            updated_at: metadata.updated_at,
+        };
+
+        // Populate cache
+        if let Ok(mut agents) = self.inner.agents.write() {
+            agents.insert(agent.id.clone(), agent.clone());
+        }
+
+        Ok(Some(agent))
+    }
+
+    /// Load messages from storage for an agent
+    pub async fn load_messages_from_storage(
+        &self,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<Vec<Message>, StorageError> {
+        let Some(storage) = &self.inner.storage else {
+            return Ok(vec![]);
+        };
+
+        storage.load_messages(agent_id, limit).await
     }
 
     // =========================================================================
@@ -571,6 +757,54 @@ impl AppState {
         Ok(block.clone())
     }
 
+    /// Atomically append to a block or create it if it doesn't exist.
+    ///
+    /// BUG-001 FIX: This method eliminates the TOCTOU race condition in core_memory_append
+    /// by holding the write lock for the entire check-and-update/create operation.
+    ///
+    /// TigerStyle: Atomic operation prevents race between check and modification.
+    pub fn append_or_create_block_by_label(
+        &self,
+        agent_id: &str,
+        label: &str,
+        content: &str,
+    ) -> Result<Block, StateError> {
+        // DST: Check for fault injection
+        if self.should_inject_fault("block_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "block_write".to_string(),
+            });
+        }
+
+        // TigerStyle: Single write lock for entire operation (atomicity)
+        let mut agents = self
+            .inner
+            .agents
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        let agent = agents
+            .get_mut(agent_id)
+            .ok_or_else(|| StateError::NotFound {
+                resource: "agent",
+                id: agent_id.to_string(),
+            })?;
+
+        // Find existing block or create new one - all within single lock
+        if let Some(block) = agent.blocks.iter_mut().find(|b| b.label == label) {
+            // Append to existing block
+            block.value.push('\n');
+            block.value.push_str(content);
+            Ok(block.clone())
+        } else {
+            // Create new block and add to agent
+            let block = Block::new(label, content);
+            let result = block.clone();
+            agent.blocks.push(block);
+            Ok(result)
+        }
+    }
+
     // =========================================================================
     // Standalone block operations (for letta-code compatibility)
     // =========================================================================
@@ -718,6 +952,13 @@ impl AppState {
 
     /// Add a message to an agent's history
     pub fn add_message(&self, agent_id: &str, message: Message) -> Result<Message, StateError> {
+        // DST: Check for fault injection on message write
+        if self.should_inject_fault("message_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "message_write".to_string(),
+            });
+        }
+
         let mut messages = self
             .inner
             .messages

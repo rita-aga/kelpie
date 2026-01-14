@@ -7,7 +7,7 @@ mod api;
 // Re-export from library
 use kelpie_server::state::AppState;
 use kelpie_server::{llm, tools};
-use tools::register_memory_tools;
+use tools::{register_heartbeat_tools, register_memory_tools};
 
 use axum::extract::Request;
 use axum::ServiceExt;
@@ -92,6 +92,9 @@ async fn main() -> anyhow::Result<()> {
     // Register memory tools
     register_memory_tools(state.tool_registry(), state.clone()).await;
 
+    // Register heartbeat tools
+    register_heartbeat_tools(state.tool_registry()).await;
+
     // Create router
     let app = api::router(state);
 
@@ -157,10 +160,7 @@ async fn register_builtin_tools(state: &AppState) {
 
 /// Execute a shell command in a sandboxed environment
 async fn execute_shell_command(input: &Value) -> String {
-    let command = input
-        .get("command")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
 
     if command.is_empty() {
         return "Error: No command provided".to_string();
