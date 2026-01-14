@@ -433,7 +433,7 @@ impl SimTeleportStorage {
         // Validate architecture
         package
             .validate_for_restore(target_arch)
-            .map_err(|reason| TeleportError::ArchMismatch {
+            .map_err(|_reason| TeleportError::ArchMismatch {
                 expected: target_arch,
                 actual: package.source_arch,
             })?;

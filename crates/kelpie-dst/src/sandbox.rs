@@ -523,6 +523,20 @@ pub struct SimSandboxFactory {
     prefix: String,
 }
 
+impl Clone for SimSandboxFactory {
+    fn clone(&self) -> Self {
+        // Clone needs to be synchronous, so we use blocking read
+        // This is safe in tests where Clone is used
+        let rng = futures::executor::block_on(self.rng.read()).fork();
+        Self {
+            rng: RwLock::new(rng),
+            faults: self.faults.clone(),
+            counter: AtomicU64::new(self.counter.load(Ordering::SeqCst)),
+            prefix: self.prefix.clone(),
+        }
+    }
+}
+
 impl SimSandboxFactory {
     /// Create a new SimSandboxFactory
     pub fn new(rng: DeterministicRng, faults: Arc<FaultInjector>) -> Self {
