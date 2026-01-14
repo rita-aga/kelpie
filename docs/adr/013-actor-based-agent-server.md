@@ -196,7 +196,10 @@ struct SessionCheckpoint {
 
 - **2026-01-13:** ADR created, Phase 1 complete with DST harness extensions
 - **2026-01-13:** Phase 1.4 found 2 critical bugs via integration testing
-- **2026-01-13:** Phase 2.1 complete - 11 DST tests written defining AgentActor contract
-  - Tests use full Simulation harness with fault injection
-  - Tests marked `#[ignore]` - will fail until Phase 3 implements AgentActor
-  - Blocked by external umi-memory compilation error (not related to test contract)
+- **2026-01-13:** Phase 2 COMPLETE - 10 DST tests written and verified failing
+  - Tests use full `Simulation::new(config).run_async()` with fault injection
+  - All tests compiled successfully
+  - All tests run and fail with expected error: `"AgentActor not implemented - Phase 3 TODO"`
+  - Test results: `10 failed; 0 passed; 0 ignored`
+  - Fixed umi_backend.rs compilation error (Memory struct no longer generic)
+  - Phase 3 will implement AgentActor to make these tests pass

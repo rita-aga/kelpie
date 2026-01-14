@@ -6,12 +6,86 @@
 //! That's expected - Phase 3 will implement AgentActor to make them pass.
 
 use kelpie_core::{ActorId, Error, Result};
-use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
+use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, Simulation};
 use serde_json::json;
 
-// NOTE: These imports will fail until Phase 3 implements AgentActor
-// use kelpie_server::actor::AgentActor;
-// use kelpie_server::models::{AgentState, AgentType, Block, CreateAgentRequest};
+// ============================================================================
+// Phase 3 TODO: Remove this mock module and import real types
+// ============================================================================
+
+/// Mock types for Phase 2 - these should be replaced by real implementations
+mod phase3_types {
+    use kelpie_core::Result;
+    use kelpie_dst::SimEnvironment;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct CreateAgentRequest {
+        pub name: String,
+        pub agent_type: String,
+        pub memory_blocks: Vec<Block>,
+        pub tool_ids: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Block {
+        pub label: String,
+        pub value: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct AgentState {
+        pub id: String,
+        pub name: String,
+        pub agent_type: String,
+        pub blocks: Vec<Block>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct MessageRequest {
+        pub role: String,
+        pub content: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct MessageResponse {
+        pub role: String,
+        pub content: String,
+    }
+
+    /// Mock dispatcher - Phase 3 should implement real one
+    pub struct MockDispatcher;
+
+    impl MockDispatcher {
+        pub async fn invoke<T: serde::de::DeserializeOwned>(
+            &self,
+            _agent_id: &str,
+            _method: &str,
+            _payload: Vec<u8>,
+        ) -> Result<T> {
+            // This will fail in Phase 2 - that's expected!
+            panic!("AgentActor not implemented - Phase 3 TODO");
+        }
+
+        pub async fn deactivate(&self, _agent_id: &str) -> Result<()> {
+            panic!("AgentActor not implemented - Phase 3 TODO");
+        }
+    }
+
+    /// Create mock dispatcher - Phase 3 should create real one with SimEnvironment
+    pub fn create_dispatcher(_sim_env: &SimEnvironment) -> Result<MockDispatcher> {
+        Ok(MockDispatcher)
+    }
+}
+
+use phase3_types::*;
+
+/// Helper to serialize to vec, converting errors properly
+fn to_vec<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
+    serde_json::to_vec(value).map_err(|e| Error::Internal {
+        message: format!("Serialization error: {}", e),
+    })
+}
 
 /// Test basic agent actor activation
 ///
@@ -20,31 +94,36 @@ use serde_json::json;
 /// - State loads from storage (or creates if new)
 /// - Actor is ready to handle messages
 #[tokio::test]
-#[ignore = "Phase 3: AgentActor not implemented yet"]
 async fn test_dst_agent_actor_activation_basic() {
     let config = SimConfig::new(42);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            // Phase 3: Create dispatcher and actor factory
-            // let dispatcher = create_dispatcher(sim_env)?;
+            // Create dispatcher
+            let dispatcher = create_dispatcher(&sim_env)?;
 
             // Create agent
-            // let agent_id = ActorId::new("agent", "test-001")?;
-            // let request = CreateAgentRequest {
-            //     name: "test-agent".to_string(),
-            //     agent_type: AgentType::LettaV1,
-            //     memory_blocks: vec![],
-            //     ..Default::default()
-            // };
+            let agent_id = "agent-test-001";
+            let request = CreateAgentRequest {
+                name: "test-agent".to_string(),
+                agent_type: "letta_v1".to_string(),
+                memory_blocks: vec![],
+                tool_ids: vec![],
+            };
 
-            // Activate actor
-            // dispatcher.invoke(&agent_id, "create", serde_json::to_vec(&request)?).await?;
+            // Activate actor by invoking create
+            dispatcher
+                .invoke::<()>(
+                    agent_id,
+                    "create",
+                    to_vec(&request)?,
+                )
+                .await?;
 
-            // Verify actor is active
-            // let state: AgentState = dispatcher.invoke(&agent_id, "get_state", vec![]).await?;
-            // assert_eq!(state.name, "test-agent");
-            // assert_eq!(state.agent_type, AgentType::LettaV1);
+            // Verify actor is active - get state
+            let state: AgentState = dispatcher.invoke(agent_id, "get_state", vec![]).await?;
+            assert_eq!(state.name, "test-agent");
+            assert_eq!(state.agent_type, "letta_v1");
 
             Ok(())
         })
@@ -60,40 +139,47 @@ async fn test_dst_agent_actor_activation_basic() {
 /// - Actor should handle gracefully (retry or return error)
 /// - Should not panic or corrupt state
 #[tokio::test]
-#[ignore = "Phase 3: AgentActor not implemented yet"]
 async fn test_dst_agent_actor_activation_with_storage_fail() {
     let config = SimConfig::new(12345);
 
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.2))
         .run_async(|sim_env| async move {
-            // Phase 3: Try to activate multiple agents
-            // let dispatcher = create_dispatcher(sim_env)?;
+            let dispatcher = create_dispatcher(&sim_env)?;
 
-            // let mut success_count = 0;
-            // let mut failure_count = 0;
+            let mut success_count = 0;
+            let mut failure_count = 0;
 
-            // for i in 0..10 {
-            //     let agent_id = ActorId::new("agent", &format!("test-{:03}", i))?;
-            //     let request = CreateAgentRequest {
-            //         name: format!("agent-{}", i),
-            //         agent_type: AgentType::LettaV1,
-            //         ..Default::default()
-            //     };
-            //
-            //     match dispatcher.invoke(&agent_id, "create", serde_json::to_vec(&request)?).await {
-            //         Ok(_) => success_count += 1,
-            //         Err(e) => {
-            //             // Storage fault - acceptable
-            //             assert!(matches!(e, Error::StorageError { .. }));
-            //             failure_count += 1;
-            //         }
-            //     }
-            // }
+            for i in 0..10 {
+                let agent_id = format!("agent-test-{:03}", i);
+                let request = CreateAgentRequest {
+                    name: format!("agent-{}", i),
+                    agent_type: "letta_v1".to_string(),
+                    memory_blocks: vec![],
+                    tool_ids: vec![],
+                };
 
-            // // With 20% fault rate, should see some failures
-            // assert!(failure_count > 0, "Expected some storage failures");
-            // assert!(success_count > 0, "Expected some successes");
+                match dispatcher
+                    .invoke::<()>(&agent_id, "create", to_vec(&request)?)
+                    .await
+                {
+                    Ok(_) => success_count += 1,
+                    Err(e) => {
+                        // Storage fault - acceptable
+                        assert!(
+                            e.to_string().contains("storage")
+                                || e.to_string().contains("Storage"),
+                            "Expected storage error, got: {}",
+                            e
+                        );
+                        failure_count += 1;
+                    }
+                }
+            }
+
+            // With 20% fault rate, should see some failures
+            assert!(failure_count > 0, "Expected some storage failures");
+            assert!(success_count > 0, "Expected some successes");
 
             Ok(())
         })
@@ -109,35 +195,37 @@ async fn test_dst_agent_actor_activation_with_storage_fail() {
 /// - Reactivate actor → state loaded correctly
 /// - All data preserved across activation cycles
 #[tokio::test]
-#[ignore = "Phase 3: AgentActor not implemented yet"]
 async fn test_dst_agent_actor_deactivation_persists_state() {
     let config = SimConfig::new(54321);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            // Phase 3: Test deactivation/reactivation cycle
-            // let dispatcher = create_dispatcher(sim_env)?;
-            // let agent_id = ActorId::new("agent", "persistent")?;
+            let dispatcher = create_dispatcher(&sim_env)?;
+            let agent_id = "agent-persistent";
 
-            // // Create and activate
-            // let request = CreateAgentRequest {
-            //     name: "persistent-agent".to_string(),
-            //     agent_type: AgentType::LettaV1,
-            //     memory_blocks: vec![
-            //         Block { label: "persona".to_string(), value: "I am helpful".to_string() }
-            //     ],
-            //     ..Default::default()
-            // };
-            // dispatcher.invoke(&agent_id, "create", serde_json::to_vec(&request)?).await?;
+            // Create and activate
+            let request = CreateAgentRequest {
+                name: "persistent-agent".to_string(),
+                agent_type: "letta_v1".to_string(),
+                memory_blocks: vec![Block {
+                    label: "persona".to_string(),
+                    value: "I am helpful".to_string(),
+                }],
+                tool_ids: vec![],
+            };
+            dispatcher
+                .invoke::<()>(agent_id, "create", to_vec(&request)?)
+                .await?;
 
-            // // Deactivate
-            // dispatcher.deactivate(&agent_id).await?;
+            // Deactivate
+            dispatcher.deactivate(agent_id).await?;
 
-            // // Reactivate
-            // let state: AgentState = dispatcher.invoke(&agent_id, "get_state", vec![]).await?;
-            // assert_eq!(state.name, "persistent-agent");
-            // assert_eq!(state.blocks[0].label, "persona");
-            // assert_eq!(state.blocks[0].value, "I am helpful");
+            // Reactivate and verify state preserved
+            let state: AgentState = dispatcher.invoke(agent_id, "get_state", vec![]).await?;
+            assert_eq!(state.name, "persistent-agent");
+            assert_eq!(state.blocks.len(), 1);
+            assert_eq!(state.blocks[0].label, "persona");
+            assert_eq!(state.blocks[0].value, "I am helpful");
 
             Ok(())
         })
@@ -153,43 +241,49 @@ async fn test_dst_agent_actor_deactivation_persists_state() {
 /// - Actor should retry or fail gracefully
 /// - State should remain consistent (no partial writes)
 #[tokio::test]
-#[ignore = "Phase 3: AgentActor not implemented yet"]
 async fn test_dst_agent_actor_deactivation_with_storage_fail() {
     let config = SimConfig::new(99999);
 
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.2))
         .run_async(|sim_env| async move {
-            // Phase 3: Test deactivation under faults
-            // let dispatcher = create_dispatcher(sim_env)?;
+            let dispatcher = create_dispatcher(&sim_env)?;
 
-            // let mut success_count = 0;
-            // let mut failure_count = 0;
+            let mut success_count = 0;
+            let mut failure_count = 0;
 
-            // for i in 0..10 {
-            //     let agent_id = ActorId::new("agent", &format!("test-{:03}", i))?;
-            //     let request = CreateAgentRequest {
-            //         name: format!("agent-{}", i),
-            //         agent_type: AgentType::LettaV1,
-            //         ..Default::default()
-            //     };
-            //
-            //     dispatcher.invoke(&agent_id, "create", serde_json::to_vec(&request)?).await?;
-            //
-            //     // Try to deactivate
-            //     match dispatcher.deactivate(&agent_id).await {
-            //         Ok(_) => success_count += 1,
-            //         Err(e) => {
-            //             // Storage fault during deactivation
-            //             assert!(matches!(e, Error::StorageError { .. }));
-            //             failure_count += 1;
-            //         }
-            //     }
-            // }
+            for i in 0..10 {
+                let agent_id = format!("agent-test-{:03}", i);
+                let request = CreateAgentRequest {
+                    name: format!("agent-{}", i),
+                    agent_type: "letta_v1".to_string(),
+                    memory_blocks: vec![],
+                    tool_ids: vec![],
+                };
 
-            // // With 20% fault rate, should see some failures
-            // assert!(failure_count > 0, "Expected some storage failures");
-            // assert!(success_count > 0, "Expected some successes");
+                dispatcher
+                    .invoke::<()>(&agent_id, "create", to_vec(&request)?)
+                    .await?;
+
+                // Try to deactivate
+                match dispatcher.deactivate(&agent_id).await {
+                    Ok(_) => success_count += 1,
+                    Err(e) => {
+                        // Storage fault during deactivation
+                        assert!(
+                            e.to_string().contains("storage")
+                                || e.to_string().contains("Storage"),
+                            "Expected storage error, got: {}",
+                            e
+                        );
+                        failure_count += 1;
+                    }
+                }
+            }
+
+            // With 20% fault rate, should see some failures
+            assert!(failure_count > 0, "Expected some storage failures");
+            assert!(success_count > 0, "Expected some successes");
 
             Ok(())
         })
@@ -205,42 +299,47 @@ async fn test_dst_agent_actor_deactivation_with_storage_fail() {
 /// - State should be consistent (transaction committed or rolled back)
 /// - Actor can be reactivated and continue
 #[tokio::test]
-#[ignore = "Phase 3: AgentActor not implemented yet"]
 async fn test_dst_agent_actor_crash_recovery() {
     let config = SimConfig::new(77777);
 
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::CrashAfterWrite, 0.1))
         .run_async(|sim_env| async move {
-            // Phase 3: Test crash recovery
-            // let dispatcher = create_dispatcher(sim_env)?;
-            // let agent_id = ActorId::new("agent", "crash-test")?;
+            let dispatcher = create_dispatcher(&sim_env)?;
+            let agent_id = "agent-crash-test";
 
-            // // Create agent
-            // let request = CreateAgentRequest {
-            //     name: "crash-agent".to_string(),
-            //     agent_type: AgentType::LettaV1,
-            //     memory_blocks: vec![
-            //         Block { label: "persona".to_string(), value: "Initial state".to_string() }
-            //     ],
-            //     ..Default::default()
-            // };
-            // dispatcher.invoke(&agent_id, "create", serde_json::to_vec(&request)?).await?;
+            // Create agent
+            let request = CreateAgentRequest {
+                name: "crash-agent".to_string(),
+                agent_type: "letta_v1".to_string(),
+                memory_blocks: vec![Block {
+                    label: "persona".to_string(),
+                    value: "Initial state".to_string(),
+                }],
+                tool_ids: vec![],
+            };
+            dispatcher
+                .invoke::<()>(agent_id, "create", to_vec(&request)?)
+                .await?;
 
-            // // Update state (may crash)
-            // let _ = dispatcher.invoke(&agent_id, "update_block", json!({
-            //     "label": "persona",
-            //     "value": "Updated state"
-            // }).to_string().as_bytes()).await;
+            // Update state (may crash)
+            let update = json!({
+                "label": "persona",
+                "value": "Updated state"
+            });
+            let _ = dispatcher
+                .invoke::<()>(agent_id, "update_block", to_vec(&update)?)
+                .await;
 
-            // // Reactivate and verify state is consistent
-            // let state: AgentState = dispatcher.invoke(&agent_id, "get_state", vec![]).await?;
-            // // State should be either "Initial state" OR "Updated state", never corrupted
-            // let persona_value = &state.blocks[0].value;
-            // assert!(
-            //     persona_value == "Initial state" || persona_value == "Updated state",
-            //     "State corrupted: {}", persona_value
-            // );
+            // Reactivate and verify state is consistent
+            let state: AgentState = dispatcher.invoke(agent_id, "get_state", vec![]).await?;
+            // State should be either "Initial state" OR "Updated state", never corrupted
+            let persona_value = &state.blocks[0].value;
+            assert!(
+                persona_value == "Initial state" || persona_value == "Updated state",
+                "State corrupted: {}",
+                persona_value
+            );
 
             Ok(())
         })
@@ -256,38 +355,40 @@ async fn test_dst_agent_actor_crash_recovery() {
 /// - Message stored in conversation history
 /// - State updated correctly
 #[tokio::test]
-#[ignore = "Phase 3: AgentActor not implemented yet"]
 async fn test_dst_agent_handle_message_basic() {
     let config = SimConfig::new(11111);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            // Phase 3: Test message handling
-            // let dispatcher = create_dispatcher_with_llm(sim_env)?;
-            // let agent_id = ActorId::new("agent", "chat-test")?;
+            let dispatcher = create_dispatcher(&sim_env)?;
+            let agent_id = "agent-chat-test";
 
-            // // Create agent
-            // let request = CreateAgentRequest {
-            //     name: "chat-agent".to_string(),
-            //     agent_type: AgentType::LettaV1,
-            //     memory_blocks: vec![
-            //         Block { label: "persona".to_string(), value: "I am helpful".to_string() }
-            //     ],
-            //     ..Default::default()
-            // };
-            // dispatcher.invoke(&agent_id, "create", serde_json::to_vec(&request)?).await?;
+            // Create agent
+            let request = CreateAgentRequest {
+                name: "chat-agent".to_string(),
+                agent_type: "letta_v1".to_string(),
+                memory_blocks: vec![Block {
+                    label: "persona".to_string(),
+                    value: "I am helpful".to_string(),
+                }],
+                tool_ids: vec![],
+            };
+            dispatcher
+                .invoke::<()>(agent_id, "create", to_vec(&request)?)
+                .await?;
 
-            // // Send message
-            // let message = json!({"role": "user", "content": "Hello"});
-            // let response: serde_json::Value = dispatcher.invoke(
-            //     &agent_id,
-            //     "handle_message",
-            //     serde_json::to_vec(&message)?
-            // ).await?;
+            // Send message
+            let message = MessageRequest {
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+            };
+            let response: MessageResponse = dispatcher
+                .invoke(agent_id, "handle_message", to_vec(&message)?)
+                .await?;
 
-            // // Verify response
-            // assert!(!response["content"].as_str().unwrap().is_empty());
-            // assert_eq!(response["role"], "assistant");
+            // Verify response
+            assert!(!response.content.is_empty(), "Response should not be empty");
+            assert_eq!(response.role, "assistant");
 
             Ok(())
         })
@@ -303,42 +404,58 @@ async fn test_dst_agent_handle_message_basic() {
 /// - State remains consistent
 /// - Agent can retry on next message
 #[tokio::test]
-#[ignore = "Phase 3: AgentActor not implemented yet"]
 async fn test_dst_agent_handle_message_with_llm_timeout() {
     let config = SimConfig::new(22222);
 
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::LlmTimeout, 0.3))
         .run_async(|sim_env| async move {
-            // Phase 3: Test LLM timeout handling
-            // let dispatcher = create_dispatcher_with_llm(sim_env)?;
-            // let agent_id = ActorId::new("agent", "timeout-test")?;
+            let dispatcher = create_dispatcher(&sim_env)?;
+            let agent_id = "agent-timeout-test";
 
-            // // Create agent
-            // let request = CreateAgentRequest {
-            //     name: "timeout-agent".to_string(),
-            //     agent_type: AgentType::LettaV1,
-            //     ..Default::default()
-            // };
-            // dispatcher.invoke(&agent_id, "create", serde_json::to_vec(&request)?).await?;
+            // Create agent
+            let request = CreateAgentRequest {
+                name: "timeout-agent".to_string(),
+                agent_type: "letta_v1".to_string(),
+                memory_blocks: vec![],
+                tool_ids: vec![],
+            };
+            dispatcher
+                .invoke::<()>(agent_id, "create", to_vec(&request)?)
+                .await?;
 
-            // let mut success_count = 0;
-            // let mut timeout_count = 0;
+            let mut success_count = 0;
+            let mut timeout_count = 0;
 
-            // for i in 0..10 {
-            //     let message = json!({"role": "user", "content": format!("Message {}", i)});
-            //     match dispatcher.invoke(&agent_id, "handle_message", serde_json::to_vec(&message)?).await {
-            //         Ok(_) => success_count += 1,
-            //         Err(e) => {
-            //             assert!(matches!(e, Error::LlmTimeout { .. }));
-            //             timeout_count += 1;
-            //         }
-            //     }
-            // }
+            for i in 0..10 {
+                let message = MessageRequest {
+                    role: "user".to_string(),
+                    content: format!("Message {}", i),
+                };
+                match dispatcher
+                    .invoke::<MessageResponse>(
+                        agent_id,
+                        "handle_message",
+                        to_vec(&message)?,
+                    )
+                    .await
+                {
+                    Ok(_) => success_count += 1,
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        assert!(
+                            err_str.contains("timeout") || err_str.contains("timed out"),
+                            "Expected LLM timeout error, got: {}",
+                            e
+                        );
+                        timeout_count += 1;
+                    }
+                }
+            }
 
-            // // With 30% timeout rate, should see some timeouts
-            // assert!(timeout_count > 0, "Expected some LLM timeouts");
-            // assert!(success_count > 0, "Expected some successes");
+            // With 30% timeout rate, should see some timeouts
+            assert!(timeout_count > 0, "Expected some LLM timeouts");
+            assert!(success_count > 0, "Expected some successes");
 
             Ok(())
         })
@@ -354,15 +471,61 @@ async fn test_dst_agent_handle_message_with_llm_timeout() {
 /// - Error message is informative
 /// - Agent state not corrupted
 #[tokio::test]
-#[ignore = "Phase 3: AgentActor not implemented yet"]
 async fn test_dst_agent_handle_message_with_llm_failure() {
     let config = SimConfig::new(33333);
 
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::LlmFailure, 0.25))
         .run_async(|sim_env| async move {
-            // Phase 3: Test LLM failure handling
-            // Similar structure to timeout test
+            let dispatcher = create_dispatcher(&sim_env)?;
+            let agent_id = "agent-failure-test";
+
+            // Create agent
+            let request = CreateAgentRequest {
+                name: "failure-agent".to_string(),
+                agent_type: "letta_v1".to_string(),
+                memory_blocks: vec![],
+                tool_ids: vec![],
+            };
+            dispatcher
+                .invoke::<()>(agent_id, "create", to_vec(&request)?)
+                .await?;
+
+            let mut success_count = 0;
+            let mut failure_count = 0;
+
+            for i in 0..10 {
+                let message = MessageRequest {
+                    role: "user".to_string(),
+                    content: format!("Message {}", i),
+                };
+                match dispatcher
+                    .invoke::<MessageResponse>(
+                        agent_id,
+                        "handle_message",
+                        to_vec(&message)?,
+                    )
+                    .await
+                {
+                    Ok(_) => success_count += 1,
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        assert!(
+                            err_str.contains("failure")
+                                || err_str.contains("failed")
+                                || err_str.contains("error"),
+                            "Expected LLM failure error, got: {}",
+                            e
+                        );
+                        failure_count += 1;
+                    }
+                }
+            }
+
+            // With 25% failure rate, should see some failures
+            assert!(failure_count > 0, "Expected some LLM failures");
+            assert!(success_count > 0, "Expected some successes");
+
             Ok(())
         })
         .await;
@@ -377,35 +540,36 @@ async fn test_dst_agent_handle_message_with_llm_failure() {
 /// - Tool result included in next LLM call
 /// - Conversation history includes tool calls
 #[tokio::test]
-#[ignore = "Phase 3: AgentActor not implemented yet"]
 async fn test_dst_agent_tool_execution() {
     let config = SimConfig::new(44444);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            // Phase 3: Test tool execution
-            // let dispatcher = create_dispatcher_with_llm_and_tools(sim_env)?;
-            // let agent_id = ActorId::new("agent", "tool-test")?;
+            let dispatcher = create_dispatcher(&sim_env)?;
+            let agent_id = "agent-tool-test";
 
-            // // Create agent with tools
-            // let request = CreateAgentRequest {
-            //     name: "tool-agent".to_string(),
-            //     agent_type: AgentType::LettaV1,
-            //     tool_ids: vec!["shell".to_string()],
-            //     ..Default::default()
-            // };
-            // dispatcher.invoke(&agent_id, "create", serde_json::to_vec(&request)?).await?;
+            // Create agent with tools
+            let request = CreateAgentRequest {
+                name: "tool-agent".to_string(),
+                agent_type: "letta_v1".to_string(),
+                memory_blocks: vec![],
+                tool_ids: vec!["shell".to_string()],
+            };
+            dispatcher
+                .invoke::<()>(agent_id, "create", to_vec(&request)?)
+                .await?;
 
-            // // Send message that should trigger tool use
-            // let message = json!({"role": "user", "content": "Execute a shell command"});
-            // let response: serde_json::Value = dispatcher.invoke(
-            //     &agent_id,
-            //     "handle_message",
-            //     serde_json::to_vec(&message)?
-            // ).await?;
+            // Send message that should trigger tool use
+            let message = MessageRequest {
+                role: "user".to_string(),
+                content: "Execute a shell command".to_string(),
+            };
+            let response: MessageResponse = dispatcher
+                .invoke(agent_id, "handle_message", to_vec(&message)?)
+                .await?;
 
-            // // Verify tool was called (check response or conversation history)
-            // // This depends on AgentActor implementation details
+            // Verify we got a response (tool execution details depend on implementation)
+            assert!(!response.content.is_empty());
 
             Ok(())
         })
@@ -421,40 +585,43 @@ async fn test_dst_agent_tool_execution() {
 /// - State persisted to storage
 /// - Next message sees updated block in prompt
 #[tokio::test]
-#[ignore = "Phase 3: AgentActor not implemented yet"]
 async fn test_dst_agent_memory_tools() {
     let config = SimConfig::new(55555);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            // Phase 3: Test memory tools
-            // let dispatcher = create_dispatcher_with_memory_tools(sim_env)?;
-            // let agent_id = ActorId::new("agent", "memory-test")?;
+            let dispatcher = create_dispatcher(&sim_env)?;
+            let agent_id = "agent-memory-test";
 
-            // // Create agent
-            // let request = CreateAgentRequest {
-            //     name: "memory-agent".to_string(),
-            //     agent_type: AgentType::LettaV1,
-            //     memory_blocks: vec![
-            //         Block { label: "persona".to_string(), value: "I am helpful".to_string() }
-            //     ],
-            //     ..Default::default()
-            // };
-            // dispatcher.invoke(&agent_id, "create", serde_json::to_vec(&request)?).await?;
+            // Create agent
+            let request = CreateAgentRequest {
+                name: "memory-agent".to_string(),
+                agent_type: "letta_v1".to_string(),
+                memory_blocks: vec![Block {
+                    label: "persona".to_string(),
+                    value: "I am helpful".to_string(),
+                }],
+                tool_ids: vec![],
+            };
+            dispatcher
+                .invoke::<()>(agent_id, "create", to_vec(&request)?)
+                .await?;
 
-            // // Call core_memory_append
-            // let tool_call = json!({
-            //     "tool": "core_memory_append",
-            //     "args": {
-            //         "label": "persona",
-            //         "content": ". I remember everything."
-            //     }
-            // });
-            // dispatcher.invoke(&agent_id, "execute_tool", serde_json::to_vec(&tool_call)?).await?;
+            // Call core_memory_append
+            let tool_call = json!({
+                "label": "persona",
+                "content": ". I remember everything."
+            });
+            dispatcher
+                .invoke::<()>(agent_id, "core_memory_append", to_vec(&tool_call)?)
+                .await?;
 
-            // // Verify block was updated
-            // let state: AgentState = dispatcher.invoke(&agent_id, "get_state", vec![]).await?;
-            // assert_eq!(state.blocks[0].value, "I am helpful. I remember everything.");
+            // Verify block was updated
+            let state: AgentState = dispatcher.invoke(agent_id, "get_state", vec![]).await?;
+            assert_eq!(
+                state.blocks[0].value,
+                "I am helpful. I remember everything."
+            );
 
             Ok(())
         })

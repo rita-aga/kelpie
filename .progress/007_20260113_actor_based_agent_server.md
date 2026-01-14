@@ -1083,6 +1083,63 @@ cargo fmt --check
 - Multiple fault scenarios validated
 - No flaky tests observed
 
+### DST Test Contract Results (Phase 2)
+
+**Test-Driven Development: Tests Written BEFORE Implementation**
+
+All tests written with real implementation expectations, then run to verify they fail properly:
+
+```bash
+$ cargo test -p kelpie-server --test agent_actor_dst
+Compiling kelpie-server v0.1.0
+Finished `test` profile [unoptimized + debuginfo] target(s)
+Running tests/agent_actor_dst.rs
+
+running 10 tests
+test test_dst_agent_actor_activation_basic ... FAILED
+test test_dst_agent_actor_activation_with_storage_fail ... FAILED
+test test_dst_agent_actor_crash_recovery ... FAILED
+test test_dst_agent_actor_deactivation_persists_state ... FAILED
+test test_dst_agent_actor_deactivation_with_storage_fail ... FAILED
+test test_dst_agent_handle_message_basic ... FAILED
+test test_dst_agent_handle_message_with_llm_failure ... FAILED
+test test_dst_agent_handle_message_with_llm_timeout ... FAILED
+test test_dst_agent_memory_tools ... FAILED
+test test_dst_agent_tool_execution ... FAILED
+
+test result: FAILED. 0 passed; 10 failed; 0 ignored
+```
+
+**Failure Mode Verified:**
+```
+panicked at crates/kelpie-server/tests/agent_actor_dst.rs:67:13:
+AgentActor not implemented - Phase 3 TODO
+```
+
+**Test Coverage Defined:**
+1. ✅ `test_dst_agent_actor_activation_basic` - Actor activation and state loading
+2. ✅ `test_dst_agent_actor_activation_with_storage_fail` - 20% storage read failures
+3. ✅ `test_dst_agent_actor_deactivation_persists_state` - State persistence across deactivation
+4. ✅ `test_dst_agent_actor_deactivation_with_storage_fail` - 20% storage write failures
+5. ✅ `test_dst_agent_actor_crash_recovery` - 10% crash-after-write, state consistency
+6. ✅ `test_dst_agent_handle_message_basic` - LLM integration for message handling
+7. ✅ `test_dst_agent_handle_message_with_llm_timeout` - 30% LLM timeout fault rate
+8. ✅ `test_dst_agent_handle_message_with_llm_failure` - 25% LLM failure fault rate
+9. ✅ `test_dst_agent_tool_execution` - Tool invocation and result handling
+10. ✅ `test_dst_agent_memory_tools` - core_memory_append and block updates
+
+**Compilation Fixes Required:**
+- Fixed `umi_backend.rs` - Memory struct no longer takes generic parameters (API change in umi-memory)
+- Added `to_vec()` helper for serde_json error conversion to kelpie_core::Error
+
+**DST-First Verification:**
+- ✅ Tests compile successfully
+- ✅ Tests run with full `Simulation::new(config).run_async()`
+- ✅ Tests fail with clear, expected error message
+- ✅ Tests define the contract Phase 3 must satisfy
+
+**Phase 3 will implement AgentActor to make all 10 tests pass.**
+
 ### Gaps Identified
 - ❓ Streaming support: Need to investigate if actors can yield intermediate results
 - ❓ List operations: How to query all active agents? (Need registry query)
@@ -1123,8 +1180,10 @@ cargo fmt --check
 | Fault injection | Integration tests | 35% combined fault rate, proper failures observed |
 | Storage Clone bug | Fixed | SimStorage now Clone-able for SimEnvironment |
 | Error type bug | Fixed | SimAgentEnv uses kelpie_core::Error |
-| **Phase 2: Test Contracts** | `cargo test -p kelpie-server agent_actor_dst` | **11 tests written, all `#[ignore]` until Phase 3** |
-| AgentActor DST tests | See agent_actor_dst.rs | Lifecycle, faults, LLM integration, tool execution tests |
+| **Phase 2: Test Contracts** | `cargo test -p kelpie-server --test agent_actor_dst` | **10 tests compiled and run, all FAIL as expected** |
+| AgentActor DST tests | See agent_actor_dst.rs | All tests fail with "AgentActor not implemented" |
+| Test failure mode | Compilation ✅, Run ✅, Fail ✅ | "AgentActor not implemented - Phase 3 TODO" |
+| umi_backend.rs fix | Memory<> no longer generic | Changed to `Memory` (trait objects) |
 
 ### Doesn't Work Yet ❌
 | What | Why | When Expected |
