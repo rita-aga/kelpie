@@ -538,6 +538,26 @@ impl AppState {
         }
     }
 
+    /// List agents (dual-mode)
+    ///
+    /// Phase 6.5: Currently always uses HashMap since AgentService doesn't have list support yet.
+    /// TODO: Implement registry/index infrastructure for actor-based list operations.
+    pub async fn list_agents_async(
+        &self,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<(Vec<AgentState>, Option<String>), StateError> {
+        // TODO: When AgentService supports list operations (requires registry):
+        // if let Some(service) = self.agent_service() {
+        //     service.list_agents(limit, cursor).await...
+        // } else {
+        //     self.list_agents(limit, cursor)
+        // }
+
+        // For now, always use HashMap (works in both modes)
+        self.list_agents(limit, cursor)
+    }
+
     // Note: list_agents not yet implemented in AgentService
     // For now, list handler will continue using HashMap directly
 

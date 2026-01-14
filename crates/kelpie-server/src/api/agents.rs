@@ -134,7 +134,9 @@ async fn list_agents(
     Query(query): Query<ListAgentsQuery>,
 ) -> Result<Json<ListResponse<AgentState>>, ApiError> {
     let limit = query.limit.min(LIST_LIMIT_MAX);
-    let (items, cursor) = state.list_agents(limit, query.cursor.as_deref())?;
+    let (items, cursor) = state
+        .list_agents_async(limit, query.cursor.as_deref())
+        .await?;
     let total = state.agent_count()?;
 
     Ok(Json(ListResponse {
