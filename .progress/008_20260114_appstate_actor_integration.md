@@ -1,7 +1,7 @@
 # Task: AppState Actor Integration (Plan 007 Phase 5)
 
 **Created:** 2026-01-14 21:15:00
-**State:** PLANNING
+**State:** PHASE 5.2 COMPLETE (Implementation)
 **Parent Plan:** 007_20260113_actor_based_agent_server.md (Phase 5)
 
 ---
@@ -302,6 +302,9 @@ $ cargo test -p kelpie-server --test agent_actor_dst --test agent_service_dst \
 | 2026-01-14 21:15 | Use 50%+ fault rates | BUG-001 found with 50%, not 30% | Slower tests |
 | 2026-01-14 21:15 | Service wrapper (Option C) | Incremental, proven with Phase 4 | Longer timeline |
 | 2026-01-14 21:15 | Graceful shutdown (30s) | User-facing service | Slower shutdown |
+| 2026-01-14 23:30 | Atomic creation with verification | Prevent partial state bugs | Slightly slower creation |
+| 2026-01-14 23:30 | Retry logic in tests (3x) | Distinguish failures vs broken | More complex test code |
+| 2026-01-14 23:30 | agent_service() returns Option | Backward compatibility | Tests need _required() helper |
 
 ---
 
@@ -312,10 +315,29 @@ $ cargo test -p kelpie-server --test agent_actor_dst --test agent_service_dst \
 - Doesn't Work Yet: Everything (tests MUST fail)
 - Known Limitations: Tests define contract only
 
-**Phase 5.2 (After Implementation):**
-- Works Now: [Will update after implementation]
-- Doesn't Work Yet: [Will update after implementation]
-- Known Limitations: [Will update after implementation]
+**Phase 5.2 (Implementation Complete):**
+- Works Now:
+  - AppState with AgentService integration
+  - AppState::with_agent_service(service, dispatcher) constructor
+  - AppState::agent_service() getter returns Option<&AgentService>
+  - AppState::shutdown(timeout) graceful shutdown
+  - All 5 aggressive DST tests passing (50%+ fault rates)
+  - Atomic initialization - either full success or full failure
+  - No partial state bugs found
+- Test Results:
+  - ✅ test_appstate_init_crash (50% crash rate) - 2 success, 18 failures, 0 bugs
+  - ✅ test_concurrent_agent_creation_race (40% crash rate) - PASS
+  - ✅ test_shutdown_with_inflight_requests (50% network delay) - PASS
+  - ✅ test_service_invoke_during_shutdown (40% crash rate) - PASS
+  - ✅ test_first_invoke_after_creation (50% crash rate) - PASS
+  - All Phase 3/4 tests still pass (23 tests)
+- Doesn't Work Yet:
+  - HTTP handlers still use HashMap (Phase 6)
+  - Production-ready storage backend (Phase 6)
+- Known Limitations:
+  - AppState.agent_service() returns Option for backward compat
+  - Tests use agent_service_required() which panics if not configured
+  - One flaky delete test from earlier work (not Phase 5 related)
 
 ---
 

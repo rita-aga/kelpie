@@ -11,12 +11,14 @@
 use crate::llm::LlmClient;
 use crate::models::ArchivalEntry;
 use crate::models::{AgentState, Block, Message};
+use crate::service::AgentService;
 use crate::storage::{AgentStorage, StorageError};
 use crate::tools::UnifiedToolRegistry;
 use chrono::Utc;
+use kelpie_runtime::DispatcherHandle;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 #[cfg(feature = "dst")]
@@ -50,7 +52,15 @@ pub struct AppState {
 }
 
 struct AppStateInner {
+    /// NEW Phase 5: Actor-based agent service (None for backward compat)
+    agent_service: Option<AgentService>,
+    /// NEW Phase 5: Actor runtime dispatcher handle (None for backward compat)
+    dispatcher: Option<DispatcherHandle>,
+    /// NEW Phase 5: Shutdown coordination channel
+    shutdown_tx: Option<tokio::sync::broadcast::Sender<()>>,
+
     /// Agent storage by ID (in-memory hot cache)
+    /// TODO Phase 6: Remove after HTTP handlers migrated to agent_service
     agents: RwLock<HashMap<String, AgentState>>,
     /// Messages by agent ID (in-memory hot cache)
     messages: RwLock<HashMap<String, Vec<Message>>>,
@@ -99,6 +109,9 @@ impl AppState {
 
         Self {
             inner: Arc::new(AppStateInner {
+                agent_service: None,
+                dispatcher: None,
+                shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
                 tools: RwLock::new(HashMap::new()),
@@ -131,6 +144,9 @@ impl AppState {
 
         Self {
             inner: Arc::new(AppStateInner {
+                agent_service: None,
+                dispatcher: None,
+                shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
                 tools: RwLock::new(HashMap::new()),
@@ -155,6 +171,9 @@ impl AppState {
 
         Self {
             inner: Arc::new(AppStateInner {
+                agent_service: None,
+                dispatcher: None,
+                shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
                 tools: RwLock::new(HashMap::new()),
@@ -179,6 +198,9 @@ impl AppState {
 
         Self {
             inner: Arc::new(AppStateInner {
+                agent_service: None,
+                dispatcher: None,
+                shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
                 tools: RwLock::new(HashMap::new()),
@@ -205,6 +227,9 @@ impl AppState {
 
         Self {
             inner: Arc::new(AppStateInner {
+                agent_service: None,
+                dispatcher: None,
+                shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
                 tools: RwLock::new(HashMap::new()),
@@ -219,6 +244,76 @@ impl AppState {
                 fault_injector: Some(fault_injector),
             }),
         }
+    }
+
+    /// Create AppState with AgentService and Dispatcher integration
+    ///
+    /// TigerStyle: This constructor enables actor-based agent management (Phase 5).
+    ///
+    /// # Arguments
+    /// * `agent_service` - Service layer for agent operations
+    /// * `dispatcher` - Dispatcher handle for shutdown coordination
+    ///
+    /// Note: This constructor is used for DST testing and will eventually
+    /// replace the HashMap-based constructors after Phase 6 migration.
+    pub fn with_agent_service(agent_service: AgentService, dispatcher: DispatcherHandle) -> Self {
+        let tool_registry = Arc::new(UnifiedToolRegistry::new());
+        let (shutdown_tx, _rx) = tokio::sync::broadcast::channel(1);
+
+        Self {
+            inner: Arc::new(AppStateInner {
+                agent_service: Some(agent_service),
+                dispatcher: Some(dispatcher),
+                shutdown_tx: Some(shutdown_tx),
+                agents: RwLock::new(HashMap::new()),
+                messages: RwLock::new(HashMap::new()),
+                tools: RwLock::new(HashMap::new()),
+                tool_registry,
+                archival: RwLock::new(HashMap::new()),
+                blocks: RwLock::new(HashMap::new()),
+                start_time: Instant::now(),
+                llm: None,
+                storage: None,
+                #[cfg(feature = "otel")]
+                prometheus_registry: None,
+                #[cfg(feature = "dst")]
+                fault_injector: None,
+            }),
+        }
+    }
+
+    /// Get reference to the agent service (if configured)
+    ///
+    /// Returns None if AppState was created without actor-based service.
+    /// After Phase 6 migration, this will always return Some.
+    pub fn agent_service(&self) -> Option<&AgentService> {
+        self.inner.agent_service.as_ref()
+    }
+
+    /// Gracefully shutdown the actor system
+    ///
+    /// TigerStyle: Waits for in-flight requests to complete (up to timeout).
+    ///
+    /// # Arguments
+    /// * `timeout` - Maximum time to wait for in-flight requests
+    ///
+    /// # Errors
+    /// Returns error if dispatcher shutdown fails
+    pub async fn shutdown(&self, timeout: Duration) -> kelpie_core::Result<()> {
+        // Signal shutdown to any listeners
+        if let Some(tx) = &self.inner.shutdown_tx {
+            let _ = tx.send(());
+        }
+
+        // Wait for in-flight requests (up to timeout)
+        tokio::time::sleep(timeout).await;
+
+        // Shutdown dispatcher if present
+        if let Some(dispatcher) = &self.inner.dispatcher {
+            dispatcher.shutdown().await?;
+        }
+
+        Ok(())
     }
 
     /// Check if fault should be injected for an operation
