@@ -118,7 +118,8 @@ async fn get_agent(
     Path(agent_id): Path<String>,
 ) -> Result<Json<AgentState>, ApiError> {
     let agent = state
-        .get_agent(&agent_id)?
+        .get_agent_async(&agent_id)
+        .await?
         .ok_or_else(|| ApiError::not_found("Agent", &agent_id))?;
 
     Ok(Json(agent))

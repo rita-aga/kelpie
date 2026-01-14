@@ -363,6 +363,107 @@ impl AppState {
     }
 
     // =========================================================================
+    // Dual-Mode Agent Operations (Phase 6.1)
+    // =========================================================================
+    //
+    // These methods delegate to AgentService if available, otherwise fall back
+    // to HashMap. This enables incremental migration of HTTP handlers.
+    //
+    // After Phase 6 migration completes, these will be removed and handlers
+    // will call agent_service() directly.
+
+    /// Get an agent by ID (dual-mode)
+    ///
+    /// Phase 6.1: Delegates to service if available, otherwise uses HashMap.
+    pub async fn get_agent_async(&self, id: &str) -> Result<Option<AgentState>, StateError> {
+        if let Some(service) = self.agent_service() {
+            // Use actor-based service
+            service
+                .get_agent(id)
+                .await
+                .map(Some)
+                .map_err(|e| StateError::Internal {
+                    message: format!("Service error: {}", e),
+                })
+        } else {
+            // Fall back to HashMap
+            self.get_agent(id)
+        }
+    }
+
+    /// Create an agent (dual-mode)
+    ///
+    /// Phase 6.1: Delegates to service if available, otherwise uses HashMap.
+    pub async fn create_agent_async(
+        &self,
+        request: crate::models::CreateAgentRequest,
+    ) -> Result<AgentState, StateError> {
+        if let Some(service) = self.agent_service() {
+            // Use actor-based service
+            service
+                .create_agent(request)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("Service error: {}", e),
+                })
+        } else {
+            // Fall back to HashMap - convert request to AgentState
+            let agent = AgentState::from_request(request);
+            self.create_agent(agent)
+        }
+    }
+
+    /// Update an agent (dual-mode)
+    ///
+    /// Phase 6.1: Delegates to service if available, otherwise uses HashMap.
+    pub async fn update_agent_async(
+        &self,
+        id: &str,
+        update: serde_json::Value,
+    ) -> Result<AgentState, StateError> {
+        if let Some(service) = self.agent_service() {
+            // Use actor-based service
+            service
+                .update_agent(id, update)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("Service error: {}", e),
+                })
+        } else {
+            // Fall back to HashMap - parse update into UpdateAgentRequest
+            let update_request: crate::models::UpdateAgentRequest = serde_json::from_value(update)
+                .map_err(|e| StateError::Internal {
+                    message: format!("Invalid update: {}", e),
+                })?;
+
+            self.update_agent(id, |agent| {
+                agent.apply_update(update_request);
+            })
+        }
+    }
+
+    /// Delete an agent (dual-mode)
+    ///
+    /// Phase 6.1: Delegates to service if available, otherwise uses HashMap.
+    pub async fn delete_agent_async(&self, id: &str) -> Result<(), StateError> {
+        if let Some(service) = self.agent_service() {
+            // Use actor-based service
+            service
+                .delete_agent(id)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("Service error: {}", e),
+                })
+        } else {
+            // Fall back to HashMap
+            self.delete_agent(id)
+        }
+    }
+
+    // Note: list_agents not yet implemented in AgentService
+    // For now, list handler will continue using HashMap directly
+
+    // =========================================================================
     // Async Persistence Operations (for durable storage)
     // =========================================================================
 
@@ -1368,6 +1469,8 @@ pub enum StateError {
     LockPoisoned,
     /// Fault injected (DST testing only)
     FaultInjected { operation: String },
+    /// Internal error (service errors, etc.)
+    Internal { message: String },
 }
 
 impl std::fmt::Display for StateError {
@@ -1385,6 +1488,9 @@ impl std::fmt::Display for StateError {
             StateError::LockPoisoned => write!(f, "internal lock error"),
             StateError::FaultInjected { operation } => {
                 write!(f, "fault injected during operation: {}", operation)
+            }
+            StateError::Internal { message } => {
+                write!(f, "internal error: {}", message)
             }
         }
     }
@@ -1515,5 +1621,28 @@ mod tests {
         assert_eq!(messages.len(), 3);
         assert_eq!(messages[0].content, "Message 2");
         assert_eq!(messages[2].content, "Message 4");
+    }
+
+    #[tokio::test]
+    async fn test_dual_mode_get_agent_hashmap() {
+        // Test dual-mode with HashMap (no service)
+        let state = AppState::new();
+        let agent = create_test_agent("dual-mode-test");
+        let agent_id = agent.id.clone();
+
+        // Create via HashMap
+        state.create_agent(agent).unwrap();
+
+        // Get via dual-mode method (should use HashMap)
+        let retrieved = state.get_agent_async(&agent_id).await.unwrap();
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().id, agent_id);
+
+        // Delete via dual-mode
+        state.delete_agent_async(&agent_id).await.unwrap();
+
+        // Verify deleted
+        let retrieved = state.get_agent_async(&agent_id).await.unwrap();
+        assert!(retrieved.is_none());
     }
 }

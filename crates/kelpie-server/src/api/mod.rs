@@ -213,6 +213,10 @@ impl From<StateError> for ApiError {
                 // DST fault injection - return as internal error
                 ApiError::internal(format!("operation failed: {}", operation))
             }
+            StateError::Internal { message } => {
+                // Service errors or other internal errors
+                ApiError::internal(message)
+            }
         }
     }
 }
