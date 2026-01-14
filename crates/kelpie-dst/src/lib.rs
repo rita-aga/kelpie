@@ -34,15 +34,21 @@
 //! - Always log the seed for reproducibility
 //! - Explicit fault types and probabilities
 
+pub mod agent;
 pub mod clock;
 pub mod fault;
+pub mod llm;
 pub mod network;
 pub mod rng;
 pub mod simulation;
 pub mod storage;
 
+pub use agent::{AgentTestConfig, AgentTestState, BlockTestState, SimAgentEnv};
 pub use clock::SimClock;
 pub use fault::{FaultConfig, FaultInjector, FaultType};
+pub use llm::{
+    SimChatMessage, SimCompletionResponse, SimLlmClient, SimToolCall, SimToolDefinition,
+};
 pub use network::SimNetwork;
 pub use rng::DeterministicRng;
 pub use simulation::{SimConfig, SimEnvironment, Simulation};
