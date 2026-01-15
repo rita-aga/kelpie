@@ -292,6 +292,26 @@ pub struct SimTeleportStorage {
     expected_image_version: String,
 }
 
+impl Clone for SimTeleportStorage {
+    fn clone(&self) -> Self {
+        // Clone needs to be synchronous, so we use blocking read
+        // This is safe in tests where Clone is used
+        let rng = futures::executor::block_on(self.rng.read()).fork();
+        let packages = futures::executor::block_on(self.packages.read()).clone();
+        let blobs = futures::executor::block_on(self.blobs.read()).clone();
+        Self {
+            packages: RwLock::new(packages),
+            blobs: RwLock::new(blobs),
+            rng: RwLock::new(rng),
+            faults: self.faults.clone(),
+            operation_count: AtomicU64::new(self.operation_count.load(Ordering::SeqCst)),
+            max_package_bytes: self.max_package_bytes,
+            host_arch: self.host_arch,
+            expected_image_version: self.expected_image_version.clone(),
+        }
+    }
+}
+
 impl SimTeleportStorage {
     /// Create a new simulated teleport storage
     pub fn new(rng: DeterministicRng, faults: Arc<FaultInjector>) -> Self {

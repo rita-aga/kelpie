@@ -2,6 +2,7 @@
 //!
 //! TigerStyle: Service wraps dispatcher, provides clean API, handles errors.
 
+use crate::actor::{HandleMessageFullRequest, HandleMessageFullResponse};
 use crate::models::{AgentState, CreateAgentRequest, StreamEvent, UpdateAgentRequest};
 use bytes::Bytes;
 use kelpie_core::actor::ActorId;
@@ -100,6 +101,63 @@ impl AgentService {
         // Deserialize response
         serde_json::from_slice(&response).map_err(|e| Error::Internal {
             message: format!("Failed to deserialize message response: {}", e),
+        })
+    }
+
+    /// Send message with full agent loop (Phase 6.9)
+    ///
+    /// Typed API for agent message handling. Returns structured response
+    /// with full conversation history and usage stats.
+    ///
+    /// # Arguments
+    /// * `agent_id` - Agent ID string
+    /// * `content` - Message content from user
+    ///
+    /// # Returns
+    /// HandleMessageFullResponse with messages and usage stats
+    ///
+    /// # Errors
+    /// - Invalid agent_id
+    /// - Agent not found/created
+    /// - Actor invocation failure
+    /// - Serialization/deserialization error
+    ///
+    /// # TigerStyle
+    /// - Explicit typed API (not JSON Value)
+    /// - Clear error messages
+    /// - No unwrap()
+    pub async fn send_message_full(
+        &self,
+        agent_id: &str,
+        content: String,
+    ) -> Result<HandleMessageFullResponse> {
+        // TigerStyle: Validate preconditions
+        assert!(!agent_id.is_empty(), "agent_id must not be empty");
+        assert!(!content.is_empty(), "content must not be empty");
+
+        let actor_id = ActorId::new("agents", agent_id)?;
+
+        // Build typed request
+        let request = HandleMessageFullRequest { content };
+
+        // Serialize request
+        let payload = serde_json::to_vec(&request).map_err(|e| Error::Internal {
+            message: format!("Failed to serialize HandleMessageFullRequest: {}", e),
+        })?;
+
+        // Invoke handle_message_full operation
+        let response = self
+            .dispatcher
+            .invoke(
+                actor_id,
+                "handle_message_full".to_string(),
+                Bytes::from(payload),
+            )
+            .await?;
+
+        // Deserialize typed response
+        serde_json::from_slice(&response).map_err(|e| Error::Internal {
+            message: format!("Failed to deserialize HandleMessageFullResponse: {}", e),
         })
     }
 

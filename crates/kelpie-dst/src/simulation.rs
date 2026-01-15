@@ -6,7 +6,9 @@ use crate::clock::SimClock;
 use crate::fault::{FaultConfig, FaultInjector, FaultInjectorBuilder};
 use crate::network::SimNetwork;
 use crate::rng::DeterministicRng;
+use crate::sandbox::SimSandboxFactory;
 use crate::storage::SimStorage;
+use crate::teleport::SimTeleportStorage;
 use kelpie_core::{DST_STEPS_COUNT_MAX, DST_TIME_MS_MAX};
 use std::future::Future;
 use std::sync::Arc;
@@ -91,12 +93,16 @@ pub struct SimEnvironment {
     pub clock: SimClock,
     /// Deterministic RNG
     pub rng: DeterministicRng,
-    /// Simulated storage
+    /// Simulated storage (for actor state)
     pub storage: SimStorage,
     /// Simulated network
     pub network: SimNetwork,
-    /// Fault injector
+    /// Fault injector (shared across all components)
     pub faults: Arc<FaultInjector>,
+    /// Simulated sandbox factory (for creating sandboxes with fault injection)
+    pub sandbox_factory: SimSandboxFactory,
+    /// Simulated teleport storage (for teleport package upload/download)
+    pub teleport_storage: SimTeleportStorage,
 }
 
 impl SimEnvironment {
@@ -172,12 +178,20 @@ impl Simulation {
             self.config.network_jitter_ms,
         );
 
+        // Build sandbox factory
+        let sandbox_factory = SimSandboxFactory::new(rng.fork(), faults.clone());
+
+        // Build teleport storage
+        let teleport_storage = SimTeleportStorage::new(rng.fork(), faults.clone());
+
         let env = SimEnvironment {
             clock,
             rng,
             storage,
             network,
             faults,
+            sandbox_factory,
+            teleport_storage,
         };
 
         // Run the test
@@ -214,12 +228,20 @@ impl Simulation {
             self.config.network_jitter_ms,
         );
 
+        // Build sandbox factory
+        let sandbox_factory = SimSandboxFactory::new(rng.fork(), faults.clone());
+
+        // Build teleport storage
+        let teleport_storage = SimTeleportStorage::new(rng.fork(), faults.clone());
+
         let env = SimEnvironment {
             clock,
             rng,
             storage,
             network,
             faults,
+            sandbox_factory,
+            teleport_storage,
         };
 
         test(env).await.map_err(SimulationError::TestFailed)
