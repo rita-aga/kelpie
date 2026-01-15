@@ -322,6 +322,29 @@ impl ActorKV for SimStorage {
             .collect())
     }
 
+    async fn scan_prefix(
+        &self,
+        actor_id: &ActorId,
+        prefix: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Bytes)>> {
+        let scoped_prefix = Self::scoped_key(actor_id, prefix);
+        let actor_prefix = Self::scoped_key(actor_id, b"");
+
+        // Get all keys with the scoped prefix
+        let keys = SimStorage::list_keys(self, &scoped_prefix).await?;
+
+        // Read each key and return (key, value) pairs
+        let mut results = Vec::new();
+        for scoped_key in keys {
+            if let Some(value) = self.read(&scoped_key).await? {
+                // Remove the actor prefix to return only the user's key portion
+                let user_key = scoped_key[actor_prefix.len()..].to_vec();
+                results.push((user_key, value));
+            }
+        }
+        Ok(results)
+    }
+
     async fn begin_transaction(&self, actor_id: &ActorId) -> Result<Box<dyn ActorTransaction>> {
         // Note: We don't inject faults at transaction begin.
         // Transaction failures are more realistic at commit time (when writes happen).

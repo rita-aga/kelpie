@@ -5,6 +5,8 @@
 //! These tests use SimHttpClient which wraps HTTP operations with fault injection.
 //! Faults ACTUALLY TRIGGER during HTTP calls (unlike the previous fake tests).
 
+#![cfg(feature = "dst")]
+
 use futures::stream::StreamExt;
 use kelpie_core::Result;
 use kelpie_dst::{FaultConfig, FaultType, SimClock, SimConfig, Simulation};

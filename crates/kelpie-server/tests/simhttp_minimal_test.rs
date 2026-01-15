@@ -1,5 +1,7 @@
 //! Minimal test to isolate SimHttpClient hang issue
 
+#![cfg(feature = "dst")]
+
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
 use kelpie_server::http::{HttpClient, HttpMethod, HttpRequest, SimHttpClient};
 use std::sync::Arc;

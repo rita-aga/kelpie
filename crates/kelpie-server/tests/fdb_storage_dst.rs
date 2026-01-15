@@ -8,6 +8,8 @@
 //! 1. Agent CRUD with storage faults (20% write fail, 10% read fail)
 //! 2. Block operations with crash faults
 //! 3. Session checkpointing with transaction conflicts
+
+#![cfg(feature = "dst")]
 //! 4. Message persistence with high fault rates
 //! 5. Concurrent operations (race conditions)
 //! 6. Crash recovery (state survives crashes)
@@ -741,6 +743,7 @@ async fn test_dst_fdb_crash_recovery() {
 
             // Create NEW storage instance (simulates process restart)
             // Use with_shared_state to maintain persistence across "restart"
+            use kelpie_server::storage::SimStorage;
             let storage2 = Arc::new(SimStorage::with_shared_state(&storage1));
 
             // Verify agent still exists (retry reads to handle transient faults)
