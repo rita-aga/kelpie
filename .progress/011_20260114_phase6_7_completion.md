@@ -1128,6 +1128,71 @@ FaultType::CrashBeforeWrite | FaultType::CrashAfterWrite => {
 
 ---
 
+## Phase 6 DST: Chaos & Stress Testing (2026-01-14)
+
+### Overview
+
+Phase 6 DST chaos testing validates system resilience under multiple simultaneous faults.
+These tests enable ALL fault types simultaneously with 40-50% combined fault probability.
+
+### Test File Created
+
+**File:** `crates/kelpie-dst/tests/integration_chaos_dst.rs`
+
+### Chaos Tests (5 tests, all passing)
+
+| Test | Description | Fault Types |
+|------|-------------|-------------|
+| `test_dst_full_teleport_workflow_under_chaos` | Complete teleport workflow (create→exec→snapshot→upload→download→restore) | ALL: SandboxCrash, SnapshotCorruption, TeleportUploadFail, StorageWriteFail, NetworkDelay (40-50%) |
+| `test_dst_sandbox_lifecycle_under_chaos` | 50 rapid create/start/exec/stop cycles | SandboxBootFail, SandboxCrash, SandboxPauseFail, SandboxExecTimeout (50%) |
+| `test_dst_snapshot_operations_under_chaos` | 30 snapshot create/restore cycles | SnapshotCreateFail, SnapshotCorruption, SnapshotRestoreFail, SnapshotTooLarge (40%) |
+| `test_dst_teleport_storage_under_chaos` | 40 upload/download cycles | TeleportUploadFail, TeleportDownloadFail, TeleportTimeout, StorageWriteFail (60%) |
+| `test_dst_chaos_determinism` | Same seed produces identical results under chaos | SandboxCrash, SnapshotCorruption, TeleportUploadFail (35%) |
+
+### Stress Tests (4 tests, ignored by default)
+
+These are long-running stress tests. Run with: `cargo test stress_test --release -- --ignored`
+
+| Test | Description | Scale |
+|------|-------------|-------|
+| `stress_test_concurrent_teleports` | Concurrent teleport operations | 100 agents |
+| `stress_test_rapid_sandbox_lifecycle` | Rapid lifecycle cycles | 1000 cycles |
+| `stress_test_rapid_suspend_resume` | Suspend/resume on same sandbox | 500 cycles |
+| `stress_test_many_snapshots` | Create/restore many snapshots | 200 snapshots |
+
+### Test Results
+
+```
+running 9 tests
+test stress_test_concurrent_teleports ... ignored
+test stress_test_many_snapshots ... ignored
+test stress_test_rapid_sandbox_lifecycle ... ignored
+test stress_test_rapid_suspend_resume ... ignored
+test test_dst_chaos_determinism ... ok
+test test_dst_teleport_storage_under_chaos ... ok
+test test_dst_snapshot_operations_under_chaos ... ok
+test test_dst_sandbox_lifecycle_under_chaos ... ok
+test test_dst_full_teleport_workflow_under_chaos ... ok
+
+test result: ok. 5 passed; 0 failed; 4 ignored
+```
+
+### Total DST Test Coverage
+
+**kelpie-dst:** 190 tests passing (13 ignored stress tests)
+- 65 unit tests
+- 125 integration/DST tests (including new chaos tests)
+
+### Key Invariants Verified
+
+1. **No panics under chaos** - All failures must be graceful errors, not panics
+2. **No hangs** - Operations complete (success or failure) within timeout
+3. **Proper error propagation** - Errors bubble up correctly through layers
+4. **Determinism preserved** - Same seed produces identical fault sequence and outcomes
+5. **Data integrity** - No corruption despite faults (verified in roundtrip tests)
+
+---
+
 ## References
 
 - Parent Plan: `.progress/007_20260113_actor_based_agent_server.md`
