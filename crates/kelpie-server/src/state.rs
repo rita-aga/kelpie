@@ -11,7 +11,7 @@
 use crate::actor::{AgentActor, RealLlmAdapter};
 use crate::llm::LlmClient;
 use crate::models::ArchivalEntry;
-use crate::models::{AgentState, Block, Message};
+use crate::models::{AgentState, Block, Job, Message};
 use crate::service::AgentService;
 use crate::storage::{AgentStorage, StorageError};
 use crate::tools::UnifiedToolRegistry;
@@ -74,6 +74,8 @@ struct AppStateInner {
     archival: RwLock<HashMap<String, Vec<ArchivalEntry>>>,
     /// Standalone blocks by ID (for letta-code compatibility)
     blocks: RwLock<HashMap<String, Block>>,
+    /// Scheduled jobs by ID (Phase 5: Scheduling)
+    jobs: RwLock<HashMap<String, Job>>,
     /// Server start time for uptime calculation
     start_time: Instant,
     /// LLM client (None if no API key configured)
@@ -158,6 +160,7 @@ impl AppState {
                 tool_registry,
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
+                jobs: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm,
                 storage: None,
@@ -231,6 +234,7 @@ impl AppState {
                 tool_registry,
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
+                jobs: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm,
                 storage: None,
@@ -258,6 +262,7 @@ impl AppState {
                 tool_registry,
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
+                jobs: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm,
                 storage: Some(storage),
@@ -285,6 +290,7 @@ impl AppState {
                 tool_registry,
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
+                jobs: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm: None,
                 storage: None,
@@ -314,6 +320,7 @@ impl AppState {
                 tool_registry,
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
+                jobs: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm: None,
                 storage: Some(storage),
@@ -349,6 +356,7 @@ impl AppState {
                 tool_registry,
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
+                jobs: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm: None,
                 storage: None,
@@ -1569,6 +1577,113 @@ impl AppState {
             return Err(StateError::NotFound {
                 resource: "archival_entry",
                 id: entry_id.to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
+    // =========================================================================
+    // Job operations (Phase 5: Scheduling)
+    // =========================================================================
+
+    /// Add a scheduled job
+    pub fn add_job(&self, job: Job) -> Result<(), StateError> {
+        let mut jobs = self
+            .inner
+            .jobs
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        if jobs.contains_key(&job.id) {
+            return Err(StateError::AlreadyExists {
+                resource: "job",
+                id: job.id.clone(),
+            });
+        }
+
+        jobs.insert(job.id.clone(), job);
+        Ok(())
+    }
+
+    /// Get a job by ID
+    pub fn get_job(&self, job_id: &str) -> Result<Option<Job>, StateError> {
+        let jobs = self
+            .inner
+            .jobs
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+        Ok(jobs.get(job_id).cloned())
+    }
+
+    /// List jobs for a specific agent
+    pub fn list_jobs_for_agent(&self, agent_id: &str) -> Result<Vec<Job>, StateError> {
+        let jobs = self
+            .inner
+            .jobs
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        let agent_jobs: Vec<_> = jobs
+            .values()
+            .filter(|j| j.agent_id == agent_id)
+            .cloned()
+            .collect();
+
+        Ok(agent_jobs)
+    }
+
+    /// List all jobs with optional agent filter
+    pub fn list_all_jobs(&self, agent_id: Option<&str>) -> Result<Vec<Job>, StateError> {
+        let jobs = self
+            .inner
+            .jobs
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        let filtered_jobs: Vec<_> = if let Some(agent_id) = agent_id {
+            jobs.values()
+                .filter(|j| j.agent_id == agent_id)
+                .cloned()
+                .collect()
+        } else {
+            jobs.values().cloned().collect()
+        };
+
+        Ok(filtered_jobs)
+    }
+
+    /// Update a job
+    pub fn update_job(&self, job: Job) -> Result<(), StateError> {
+        let mut jobs = self
+            .inner
+            .jobs
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        if !jobs.contains_key(&job.id) {
+            return Err(StateError::NotFound {
+                resource: "job",
+                id: job.id.clone(),
+            });
+        }
+
+        jobs.insert(job.id.clone(), job);
+        Ok(())
+    }
+
+    /// Delete a job
+    pub fn delete_job(&self, job_id: &str) -> Result<(), StateError> {
+        let mut jobs = self
+            .inner
+            .jobs
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        if jobs.remove(job_id).is_none() {
+            return Err(StateError::NotFound {
+                resource: "job",
+                id: job_id.to_string(),
             });
         }
 

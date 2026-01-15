@@ -763,6 +763,184 @@ impl StreamEvent {
     }
 }
 
+// =========================================================================
+// Scheduling models (Phase 5)
+// =========================================================================
+
+/// Job schedule type
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduleType {
+    /// Cron expression (e.g., "0 0 * * *" for daily at midnight)
+    Cron,
+    /// Interval in seconds
+    Interval,
+    /// One-time execution at specific time
+    Once,
+}
+
+/// Job action type (what the job does)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JobAction {
+    /// Send a message to the agent
+    SendMessage,
+    /// Summarize agent's conversation
+    SummarizeConversation,
+    /// Summarize agent's memory
+    SummarizeMemory,
+    /// Export agent state
+    ExportAgent,
+    /// Custom action (for extensibility)
+    Custom,
+}
+
+/// Job status
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JobStatus {
+    /// Job is active and will run
+    Active,
+    /// Job is paused (won't run)
+    Paused,
+    /// Job completed (for one-time jobs)
+    Completed,
+    /// Job failed
+    Failed,
+}
+
+/// Request to create a scheduled job
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateJobRequest {
+    /// Agent ID this job is for
+    pub agent_id: String,
+    /// Schedule type
+    pub schedule_type: ScheduleType,
+    /// Schedule pattern (cron expression, interval seconds, or ISO timestamp)
+    pub schedule: String,
+    /// Action to perform
+    pub action: JobAction,
+    /// Optional action parameters (JSON)
+    #[serde(default)]
+    pub action_params: serde_json::Value,
+    /// Job description
+    pub description: Option<String>,
+}
+
+/// Request to update a scheduled job
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpdateJobRequest {
+    /// New status
+    pub status: Option<JobStatus>,
+    /// New schedule pattern
+    pub schedule: Option<String>,
+    /// New action parameters
+    pub action_params: Option<serde_json::Value>,
+    /// New description
+    pub description: Option<String>,
+}
+
+/// Scheduled job response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Job {
+    /// Unique identifier
+    pub id: String,
+    /// Agent ID
+    pub agent_id: String,
+    /// Schedule type
+    pub schedule_type: ScheduleType,
+    /// Schedule pattern
+    pub schedule: String,
+    /// Action to perform
+    pub action: JobAction,
+    /// Action parameters
+    pub action_params: serde_json::Value,
+    /// Job description
+    pub description: Option<String>,
+    /// Job status
+    pub status: JobStatus,
+    /// Creation timestamp
+    pub created_at: DateTime<Utc>,
+    /// Last execution timestamp
+    pub last_run: Option<DateTime<Utc>>,
+    /// Next scheduled execution
+    pub next_run: Option<DateTime<Utc>>,
+    /// Execution count
+    pub run_count: u64,
+}
+
+impl Job {
+    /// Create a new job from request
+    pub fn from_request(request: CreateJobRequest) -> Self {
+        let now = Utc::now();
+        let next_run = calculate_next_run(&request.schedule_type, &request.schedule, now);
+
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            agent_id: request.agent_id,
+            schedule_type: request.schedule_type,
+            schedule: request.schedule,
+            action: request.action,
+            action_params: request.action_params,
+            description: request.description,
+            status: JobStatus::Active,
+            created_at: now,
+            last_run: None,
+            next_run,
+            run_count: 0,
+        }
+    }
+
+    /// Apply an update to the job
+    pub fn apply_update(&mut self, update: UpdateJobRequest) {
+        if let Some(status) = update.status {
+            self.status = status;
+        }
+        if let Some(schedule) = update.schedule {
+            self.schedule = schedule.clone();
+            // Recalculate next_run if schedule changed
+            self.next_run = calculate_next_run(&self.schedule_type, &schedule, Utc::now());
+        }
+        if let Some(params) = update.action_params {
+            self.action_params = params;
+        }
+        if let Some(description) = update.description {
+            self.description = Some(description);
+        }
+    }
+}
+
+/// Calculate next run time based on schedule
+///
+/// TigerStyle: Deterministic calculation with explicit error handling.
+fn calculate_next_run(
+    schedule_type: &ScheduleType,
+    schedule: &str,
+    from: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    match schedule_type {
+        ScheduleType::Interval => {
+            // Parse interval in seconds
+            if let Ok(seconds) = schedule.parse::<i64>() {
+                Some(from + chrono::Duration::seconds(seconds))
+            } else {
+                None
+            }
+        }
+        ScheduleType::Once => {
+            // Parse ISO timestamp
+            DateTime::parse_from_rfc3339(schedule)
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc))
+        }
+        ScheduleType::Cron => {
+            // For now, return None (cron parsing would require cron library)
+            // Production implementation would use a cron parser
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
