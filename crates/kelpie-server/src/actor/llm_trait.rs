@@ -3,7 +3,7 @@
 //! TigerStyle: Trait abstraction allows both real LLM and SimLlmClient
 
 use async_trait::async_trait;
-use futures::stream::{self, Stream};
+use futures::stream::{self, Stream, StreamExt};
 use kelpie_core::Result;
 use serde_json::Value;
 use std::pin::Pin;
@@ -159,5 +159,62 @@ impl LlmClient for RealLlmAdapter {
                 })
                 .collect(),
         })
+    }
+
+    /// Stream complete with real LLM streaming (Phase 7.8)
+    ///
+    /// Uses crate::llm::LlmClient.stream_complete_with_tools() for true token streaming.
+    async fn stream_complete(
+        &self,
+        messages: Vec<LlmMessage>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
+        // Convert actor LlmMessage to llm::ChatMessage
+        let chat_messages: Vec<crate::llm::ChatMessage> = messages
+            .into_iter()
+            .map(|m| crate::llm::ChatMessage {
+                role: m.role,
+                content: m.content,
+            })
+            .collect();
+
+        // Call real LLM streaming without tools (simplified for actor invocation)
+        let stream = self
+            .client
+            .stream_complete_with_tools(chat_messages, vec![])
+            .await
+            .map_err(|e| kelpie_core::Error::Internal {
+                message: format!("LLM streaming failed: {}", e),
+            })?;
+
+        // Convert StreamDelta to StreamChunk
+        let chunk_stream = stream.map(|delta_result| {
+            delta_result
+                .map_err(|e| kelpie_core::Error::Internal {
+                    message: format!("Stream error: {}", e),
+                })
+                .and_then(|delta| match delta {
+                    crate::llm::StreamDelta::ContentDelta { text } => Ok(StreamChunk::ContentDelta {
+                        delta: text,
+                    }),
+                    crate::llm::StreamDelta::ToolCallStart { id, name } => {
+                        Ok(StreamChunk::ToolCallStart {
+                            id,
+                            name,
+                            input: serde_json::Value::Null, // Will be filled by deltas
+                        })
+                    }
+                    crate::llm::StreamDelta::ToolCallDelta { delta } => {
+                        Ok(StreamChunk::ToolCallDelta {
+                            id: "".to_string(), // TODO: track tool call ID
+                            delta,
+                        })
+                    }
+                    crate::llm::StreamDelta::Done { stop_reason } => Ok(StreamChunk::Done {
+                        stop_reason,
+                    }),
+                })
+        });
+
+        Ok(Box::pin(chunk_stream))
     }
 }

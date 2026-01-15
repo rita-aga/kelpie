@@ -2,9 +2,11 @@
 //!
 //! TigerStyle: Explicit configuration, OpenAI-compatible API support.
 
+use futures::stream::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
+use std::pin::Pin;
 
 /// LLM provider configuration
 #[derive(Debug, Clone)]
@@ -209,6 +211,22 @@ pub struct CompletionResponse {
     pub stop_reason: String,
 }
 
+/// Stream delta from LLM (Phase 7.8)
+#[derive(Debug, Clone)]
+pub enum StreamDelta {
+    /// Text content delta
+    ContentDelta { text: String },
+    /// Tool call started
+    ToolCallStart {
+        id: String,
+        name: String,
+    },
+    /// Tool call input delta
+    ToolCallDelta { delta: String },
+    /// Stream completed
+    Done { stop_reason: String },
+}
+
 /// LLM client
 #[derive(Clone)]
 pub struct LlmClient {
@@ -285,6 +303,27 @@ impl LlmClient {
         });
 
         self.call_anthropic(anthropic_messages, system, tools).await
+    }
+
+    /// Stream a chat conversation with tool support (Phase 7.8)
+    ///
+    /// Returns stream of text deltas as they arrive from LLM.
+    /// Currently only supports Anthropic API.
+    pub async fn stream_complete_with_tools(
+        &self,
+        messages: Vec<ChatMessage>,
+        tools: Vec<ToolDefinition>,
+    ) -> Result<
+        std::pin::Pin<
+            Box<dyn futures::stream::Stream<Item = Result<StreamDelta, String>> + Send>,
+        >,
+        String,
+    > {
+        if self.config.is_anthropic() {
+            self.stream_anthropic(messages, tools).await
+        } else {
+            Err("Streaming only supported for Anthropic API".to_string())
+        }
     }
 
     fn prepare_anthropic_messages(
@@ -436,6 +475,130 @@ impl LlmClient {
             stop_reason: completion.stop_reason,
         })
     }
+
+    async fn stream_anthropic(
+        &self,
+        messages: Vec<ChatMessage>,
+        tools: Vec<ToolDefinition>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamDelta, String>> + Send>>, String> {
+        let (system, anthropic_messages) = self.prepare_anthropic_messages(messages);
+
+        // Build request with streaming enabled
+        let mut request = serde_json::json!({
+            "model": self.config.model,
+            "messages": anthropic_messages,
+            "max_tokens": self.config.max_tokens,
+            "stream": true,
+        });
+
+        if let Some(system_msg) = system {
+            request["system"] = serde_json::Value::String(system_msg);
+        }
+
+        if !tools.is_empty() {
+            request["tools"] = serde_json::to_value(&tools).map_err(|e| e.to_string())?;
+        }
+
+        // Make streaming request
+        let response = self
+            .client
+            .post(format!("{}/messages", self.config.base_url))
+            .header("x-api-key", &self.config.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("API error {}: {}", status, body));
+        }
+
+        // Convert response to byte stream
+        let byte_stream = response.bytes_stream();
+
+        // Parse SSE events and convert to StreamDelta
+        let stream = parse_sse_stream(byte_stream);
+
+        Ok(Box::pin(stream))
+    }
+}
+
+/// Parse Server-Sent Events stream from Anthropic API
+///
+/// Converts SSE events to StreamDelta items.
+/// Handles events: content_block_delta, message_stop
+fn parse_sse_stream(
+    byte_stream: impl Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + 'static,
+) -> impl Stream<Item = Result<StreamDelta, String>> + Send {
+    use futures::stream;
+
+    // Use scan to maintain buffer state across chunks
+    byte_stream
+        .scan(String::new(), |buffer, chunk_result| {
+            let result = match chunk_result {
+                Ok(chunk) => {
+                    // Add chunk to buffer
+                    if let Ok(text) = std::str::from_utf8(&chunk) {
+                        buffer.push_str(text);
+
+                        // Process complete lines (ending with \n)
+                        let mut deltas = Vec::new();
+
+                        // Find all complete lines
+                        while let Some(newline_idx) = buffer.find('\n') {
+                            let line = buffer[..newline_idx].trim().to_string();
+
+                            // Remove processed line from buffer
+                            buffer.drain(..=newline_idx);
+
+                            if line.starts_with("data: ") {
+                                let data = &line[6..]; // Skip "data: "
+
+                                // Parse JSON
+                                if let Ok(event) = serde_json::from_str::<Value>(data) {
+                                    // Handle content_block_delta events
+                                    if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
+                                        match event_type {
+                                            "content_block_delta" => {
+                                                if let Some(text) = event
+                                                    .get("delta")
+                                                    .and_then(|d| d.get("text"))
+                                                    .and_then(|t| t.as_str())
+                                                {
+                                                    deltas.push(Ok(StreamDelta::ContentDelta {
+                                                        text: text.to_string(),
+                                                    }));
+                                                }
+                                            }
+                                            "message_stop" => {
+                                                deltas.push(Ok(StreamDelta::Done {
+                                                    stop_reason: "end_turn".to_string(),
+                                                }));
+                                            }
+                                            _ => {
+                                                // Ignore other event types (message_start, content_block_start, etc.)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Some(deltas)
+                    } else {
+                        Some(vec![])
+                    }
+                }
+                Err(e) => Some(vec![Err(format!("Stream error: {}", e))]),
+            };
+
+            futures::future::ready(result)
+        })
+        .flat_map(stream::iter)
 }
 
 // Re-export for use in messages.rs
