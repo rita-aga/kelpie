@@ -30,16 +30,54 @@ Currently Kelpie has ~90% Letta API compatibility (verified via testing and LETT
 **Goals - ALL IMPLEMENTED:**
 1. Fix the path difference for memory block updates
 2. Add ALL missing built-in tools (`send_message`, `conversation_search_date`)
-3. Complete MCP client execution wiring for ALL transports (stdio, HTTP, SSE)
-4. Add ALL missing API endpoints (import/export, summarization, scheduling, projects, batch, agent groups)
-5. Ensure all new features have full DST coverage per CONSTRAINTS.md
-6. Achieve 100% API parity - NOTHING deferred
+3. Add ALL missing prebuilt tools (`web_search`, `run_code`)
+4. Implement custom tool execution for Python SDK compatibility (sandbox + source storage)
+5. Complete MCP client execution wiring for ALL transports (stdio, HTTP, SSE)
+6. Add ALL missing API endpoints (import/export, summarization, scheduling, projects, batch, agent groups)
+7. Ensure all new features have full DST coverage per CONSTRAINTS.md
+8. Achieve 100% API parity - NOTHING deferred
 
 **Why this matters:**
 - Kelpie can replace Letta in existing projects with ZERO code changes
 - Full compatibility unlocks the entire Letta ecosystem
 - No feature gaps - users get everything Letta offers plus Kelpie's advantages
 - Demonstrates Kelpie's value proposition: "Same API, better foundation, nothing missing"
+
+**Python SDK Compatibility Model:**
+
+When a user uses the Letta Python SDK:
+```python
+from letta import LettaClient
+
+# Point to Kelpie instead of Letta
+client = LettaClient(base_url="http://localhost:8283")
+
+# Define custom tool in Python
+def weather(city: str) -> str:
+    return f"Weather in {city}: Sunny"
+
+# Register tool (sends schema + source code to server)
+tool = client.tools.create(weather)
+
+# Create agent with tool
+agent = client.agents.create(
+    name="weather-bot",
+    tools=["weather", "web_search"]  # Mix custom + prebuilt
+)
+```
+
+**How Kelpie handles this:**
+1. **Tool Registration:** `POST /v1/tools` receives schema + Python source code
+2. **Storage:** Store source code in FDB (keyed by tool name)
+3. **Execution:** When agent calls tool:
+   - Load source code from storage
+   - Spawn ProcessSandbox with Python runtime
+   - Inject environment (LETTA_AGENT_ID, LETTA_API_KEY, pre-initialized client)
+   - Execute Python function with args
+   - Return result to agent
+4. **Sandboxing:** Per-tool isolation (NOT per-agent) with resource limits
+
+**Key insight:** Letta runs as a **service** that executes user-defined Python code server-side in sandboxes. Kelpie must do the same for compatibility.
 
 ---
 
@@ -163,6 +201,90 @@ Currently Kelpie has ~90% Letta API compatibility (verified via testing and LETT
 | 14:45 | Implement ALL MCP transports (stdio, HTTP, SSE) | User requirement: 100% implementation | Larger scope, more complexity |
 | 14:50 | Implement ALL API endpoints (no deferring) | User requirement: everything properly done | Very large scope (15+ days) |
 | 14:55 | Revise plan for 100% completion | User feedback: no prioritization, no deferring | Extended timeline, higher effort |
+| 15:30 | Add prebuilt tools (web_search, run_code) | Research revealed missing Letta prebuilt tools | +3 days scope |
+| 15:35 | Local sandbox for run_code (not E2B) | Self-hosted philosophy, no cloud dependencies | More implementation work, security responsibility |
+| 15:40 | Add custom tool execution (Python SDK) | Required for Letta Python SDK compatibility | +4 days scope, sandbox complexity |
+
+---
+
+### Decision 5: Prebuilt Tools Implementation
+
+**Context:** Research revealed Letta has 2 prebuilt tools beyond base tools: `web_search` and `run_code`. These are critical for 100% compatibility.
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: Implement Both | Add web_search + run_code | - Complete compatibility<br>- Unlock key use cases<br>- Users expect these | - +3 days scope<br>- External dependencies (Tavily, sandbox) |
+| B: Skip Prebuilt | Focus on base tools only | - Smaller scope | - NOT 100% compatible<br>- REJECTED per user requirements |
+
+**Decision:** Option A - Implement Both
+
+**Reasoning:**
+1. User requirement: 100% compatibility
+2. `web_search` is high-value (agents can search the web)
+3. `run_code` is essential (agents can execute code)
+4. Both are documented as "built-in" in Letta
+5. Users migrating from Letta expect these to work
+
+**Trade-offs accepted:**
+- +3 days to timeline
+- Tavily API dependency (can be self-hosted alternative later)
+- Sandbox security responsibility for code execution
+
+---
+
+### Decision 6: run_code Sandbox Provider
+
+**Context:** Letta uses E2B (cloud sandbox service). Kelpie could use E2B or local ProcessSandbox.
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: E2B API | Use E2B like Letta | - Exact Letta parity<br>- Less code<br>- Security handled | - Cloud dependency<br>- Requires E2B_API_KEY<br>- Cost per execution |
+| B: Local ProcessSandbox | Use Kelpie's existing sandbox | - Self-hosted<br>- No external dependencies<br>- No per-execution cost<br>- More control | - More implementation work<br>- Security responsibility |
+| C: Both (pluggable) | Support E2B + local | - User choice<br>- Best of both | - Most complex<br>- Two code paths |
+
+**Decision:** Option B - Local ProcessSandbox
+
+**Reasoning:**
+1. Aligns with Kelpie's self-hosted philosophy
+2. Kelpie already has robust ProcessSandbox infrastructure
+3. No cloud dependencies or API keys required
+4. Full control over security and resource limits
+5. No per-execution costs
+6. Can add E2B support later if demanded
+
+**Trade-offs accepted:**
+- More implementation work (language runtimes, security hardening)
+- Security is our responsibility
+- Need to support Python, JS, TS, R, Java
+
+---
+
+### Decision 7: Custom Tool Execution (Python SDK)
+
+**Context:** Letta Python SDK users define tools in Python that run on the server. Kelpie needs to execute these Python tools.
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: Full Python Sandbox | Store + execute Python code in sandbox | - True SDK compatibility<br>- Agents can use custom tools<br>- Same workflow as Letta | - +4 days scope<br>- Sandbox complexity<br>- Security critical |
+| B: MCP Only | Force users to wrap tools as MCP servers | - Simpler server<br>- Security boundary clear | - NOT Letta compatible<br>- Breaking change for users<br>- REJECTED |
+| C: Defer | Implement later | - Smaller initial scope | - NOT 100% compatible<br>- REJECTED per user requirements |
+
+**Decision:** Option A - Full Python Sandbox
+
+**Reasoning:**
+1. User requirement: 100% compatibility
+2. Letta Python SDK is the PRIMARY way users interact with Letta
+3. Breaking this breaks the entire "drop-in replacement" promise
+4. Custom tools are essential for real-world agents
+5. Kelpie already has sandbox infrastructure (ProcessSandbox)
+6. Can extend existing `run_code` sandbox implementation
+
+**Trade-offs accepted:**
+- +4 days to timeline
+- Complex sandbox integration (environment injection, client pre-initialization)
+- Security critical (arbitrary user code execution)
+- Need dependency management (pip install)
+- Per-tool sandboxing overhead
 
 ---
 
@@ -223,6 +345,87 @@ Currently Kelpie has ~90% Letta API compatibility (verified via testing and LETT
   - [ ] Empty results (no messages in range)
 - [ ] Update default agent tools list
 - [ ] Verify all tools appear in `GET /v1/tools`
+
+### Phase 1.5: Prebuilt Tools (web_search, run_code) (3 days)
+
+#### 1.5.1: `web_search` Tool (1 day)
+- [ ] Research Tavily API integration:
+  - [ ] Review Tavily API docs (https://docs.tavily.com/)
+  - [ ] Understand request/response format
+  - [ ] API key management (`TAVILY_API_KEY` env var)
+- [ ] Implement `tools/web_search.rs`:
+  - [ ] Create WebSearchTool struct
+  - [ ] HTTP client for Tavily API
+  - [ ] Request building (query, num_results, search_depth)
+  - [ ] Response parsing (title, url, content, score)
+  - [ ] Error handling (rate limits, API errors)
+  - [ ] Timeout handling (10s default)
+- [ ] Tool definition matching Letta schema:
+  - [ ] Parameters: query (required), num_results (optional), search_depth (optional)
+  - [ ] Return format: JSON array of results
+- [ ] Register in UnifiedToolRegistry as prebuilt tool
+- [ ] Write unit tests:
+  - [ ] Query parsing
+  - [ ] Result formatting
+  - [ ] Error handling
+- [ ] Write DST tests:
+  - [ ] web_search with NetworkTimeout (0.2)
+  - [ ] web_search with NetworkPartition (0.1)
+  - [ ] web_search with rate limiting (429 errors)
+  - [ ] Concurrent web_search calls (10+ simultaneous)
+- [ ] Integration test with real Tavily API
+- [ ] Document in LETTA_REPLACEMENT_GUIDE.md
+
+#### 1.5.2: `run_code` Tool (2 days)
+- [ ] **Decision**: E2B API vs Local Sandbox
+  - Option A: E2B API (like Letta) - requires `E2B_API_KEY`, cloud dependency
+  - Option B: Local ProcessSandbox - no dependencies, more control, security responsibility
+  - **Chosen**: Option B (Local ProcessSandbox) - aligns with Kelpie's self-hosted philosophy
+- [ ] Extend `ProcessSandbox` for code execution:
+  - [ ] Add language detection (Python, JavaScript, TypeScript, R, Java)
+  - [ ] Create runtime executors for each language:
+    - [ ] PythonExecutor: `python3 -c "code"`
+    - [ ] JavaScriptExecutor: `node -e "code"`
+    - [ ] TypeScriptExecutor: `ts-node -e "code"`
+    - [ ] RExecutor: `Rscript -e "code"`
+    - [ ] JavaExecutor: compile + execute .class
+  - [ ] Capture stdout/stderr
+  - [ ] Parse execution results
+  - [ ] Timeout enforcement (30s default, configurable)
+  - [ ] Resource limits (memory, CPU)
+- [ ] Environment injection:
+  - [ ] `LETTA_AGENT_ID` - current agent ID
+  - [ ] `LETTA_PROJECT_ID` - project ID (if applicable)
+  - [ ] `LETTA_API_KEY` - API key for calling back to server
+  - [ ] Pre-initialize Letta client in sandbox (import letta library)
+- [ ] Implement `tools/code_execution.rs`:
+  - [ ] Tool definition matching Letta schema
+  - [ ] Parameters: language, code
+  - [ ] Execute via ProcessSandbox
+  - [ ] Return: stdout, stderr, exit_code, execution_time
+- [ ] Security hardening:
+  - [ ] Network isolation (no external network access by default)
+  - [ ] Filesystem isolation (read-only except /tmp)
+  - [ ] Process limits (no fork bombs)
+  - [ ] Kill child processes on timeout
+- [ ] Register in UnifiedToolRegistry
+- [ ] Write unit tests:
+  - [ ] Language detection
+  - [ ] Code execution for each runtime
+  - [ ] Timeout enforcement
+  - [ ] Resource limit enforcement
+- [ ] Write DST tests:
+  - [ ] run_code with ProcessTimeout (0.2)
+  - [ ] run_code with ProcessCrash (0.1)
+  - [ ] run_code with ResourceExhaustion (memory limit)
+  - [ ] Concurrent code execution (5+ sandboxes)
+  - [ ] Malicious code handling (infinite loops, fork bombs)
+- [ ] Integration tests:
+  - [ ] Execute simple Python script → verify output
+  - [ ] Execute JavaScript with imports → verify works
+  - [ ] Execute code that times out → verify cleanup
+  - [ ] Execute code with Letta client → verify can call API
+- [ ] Document in LETTA_REPLACEMENT_GUIDE.md
 
 ### Phase 2: MCP Execution - ALL Transports (5 days)
 
@@ -651,7 +854,143 @@ Currently Kelpie has ~90% Letta API compatibility (verified via testing and LETT
   - [ ] Broadcast message → verify all agents respond
   - [ ] State updates visible across agents
 
-### Phase 9: Documentation & Testing (3 days)
+### Phase 9: Custom Tool Execution - Python SDK Compatibility (4 days)
+
+**Goal:** Enable Letta Python SDK users to define custom tools that execute in Kelpie.
+
+**Current Problem:**
+- Letta Python SDK users define tools like:
+  ```python
+  def my_tool(arg: str) -> str:
+      return f"Result: {arg}"
+
+  client.tools.create(my_tool)  # Sends to server
+  ```
+- Kelpie receives tool **schema** but NOT source code
+- When agent calls tool, Kelpie has no code to execute
+- **Result:** Custom tools fail
+
+**Solution Architecture:**
+```
+Letta Python SDK → POST /v1/tools {schema, source_code, runtime}
+                → Kelpie stores schema + code
+                → Agent calls tool
+                → Kelpie loads code from storage
+                → Execute in ProcessSandbox
+                → Return result to agent
+```
+
+#### 9.1: Tool Registration Enhancement (1 day)
+- [ ] Extend `POST /v1/tools` endpoint:
+  - [ ] Accept `source_code` field (Python function as string)
+  - [ ] Accept `runtime` field (python, javascript, etc.)
+  - [ ] Accept `requirements` field (pip packages, npm packages)
+  - [ ] Validate source code (syntax check)
+  - [ ] Generate unique tool ID
+- [ ] Extend storage schema:
+  - [ ] `tools/{tool_name}/schema` → ToolDefinition (existing)
+  - [ ] `tools/{tool_name}/source_code` → String (NEW)
+  - [ ] `tools/{tool_name}/runtime` → String (NEW)
+  - [ ] `tools/{tool_name}/requirements` → Vec<String> (NEW)
+  - [ ] `tools/{tool_name}/metadata` → created_at, updated_at (NEW)
+- [ ] Update `UnifiedToolRegistry`:
+  - [ ] Add `source_code` field to `RegisteredTool`
+  - [ ] Add `runtime` field (enum: Python, JavaScript, TypeScript, etc.)
+  - [ ] Load source code when tool is requested
+- [ ] Write unit tests:
+  - [ ] Tool registration with source code
+  - [ ] Schema validation
+  - [ ] Source code storage/retrieval
+  - [ ] Invalid syntax rejection
+- [ ] Write DST tests:
+  - [ ] Tool registration with StorageWriteFail
+  - [ ] Concurrent tool registrations
+  - [ ] Tool retrieval with StorageReadFail
+
+#### 9.2: Python Runtime Sandbox Integration (2 days)
+- [ ] Extend `ProcessSandbox` for tool execution:
+  - [ ] Add `execute_python_tool()` method
+  - [ ] Accept: tool_name, source_code, args (JSON)
+  - [ ] Build Python execution environment:
+    - [ ] Create temp directory for tool
+    - [ ] Write source code to file
+    - [ ] Write args as JSON file
+    - [ ] Create wrapper script that:
+      - [ ] Imports tool function
+      - [ ] Loads args from JSON
+      - [ ] Calls function
+      - [ ] Prints result as JSON
+  - [ ] Inject environment variables:
+    - [ ] `LETTA_AGENT_ID` - from execution context
+    - [ ] `LETTA_PROJECT_ID` - from execution context
+    - [ ] `LETTA_API_KEY` - for calling back to Kelpie API
+    - [ ] `LETTA_BASE_URL` - Kelpie server URL
+  - [ ] Pre-initialize Letta client:
+    - [ ] Install letta SDK in sandbox (`pip install letta`)
+    - [ ] Create client with injected credentials
+    - [ ] Make available in tool execution context
+- [ ] Sandbox security:
+  - [ ] Network isolation (no external access except Kelpie API)
+  - [ ] Filesystem isolation (read-only except /tmp)
+  - [ ] Memory limits (256MB default)
+  - [ ] CPU limits (1 core, 80% max)
+  - [ ] Execution timeout (30s default)
+  - [ ] Process limits (no child processes)
+- [ ] Dependency management:
+  - [ ] Parse `requirements` from tool metadata
+  - [ ] Install packages in isolated venv
+  - [ ] Cache venvs per tool (avoid repeated installs)
+  - [ ] Timeout for package installation (5 min max)
+- [ ] Write unit tests:
+  - [ ] Python tool execution with args
+  - [ ] Environment variable injection
+  - [ ] Client pre-initialization
+  - [ ] Dependency installation
+  - [ ] Timeout enforcement
+- [ ] Write DST tests:
+  - [ ] Tool execution with ProcessTimeout (0.2)
+  - [ ] Tool execution with ProcessCrash (0.15)
+  - [ ] Tool execution with OutOfMemory (memory limit)
+  - [ ] Tool calling back to Kelpie API (with NetworkPartition 0.1)
+  - [ ] Concurrent tool executions (10+ simultaneous)
+
+#### 9.3: Tool Execution Wiring & Testing (1 day)
+- [ ] Wire `UnifiedToolRegistry.execute_custom()`:
+  - [ ] Load tool from storage (schema + source_code)
+  - [ ] Create execution context (agent_id, project_id, api_key)
+  - [ ] Acquire sandbox from pool
+  - [ ] Execute tool via sandbox
+  - [ ] Capture result (success/failure, output, duration)
+  - [ ] Release sandbox back to pool
+  - [ ] Return ToolExecutionResult
+- [ ] Update `AgentActor` to handle custom tools:
+  - [ ] Detect custom tool calls from LLM
+  - [ ] Route to `execute_custom()` instead of builtin handler
+  - [ ] Handle tool execution errors gracefully
+  - [ ] Log execution metrics (duration, success rate)
+- [ ] Implement tool execution caching (optional):
+  - [ ] Cache tool execution results for deterministic tools
+  - [ ] Cache key: tool_name + args hash
+  - [ ] TTL: 5 minutes default
+  - [ ] Skip cache for tools with side effects
+- [ ] Write integration tests:
+  - [ ] End-to-end: Register Python tool → Create agent → Agent calls tool → Verify result
+  - [ ] Tool that calls Kelpie API → Verify can access agent memory
+  - [ ] Tool with dependencies → Verify packages installed and work
+  - [ ] Tool execution failure → Verify agent handles gracefully
+  - [ ] Concurrent agents calling same tool → Verify no interference
+- [ ] Write DST tests:
+  - [ ] Full workflow with storage + process + network faults
+  - [ ] Multiple agents executing different custom tools
+  - [ ] Custom tool calling another agent via API
+  - [ ] Sandbox pool exhaustion (all sandboxes busy)
+- [ ] Update LETTA_REPLACEMENT_GUIDE.md:
+  - [ ] Document custom tool usage with Python SDK
+  - [ ] Example: Define tool → Register → Use in agent
+  - [ ] Security considerations
+  - [ ] Performance tips (caching, dependencies)
+
+### Phase 10: Documentation & Testing (3 days)
 
 #### 9.1: Comprehensive Testing (2 days)
 - [ ] Run full test suite (`cargo test`)
@@ -733,7 +1072,8 @@ Currently Kelpie has ~90% Letta API compatibility (verified via testing and LETT
 - [ ] **Options & Decisions filled in** ✅
 - [ ] **Quick Decision Log maintained** ✅
 - [ ] Phase 0 complete (path alias - 15 min)
-- [ ] Phase 1 complete (all tools - 2 days)
+- [ ] Phase 1 complete (base tools - 2 days)
+- [ ] Phase 1.5 complete (prebuilt tools - 3 days)
 - [ ] Phase 2 complete (MCP all transports - 5 days)
 - [ ] Phase 3 complete (import/export - 2 days)
 - [ ] Phase 4 complete (summarization - 2 days)
@@ -741,21 +1081,24 @@ Currently Kelpie has ~90% Letta API compatibility (verified via testing and LETT
 - [ ] Phase 6 complete (projects - 2 days)
 - [ ] Phase 7 complete (batch - 2 days)
 - [ ] Phase 8 complete (agent groups - 2 days)
-- [ ] Phase 9 complete (docs & testing - 3 days)
+- [ ] Phase 9 complete (custom tool execution - 4 days)
+- [ ] Phase 10 complete (docs & testing - 3 days)
 - [ ] Tests passing (`cargo test`)
 - [ ] Clippy clean (`cargo clippy`)
 - [ ] Code formatted (`cargo fmt`)
 - [ ] /no-cap passed
 - [ ] Vision aligned (DST coverage for ALL features)
 - [ ] **DST coverage added** for:
-  - [ ] send_message + conversation_search_date
-  - [ ] MCP stdio + HTTP + SSE (all transports)
-  - [ ] Import/export with storage faults
-  - [ ] Summarization with LLM failures
-  - [ ] Scheduling with clock skew
-  - [ ] Projects with concurrent updates
-  - [ ] Batch operations with partial failures
-  - [ ] Agent groups with network partitions
+  - [ ] send_message + conversation_search_date (Phase 1)
+  - [ ] web_search + run_code (Phase 1.5)
+  - [ ] MCP stdio + HTTP + SSE (all transports) (Phase 2)
+  - [ ] Import/export with storage faults (Phase 3)
+  - [ ] Summarization with LLM failures (Phase 4)
+  - [ ] Scheduling with clock skew (Phase 5)
+  - [ ] Projects with concurrent updates (Phase 6)
+  - [ ] Batch operations with partial failures (Phase 7)
+  - [ ] Agent groups with network partitions (Phase 8)
+  - [ ] Custom tool execution with sandbox faults (Phase 9)
 - [ ] **What to Try section updated** (after each phase)
 - [ ] Committed (incremental commits per phase)
 - [ ] 100% Letta compatibility verified
@@ -1785,17 +2128,21 @@ Based on CONSTRAINTS.md §267, verify/add these fault types:
 | `/v1/agents/{id}/blocks/{label}` path | Need alias route | Phase 0 (15 min) |
 | `send_message` tool | Not implemented | Phase 1 (day 2) |
 | `conversation_search_date` tool | Not implemented | Phase 1 (day 2) |
-| Real MCP execution (stdio) | execute_mcp() not wired | Phase 2 (day 7) |
-| Real MCP execution (HTTP) | Not implemented | Phase 2 (day 9) |
-| Real MCP execution (SSE) | Not implemented | Phase 2 (day 11) |
-| Agent import endpoint | Not implemented | Phase 3 (day 13) |
-| Agent export endpoint | Not implemented | Phase 3 (day 13) |
-| Conversation summarization | Not implemented | Phase 4 (day 15) |
-| Message scheduling | Not implemented | Phase 5 (day 17) |
-| Projects API | Not implemented | Phase 6 (day 19) |
-| Batch operations | Not implemented | Phase 7 (day 21) |
-| Agent groups | Not implemented | Phase 8 (day 23) |
-| 100% Letta compatibility | All features need implementation | After Phase 9 (day 26) |
+| `web_search` tool | Not implemented | Phase 1.5 (day 5) |
+| `run_code` tool | Not implemented | Phase 1.5 (day 5) |
+| Custom Python tool execution | No sandbox integration | Phase 9 (day 26) |
+| Letta Python SDK tool registration | No source code storage | Phase 9 (day 26) |
+| Real MCP execution (stdio) | execute_mcp() not wired | Phase 2 (day 10) |
+| Real MCP execution (HTTP) | Not implemented | Phase 2 (day 12) |
+| Real MCP execution (SSE) | Not implemented | Phase 2 (day 14) |
+| Agent import endpoint | Not implemented | Phase 3 (day 16) |
+| Agent export endpoint | Not implemented | Phase 3 (day 16) |
+| Conversation summarization | Not implemented | Phase 4 (day 18) |
+| Message scheduling | Not implemented | Phase 5 (day 20) |
+| Projects API | Not implemented | Phase 6 (day 22) |
+| Batch operations | Not implemented | Phase 7 (day 24) |
+| Agent groups | Not implemented | Phase 8 (day 26) |
+| 100% Letta compatibility | All features need implementation | After Phase 10 (day 33) |
 
 ### Known Limitations ⚠️
 - This is a LARGE scope (20+ days of work)
@@ -1807,10 +2154,11 @@ Based on CONSTRAINTS.md §267, verify/add these fault types:
 
 ## Estimated Timeline
 
-**Total: 20-26 days (4-5 weeks full-time)**
+**Total: 27-33 days (5-7 weeks full-time)**
 
 - Phase 0: 15 minutes (path alias)
-- Phase 1: 2 days (tools + DST)
+- Phase 1: 2 days (tools: send_message, conversation_search_date + DST)
+- Phase 1.5: 3 days (prebuilt tools: web_search, run_code + DST)
 - Phase 2: 5 days (MCP all transports + DST)
 - Phase 3: 2 days (import/export + DST)
 - Phase 4: 2 days (summarization + DST)
@@ -1818,7 +2166,8 @@ Based on CONSTRAINTS.md §267, verify/add these fault types:
 - Phase 6: 2 days (projects + DST)
 - Phase 7: 2 days (batch + DST)
 - Phase 8: 2 days (agent groups + DST)
-- Phase 9: 3 days (comprehensive testing + docs)
+- Phase 9: 4 days (custom tool execution - Python SDK compatibility + DST)
+- Phase 10: 3 days (comprehensive testing + docs)
 
 **Note:** This assumes:
 - Full-time focused work
