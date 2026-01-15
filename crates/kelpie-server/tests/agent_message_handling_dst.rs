@@ -89,6 +89,7 @@ async fn test_dst_agent_message_basic() {
                 tool_ids: vec![],
                 tags: vec![],
                 metadata: serde_json::json!({}),
+                project_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -175,6 +176,7 @@ async fn test_dst_agent_message_with_tool_call() {
                 tool_ids: vec!["shell".to_string()],
                 tags: vec![],
                 metadata: serde_json::json!({}),
+                project_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -246,6 +248,7 @@ async fn test_dst_agent_message_with_storage_fault() {
                 tool_ids: vec![],
                 tags: vec![],
                 metadata: serde_json::json!({}),
+                project_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -313,6 +316,7 @@ async fn test_dst_agent_message_history() {
                 tool_ids: vec![],
                 tags: vec![],
                 metadata: serde_json::json!({}),
+                project_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -388,6 +392,7 @@ async fn test_dst_agent_message_concurrent() {
                     tool_ids: vec![],
                     tags: vec![],
                     metadata: serde_json::json!({}),
+                project_id: None,
                 };
                 let agent = service.create_agent(request).await?;
                 agent_ids.push(agent.id);

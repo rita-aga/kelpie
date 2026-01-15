@@ -51,6 +51,7 @@ async fn test_delete_crash_between_clear_and_deactivate() {
                     tool_ids: vec![],
                     tags: vec![],
                     metadata: serde_json::json!({}),
+                project_id: None,
                 };
 
                 // Create agent
@@ -148,7 +149,7 @@ async fn test_delete_then_recreate() {
                     tool_ids: vec![],
                     tags: vec!["v1".to_string()],
                     metadata: serde_json::json!({"version": 1}),
-                };
+                project_id: None,                };
 
                 // Create agent v1
                 let agent_v1 = match service.create_agent(request).await {
@@ -194,7 +195,7 @@ async fn test_delete_then_recreate() {
                     tool_ids: vec![],
                     tags: vec!["v2".to_string()],
                     metadata: serde_json::json!({"version": 2}),
-                };
+                project_id: None,                };
 
                 let agent_v2 = match service.create_agent(request_v2).await {
                     Ok(a) => a,

@@ -115,6 +115,7 @@ pub async fn import_agent(
         tool_ids: agent_data.tool_ids,
         tags: agent_data.tags,
         metadata: agent_data.metadata,
+        project_id: agent_data.project_id,
     };
 
     // Create agent
@@ -473,6 +474,7 @@ mod tests {
                 tool_ids: exported.agent.tool_ids,
                 tags: exported.agent.tags,
                 metadata: exported.agent.metadata,
+                project_id: exported.agent.project_id,
             },
             messages: vec![],
         };

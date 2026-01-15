@@ -11,7 +11,7 @@
 use crate::actor::{AgentActor, RealLlmAdapter};
 use crate::llm::LlmClient;
 use crate::models::ArchivalEntry;
-use crate::models::{AgentState, Block, Job, Message};
+use crate::models::{AgentState, Block, Job, Message, Project};
 use crate::service::AgentService;
 use crate::storage::{AgentStorage, StorageError};
 use crate::tools::UnifiedToolRegistry;
@@ -76,6 +76,8 @@ struct AppStateInner {
     blocks: RwLock<HashMap<String, Block>>,
     /// Scheduled jobs by ID (Phase 5: Scheduling)
     jobs: RwLock<HashMap<String, Job>>,
+    /// Projects by ID (Phase 6: Projects)
+    projects: RwLock<HashMap<String, Project>>,
     /// Server start time for uptime calculation
     start_time: Instant,
     /// LLM client (None if no API key configured)
@@ -161,6 +163,7 @@ impl AppState {
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
+                projects: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm,
                 storage: None,
@@ -235,6 +238,7 @@ impl AppState {
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
+                projects: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm,
                 storage: None,
@@ -263,6 +267,7 @@ impl AppState {
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
+                projects: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm,
                 storage: Some(storage),
@@ -291,6 +296,7 @@ impl AppState {
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
+                projects: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm: None,
                 storage: None,
@@ -321,6 +327,7 @@ impl AppState {
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
+                projects: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm: None,
                 storage: Some(storage),
@@ -357,6 +364,7 @@ impl AppState {
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
+                projects: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm: None,
                 storage: None,
@@ -675,6 +683,7 @@ impl AppState {
             model: metadata.model,
             system: metadata.system,
             description: metadata.description,
+            project_id: None, // Phase 6: Projects not stored in legacy storage yet
             blocks,
             tool_ids: metadata.tool_ids,
             tags: metadata.tags,
@@ -1689,6 +1698,126 @@ impl AppState {
 
         Ok(())
     }
+
+    // =========================================================================
+    // Project operations (Phase 6: Projects)
+    // =========================================================================
+
+    /// Add a project
+    pub fn add_project(&self, project: Project) -> Result<(), StateError> {
+        let mut projects = self
+            .inner
+            .projects
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        if projects.contains_key(&project.id) {
+            return Err(StateError::AlreadyExists {
+                resource: "project",
+                id: project.id.clone(),
+            });
+        }
+
+        projects.insert(project.id.clone(), project);
+        Ok(())
+    }
+
+    /// Get a project by ID
+    pub fn get_project(&self, project_id: &str) -> Result<Option<Project>, StateError> {
+        let projects = self
+            .inner
+            .projects
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+        Ok(projects.get(project_id).cloned())
+    }
+
+    /// List all projects with pagination
+    pub fn list_projects(
+        &self,
+        cursor: Option<&str>,
+    ) -> Result<(Vec<Project>, Option<String>), StateError> {
+        let projects = self
+            .inner
+            .projects
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        let mut all_projects: Vec<_> = projects.values().cloned().collect();
+        all_projects.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+        // Apply cursor
+        let start_idx = if let Some(cursor_id) = cursor {
+            all_projects
+                .iter()
+                .position(|p| p.id == cursor_id)
+                .map(|i| i + 1)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        let remaining: Vec<_> = all_projects.into_iter().skip(start_idx).collect();
+
+        // Return all remaining items and last item ID as next cursor
+        let next_cursor = remaining.last().map(|p| p.id.clone());
+
+        Ok((remaining, next_cursor))
+    }
+
+    /// Update a project
+    pub fn update_project(&self, project: Project) -> Result<(), StateError> {
+        let mut projects = self
+            .inner
+            .projects
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        if !projects.contains_key(&project.id) {
+            return Err(StateError::NotFound {
+                resource: "project",
+                id: project.id.clone(),
+            });
+        }
+
+        projects.insert(project.id.clone(), project);
+        Ok(())
+    }
+
+    /// Delete a project
+    pub fn delete_project(&self, project_id: &str) -> Result<(), StateError> {
+        let mut projects = self
+            .inner
+            .projects
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        if projects.remove(project_id).is_none() {
+            return Err(StateError::NotFound {
+                resource: "project",
+                id: project_id.to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// List agents by project ID
+    pub fn list_agents_by_project(&self, project_id: &str) -> Result<Vec<AgentState>, StateError> {
+        let agents = self
+            .inner
+            .agents
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        let project_agents: Vec<_> = agents
+            .values()
+            .filter(|a| a.project_id.as_deref() == Some(project_id))
+            .cloned()
+            .collect();
+
+        Ok(project_agents)
+    }
 }
 
 impl Default for AppState {
@@ -1754,6 +1883,7 @@ mod tests {
             model: None,
             system: None,
             description: None,
+            project_id: None,
             memory_blocks: vec![CreateBlockRequest {
                 label: "persona".to_string(),
                 value: "I am a test agent".to_string(),

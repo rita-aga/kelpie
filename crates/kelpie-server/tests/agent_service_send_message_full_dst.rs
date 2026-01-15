@@ -82,6 +82,7 @@ async fn test_dst_send_message_full_typed_response() {
                 tool_ids: vec![],
                 tags: vec![],
                 metadata: serde_json::json!({}),
+                project_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -153,6 +154,7 @@ async fn test_dst_send_message_full_storage_faults() {
                 tool_ids: vec![],
                 tags: vec![],
                 metadata: serde_json::json!({}),
+                project_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -222,6 +224,7 @@ async fn test_dst_send_message_full_network_delay() {
                 tool_ids: vec![],
                 tags: vec![],
                 metadata: serde_json::json!({}),
+                project_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -273,6 +276,7 @@ async fn test_dst_send_message_full_concurrent_with_faults() {
                     tool_ids: vec![],
                     tags: vec![],
                     metadata: serde_json::json!({}),
+                project_id: None,
                 };
                 let agent = service.create_agent(request).await?;
                 agent_ids.push(agent.id);

@@ -3,36 +3,42 @@
 //! TigerStyle: Explicit test cases, clear assertions
 
 use bytes::Bytes;
-use kelpie_core::Result;
-use kelpie_sandbox::{MockSandboxFactory, ResourceLimits, SandboxConfig, SandboxFactory};
+use kelpie_core::{Error, Result};
+use kelpie_libkrun::{MockVmFactory, VmConfig, VmInstance};
 use kelpie_server::service::TeleportService;
 use kelpie_server::storage::{LocalTeleportStorage, SnapshotKind, TeleportStorage};
 use std::sync::Arc;
 
-fn test_config() -> SandboxConfig {
-    SandboxConfig::new()
-        .with_limits(
-            ResourceLimits::new()
-                .with_memory(512 * 1024 * 1024)
-                .with_vcpus(2),
-        )
-        .with_workdir("/workspace")
+fn test_config() -> VmConfig {
+    VmConfig::builder()
+        .vcpu_count(2)
+        .memory_mib(512)
+        .root_disk("/tmp/rootfs.ext4")
+        .build()
+        .unwrap()
 }
 
 #[tokio::test]
 async fn test_version_validation_same_major_minor() -> Result<()> {
     // Setup: Service with version 1.0.0
     let storage = Arc::new(LocalTeleportStorage::new());
-    let factory = Arc::new(MockSandboxFactory::new());
+    let factory = Arc::new(MockVmFactory::new());
     let service =
         TeleportService::new(storage.clone(), factory.clone()).with_base_image_version("1.0.0");
 
-    // Create sandbox and teleport out
-    let mut sandbox = factory.create(test_config()).await?;
+    // Create VM and teleport out
+    let mut vm = factory
+        .create_vm(test_config())
+        .map_err(|e| Error::Internal {
+            message: format!("Failed to create VM: {}", e),
+        })?;
+    vm.start().await.map_err(|e| Error::Internal {
+        message: format!("Failed to start VM: {}", e),
+    })?;
     let package_id = service
         .teleport_out(
             "agent-1",
-            &mut sandbox,
+            &mut vm,
             Bytes::from("state"),
             SnapshotKind::Teleport,
         )
@@ -52,16 +58,23 @@ async fn test_version_validation_same_major_minor() -> Result<()> {
 async fn test_version_validation_patch_difference_allowed() -> Result<()> {
     // Setup: Service with version 1.0.0 creates package
     let storage = Arc::new(LocalTeleportStorage::new());
-    let factory = Arc::new(MockSandboxFactory::new());
+    let factory = Arc::new(MockVmFactory::new());
     let service_v1 =
         TeleportService::new(storage.clone(), factory.clone()).with_base_image_version("1.0.0");
 
-    // Create sandbox and teleport out with v1.0.0
-    let mut sandbox = factory.create(test_config()).await?;
+    // Create VM and teleport out with v1.0.0
+    let mut vm = factory
+        .create_vm(test_config())
+        .map_err(|e| Error::Internal {
+            message: format!("Failed to create VM: {}", e),
+        })?;
+    vm.start().await.map_err(|e| Error::Internal {
+        message: format!("Failed to start VM: {}", e),
+    })?;
     let package_id = service_v1
         .teleport_out(
             "agent-2",
-            &mut sandbox,
+            &mut vm,
             Bytes::from("state"),
             SnapshotKind::Teleport,
         )
@@ -85,16 +98,23 @@ async fn test_version_validation_patch_difference_allowed() -> Result<()> {
 async fn test_version_validation_major_mismatch_rejected() -> Result<()> {
     // Setup: Service with version 1.0.0 creates package
     let storage_v1 = Arc::new(LocalTeleportStorage::new().with_expected_image_version("1.0.0"));
-    let factory = Arc::new(MockSandboxFactory::new());
+    let factory = Arc::new(MockVmFactory::new());
     let service_v1 =
         TeleportService::new(storage_v1.clone(), factory.clone()).with_base_image_version("1.0.0");
 
-    // Create sandbox and teleport out
-    let mut sandbox = factory.create(test_config()).await?;
+    // Create VM and teleport out
+    let mut vm = factory
+        .create_vm(test_config())
+        .map_err(|e| Error::Internal {
+            message: format!("Failed to create VM: {}", e),
+        })?;
+    vm.start().await.map_err(|e| Error::Internal {
+        message: format!("Failed to start VM: {}", e),
+    })?;
     let package_id = service_v1
         .teleport_out(
             "agent-3",
-            &mut sandbox,
+            &mut vm,
             Bytes::from("state"),
             SnapshotKind::Teleport,
         )
@@ -131,16 +151,23 @@ async fn test_version_validation_major_mismatch_rejected() -> Result<()> {
 async fn test_version_validation_minor_mismatch_rejected() -> Result<()> {
     // Setup: Service with version 1.1.0 creates package
     let storage_v1 = Arc::new(LocalTeleportStorage::new().with_expected_image_version("1.1.0"));
-    let factory = Arc::new(MockSandboxFactory::new());
+    let factory = Arc::new(MockVmFactory::new());
     let service_v1 =
         TeleportService::new(storage_v1.clone(), factory.clone()).with_base_image_version("1.1.0");
 
-    // Create sandbox and teleport out
-    let mut sandbox = factory.create(test_config()).await?;
+    // Create VM and teleport out
+    let mut vm = factory
+        .create_vm(test_config())
+        .map_err(|e| Error::Internal {
+            message: format!("Failed to create VM: {}", e),
+        })?;
+    vm.start().await.map_err(|e| Error::Internal {
+        message: format!("Failed to start VM: {}", e),
+    })?;
     let package_id = service_v1
         .teleport_out(
             "agent-4",
-            &mut sandbox,
+            &mut vm,
             Bytes::from("state"),
             SnapshotKind::Teleport,
         )
@@ -173,16 +200,23 @@ async fn test_version_validation_minor_mismatch_rejected() -> Result<()> {
 async fn test_version_validation_with_prerelease() -> Result<()> {
     // Setup: Service with version 1.0.0-dev-20260115-abc1234
     let storage = Arc::new(LocalTeleportStorage::new());
-    let factory = Arc::new(MockSandboxFactory::new());
+    let factory = Arc::new(MockVmFactory::new());
     let service = TeleportService::new(storage.clone(), factory.clone())
         .with_base_image_version("1.0.0-dev-20260115-abc1234");
 
-    // Create sandbox and teleport out
-    let mut sandbox = factory.create(test_config()).await?;
+    // Create VM and teleport out
+    let mut vm = factory
+        .create_vm(test_config())
+        .map_err(|e| Error::Internal {
+            message: format!("Failed to create VM: {}", e),
+        })?;
+    vm.start().await.map_err(|e| Error::Internal {
+        message: format!("Failed to start VM: {}", e),
+    })?;
     let package_id = service
         .teleport_out(
             "agent-5",
-            &mut sandbox,
+            &mut vm,
             Bytes::from("state"),
             SnapshotKind::Teleport,
         )

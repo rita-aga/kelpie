@@ -160,7 +160,7 @@ async fn test_concurrent_agent_creation_race() {
                         tool_ids: vec![],
                         tags: vec![format!("thread-{}", i)],
                         metadata: serde_json::json!({"thread": i}),
-                    };
+                project_id: None,                    };
 
                     // Use app_state.agent_service() to create
                     app_clone
@@ -280,6 +280,7 @@ async fn test_shutdown_with_inflight_requests() {
                         tool_ids: vec![],
                         tags: vec![],
                         metadata: serde_json::json!({}),
+                project_id: None,
                     };
 
                     app_clone.agent_service_required().create_agent(request).await
@@ -394,6 +395,7 @@ async fn test_service_invoke_during_shutdown() {
                 tool_ids: vec![],
                 tags: vec![],
                 metadata: serde_json::json!({}),
+                project_id: None,
             };
 
             match app_state
@@ -475,7 +477,7 @@ async fn test_first_invoke_after_creation() {
                     tool_ids: vec![format!("tool-{}", i)],
                     tags: vec![format!("tag-{}", i)],
                     metadata: serde_json::json!({"iteration": i}),
-                };
+                project_id: None,                };
 
                 // Create agent
                 match app_state
@@ -651,6 +653,7 @@ async fn create_appstate_with_service(sim_env: &SimEnvironment) -> Result<AppSta
         tool_ids: vec![],
         tags: vec![],
         metadata: serde_json::json!({}),
+                project_id: None,
     };
 
     // Try to create test agent to verify service works
@@ -685,6 +688,7 @@ async fn test_service_operational(app_state: &AppState) -> Result<()> {
         tool_ids: vec![],
         tags: vec![],
         metadata: serde_json::json!({}),
+                project_id: None,
     };
 
     // If this succeeds, service is operational

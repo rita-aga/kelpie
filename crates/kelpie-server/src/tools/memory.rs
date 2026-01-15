@@ -588,6 +588,7 @@ mod tests {
             tool_ids: vec![],
             tags: vec![],
             metadata: json!({}),
+            project_id: None,
         })
     }
 

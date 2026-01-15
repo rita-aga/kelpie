@@ -62,6 +62,7 @@ async fn test_create_agent_crash_after_write() {
                     tool_ids: vec![],
                     tags: vec![],
                     metadata: serde_json::json!({}),
+                project_id: None,
                 };
 
                 // All creates should succeed since no storage writes during create
@@ -136,6 +137,7 @@ async fn test_delete_agent_atomicity_crash() {
                     tool_ids: vec![],
                     tags: vec![],
                     metadata: serde_json::json!({}),
+                project_id: None,
                 };
                 match service.create_agent(request).await {
                     Ok(agent) => agent_ids.push(agent.id),
@@ -222,6 +224,7 @@ async fn test_update_agent_concurrent_with_faults() {
                 tool_ids: vec![],
                 tags: vec![],
                 metadata: serde_json::json!({}),
+                project_id: None,
             };
 
             let agent = match service.create_agent(request).await {
@@ -335,7 +338,7 @@ async fn test_agent_state_corruption() {
                 tool_ids: vec![],
                 tags: vec![],
                 metadata: serde_json::json!({"key": "value"}),
-            };
+                project_id: None,            };
 
             let agent = match service.create_agent(request).await {
                 Ok(a) => a,
@@ -456,6 +459,7 @@ async fn test_send_message_crash_after_llm() {
                 tool_ids: vec![],
                 tags: vec![],
                 metadata: serde_json::json!({}),
+                project_id: None,
             };
 
             let agent = match service.create_agent(request).await {

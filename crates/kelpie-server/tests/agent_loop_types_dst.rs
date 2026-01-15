@@ -168,6 +168,7 @@ fn create_agent_with_type(name: &str, agent_type: AgentType) -> AgentState {
         tool_ids: vec![],
         tags: vec![],
         metadata: json!({}),
+        project_id: None,
     })
 }
 

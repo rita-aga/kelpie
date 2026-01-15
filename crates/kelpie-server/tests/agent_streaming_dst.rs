@@ -84,6 +84,7 @@ async fn test_dst_streaming_basic() {
                 tool_ids: vec![],
                 tags: vec![],
                 metadata: serde_json::json!({}),
+                project_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -191,6 +192,7 @@ async fn test_dst_streaming_with_network_delay() {
                 tool_ids: vec![],
                 tags: vec![],
                 metadata: serde_json::json!({}),
+                project_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -284,6 +286,7 @@ async fn test_dst_streaming_cancellation() {
                 tool_ids: vec![],
                 tags: vec![],
                 metadata: serde_json::json!({}),
+                project_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -373,6 +376,7 @@ async fn test_dst_streaming_backpressure() {
                 tool_ids: vec![],
                 tags: vec![],
                 metadata: serde_json::json!({}),
+                project_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -470,6 +474,7 @@ async fn test_dst_streaming_with_tool_calls() {
                 tool_ids: vec!["shell".to_string()],
                 tags: vec![],
                 metadata: serde_json::json!({}),
+                project_id: None,
             };
             let agent = service.create_agent(request).await?;
 

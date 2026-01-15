@@ -7,6 +7,7 @@ pub mod archival;
 pub mod blocks;
 pub mod import_export;
 pub mod messages;
+pub mod projects;
 pub mod scheduling;
 pub mod standalone_blocks;
 pub mod streaming;
@@ -52,6 +53,8 @@ pub fn router(state: AppState) -> Router {
         .nest("/v1/teleport", teleport::router())
         // Scheduling routes (Phase 5)
         .nest("/v1", scheduling::router())
+        // Projects routes (Phase 6)
+        .nest("/v1", projects::router())
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state)

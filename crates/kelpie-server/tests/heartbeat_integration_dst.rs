@@ -39,6 +39,7 @@ fn create_test_agent(name: &str) -> AgentState {
         tool_ids: vec![],
         tags: vec![],
         metadata: serde_json::json!({}),
+                project_id: None,
     })
 }
 

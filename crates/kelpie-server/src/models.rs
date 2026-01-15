@@ -107,6 +107,8 @@ pub struct CreateAgentRequest {
     pub system: Option<String>,
     /// Description of the agent
     pub description: Option<String>,
+    /// Optional project ID (Phase 6: Projects)
+    pub project_id: Option<String>,
     /// Initial memory blocks (inline creation)
     #[serde(default)]
     pub memory_blocks: Vec<CreateBlockRequest>,
@@ -158,6 +160,8 @@ pub struct AgentState {
     pub system: Option<String>,
     /// Description
     pub description: Option<String>,
+    /// Optional project ID (Phase 6: Projects)
+    pub project_id: Option<String>,
     /// Memory blocks
     pub blocks: Vec<Block>,
     /// Attached tool IDs
@@ -191,6 +195,7 @@ impl AgentState {
             model: request.model,
             system: request.system,
             description: request.description,
+            project_id: request.project_id,
             blocks,
             tool_ids: request.tool_ids,
             tags: request.tags,
@@ -678,6 +683,9 @@ pub struct AgentImportData {
     /// Metadata
     #[serde(default)]
     pub metadata: serde_json::Value,
+    /// Project ID
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 /// Block data for import
@@ -941,6 +949,91 @@ fn calculate_next_run(
     }
 }
 
+// =========================================================================
+// Project models (Phase 6)
+// =========================================================================
+
+/// Request to create a project
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateProjectRequest {
+    /// Project name
+    pub name: String,
+    /// Optional description
+    pub description: Option<String>,
+    /// Optional tags
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Optional metadata
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+}
+
+/// Request to update a project
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpdateProjectRequest {
+    /// New name
+    pub name: Option<String>,
+    /// New description
+    pub description: Option<String>,
+    /// New tags
+    pub tags: Option<Vec<String>>,
+    /// New metadata
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Project response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Project {
+    /// Unique identifier
+    pub id: String,
+    /// Project name
+    pub name: String,
+    /// Project description
+    pub description: Option<String>,
+    /// Tags
+    pub tags: Vec<String>,
+    /// Metadata
+    pub metadata: serde_json::Value,
+    /// Creation timestamp
+    pub created_at: DateTime<Utc>,
+    /// Last update timestamp
+    pub updated_at: DateTime<Utc>,
+}
+
+impl Project {
+    /// Create a new project from request
+    pub fn from_request(request: CreateProjectRequest) -> Self {
+        let now = Utc::now();
+
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: request.name,
+            description: request.description,
+            tags: request.tags,
+            metadata: request.metadata,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    /// Apply an update to the project
+    pub fn apply_update(&mut self, update: UpdateProjectRequest) {
+        if let Some(name) = update.name {
+            self.name = name;
+        }
+        if let Some(description) = update.description {
+            self.description = Some(description);
+        }
+        if let Some(tags) = update.tags {
+            self.tags = tags;
+        }
+        if let Some(metadata) = update.metadata {
+            self.metadata = metadata;
+        }
+        self.updated_at = Utc::now();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -953,6 +1046,7 @@ mod tests {
             model: Some("openai/gpt-4o".to_string()),
             system: Some("You are a helpful assistant.".to_string()),
             description: Some("A test agent".to_string()),
+            project_id: None,
             memory_blocks: vec![CreateBlockRequest {
                 label: "persona".to_string(),
                 value: "I am a helpful AI.".to_string(),
@@ -979,6 +1073,7 @@ mod tests {
             model: None,
             system: None,
             description: None,
+            project_id: None,
             memory_blocks: vec![],
             block_ids: vec![],
             tool_ids: vec![],

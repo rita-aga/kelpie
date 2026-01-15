@@ -59,7 +59,7 @@ async fn test_deactivate_during_create_crash() {
                     tool_ids: vec![format!("tool-{}", i)],
                     tags: vec![format!("tag-{}", i)],
                     metadata: serde_json::json!({"iteration": i}),
-                };
+                project_id: None,                };
 
                 match service.create_agent(request.clone()).await {
                     Ok(agent) => {
@@ -215,7 +215,7 @@ async fn test_update_with_forced_deactivation() {
                 tool_ids: vec!["tool1".to_string()],
                 tags: vec!["original".to_string()],
                 metadata: serde_json::json!({"version": 0}),
-            };
+                project_id: None,            };
 
             let agent = match service.create_agent(request).await {
                 Ok(a) => a,

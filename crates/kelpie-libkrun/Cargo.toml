@@ -34,6 +34,8 @@ default = []
 # Note: Will fail if libkrun.pc is not found by pkg-config.
 # Use MockVm (default) for most testing - no system dependencies needed.
 libkrun = ["dep:krun-sys"]
+# TEMPORARILY DISABLED: cyclic dependency with kelpie-firecracker
+# firecracker = ["dep:kelpie-firecracker"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -44,6 +46,8 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+# TEMPORARILY DISABLED: cyclic dependency
+# kelpie-firecracker = { workspace = true, optional = true }
 
 # Optional: Only needed when libkrun feature is enabled
 krun-sys = { version = "1.10", optional = true }
