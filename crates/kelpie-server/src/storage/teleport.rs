@@ -444,12 +444,49 @@ impl TeleportStorage for LocalTeleportStorage {
             }
         })?;
 
-        // Validate base image version
-        if package.base_image_version != self.expected_image_version {
-            return Err(TeleportStorageError::ImageMismatch {
-                expected: self.expected_image_version.clone(),
-                actual: package.base_image_version.clone(),
-            });
+        // Validate base image version (MAJOR.MINOR must match)
+        let package_version = &package.base_image_version;
+        let expected_version = &self.expected_image_version;
+
+        // Parse versions (format: MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-prerelease-DATE-GITSHA)
+        let package_parts: Vec<&str> = package_version.split('-').next().unwrap_or(package_version).split('.').collect();
+        let expected_parts: Vec<&str> = expected_version.split('-').next().unwrap_or(expected_version).split('.').collect();
+
+        if package_parts.len() >= 2 && expected_parts.len() >= 2 {
+            let package_major = package_parts[0];
+            let package_minor = package_parts[1];
+            let expected_major = expected_parts[0];
+            let expected_minor = expected_parts[1];
+
+            // MAJOR.MINOR must match exactly
+            if package_major != expected_major || package_minor != expected_minor {
+                return Err(TeleportStorageError::ImageMismatch {
+                    expected: format!("{}.{}", expected_major, expected_minor),
+                    actual: format!("{}.{}", package_major, package_minor),
+                });
+            }
+
+            // PATCH difference is allowed but logged as warning
+            if package_parts.len() >= 3 && expected_parts.len() >= 3 {
+                let package_patch = package_parts[2];
+                let expected_patch = expected_parts[2];
+
+                if package_patch != expected_patch {
+                    tracing::warn!(
+                        package_version = %package_version,
+                        expected_version = %expected_version,
+                        "Base image PATCH version differs (package: {}, host: {}). \
+                         This is allowed but may cause subtle issues.",
+                        package_patch, expected_patch
+                    );
+                }
+            }
+        } else {
+            tracing::warn!(
+                package_version = %package_version,
+                expected_version = %expected_version,
+                "Unable to parse version numbers, skipping validation"
+            );
         }
 
         Ok(package)

@@ -149,7 +149,7 @@ where
     /// # Errors
     /// - NotFound: Package not found in storage
     /// - ArchMismatch: Package architecture doesn't match host
-    /// - ImageMismatch: Base image version mismatch
+    /// - ImageMismatch: Base image version mismatch (validated by storage)
     /// - DownloadFailed: Failed to download package
     /// - Sandbox creation/restore failed
     ///
@@ -157,6 +157,7 @@ where
     /// - Creates new sandbox (caller owns it)
     /// - Returns agent state for caller to deserialize
     /// - Clean failure (no partial state on error)
+    /// - Version validation happens in storage layer (MAJOR.MINOR must match)
     pub async fn teleport_in(
         &self,
         package_id: &str,
@@ -181,7 +182,7 @@ where
             package_id = %package_id,
             agent_id = %package.agent_id,
             kind = ?package.kind,
-            "Package downloaded successfully"
+            "Package downloaded successfully (version validated by storage)"
         );
 
         // Step 2: Create new sandbox
