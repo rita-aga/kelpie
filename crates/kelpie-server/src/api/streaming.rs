@@ -122,9 +122,13 @@ pub async fn send_message_stream(
     // Store user message
     let _stored_user_msg = state.add_message(&agent_id, user_message)?;
 
+    // Phase 7.9: Use token streaming if requested
+    let use_token_streaming = _query.stream_tokens;
+
     // Create the SSE stream
-    let stream = stream::once(async move {
-        let events = generate_response_events(
+    let stream = if use_token_streaming {
+        // Phase 7.9: Real token streaming
+        let events_stream = generate_streaming_response_events(
             &state_clone,
             &agent_id_clone,
             &agent_clone,
@@ -132,9 +136,23 @@ pub async fn send_message_stream(
             content,
         )
         .await;
-        stream::iter(events)
-    })
-    .flatten();
+        events_stream.boxed()
+    } else {
+        // Original batch mode
+        stream::once(async move {
+            let events = generate_response_events(
+                &state_clone,
+                &agent_id_clone,
+                &agent_clone,
+                &llm_clone,
+                content,
+            )
+            .await;
+            stream::iter(events)
+        })
+        .flatten()
+        .boxed()
+    };
 
     Ok(Sse::new(stream).keep_alive(
         KeepAlive::new()
@@ -336,6 +354,156 @@ async fn generate_response_events(
     events.push(Ok(Event::default().data("[DONE]")));
 
     events
+}
+
+/// Generate streaming SSE events using real LLM token streaming (Phase 7.9)
+///
+/// Returns stream of SSE events as tokens arrive from LLM.
+async fn generate_streaming_response_events(
+    state: &AppState,
+    agent_id: &str,
+    agent: &kelpie_server::models::AgentState,
+    llm: &crate::llm::LlmClient,
+    content: String,
+) -> impl Stream<Item = Result<Event, Infallible>> {
+    // Build messages for LLM
+    let mut messages = Vec::new();
+
+    // System message with memory blocks
+    let system_content = build_system_prompt(&agent.system, &agent.blocks);
+    messages.push(ChatMessage {
+        role: "system".to_string(),
+        content: system_content,
+    });
+
+    // Get recent message history
+    let history = state.list_messages(agent_id, 20, None).unwrap_or_default();
+    for msg in history.iter() {
+        messages.push(ChatMessage {
+            role: match msg.role {
+                MessageRole::User => "user",
+                MessageRole::Assistant => "assistant",
+                MessageRole::System => "system",
+                MessageRole::Tool => "tool",
+            }
+            .to_string(),
+            content: msg.content.clone(),
+        });
+    }
+
+    // Add current user message
+    messages.push(ChatMessage {
+        role: "user".to_string(),
+        content: content.clone(),
+    });
+
+    // Define available tools (Phase 7.9: simplified, no tool use in streaming yet)
+    let tools = vec![];
+
+    // Clone state for stream
+    let state_clone = state.clone();
+    let agent_id_clone = agent_id.to_string();
+
+    // Call LLM streaming
+    match llm.stream_complete_with_tools(messages, tools).await {
+        Ok(llm_stream) => {
+            // Track content for storage
+            let mut content_buffer = String::new();
+
+            // Convert LLM StreamDelta to SSE events
+            let events_stream = llm_stream
+                .scan(
+                    (content_buffer, state_clone, agent_id_clone),
+                    |(content_buf, state_ref, agent_id_ref), delta_result| {
+                        let events: Vec<Result<Event, Infallible>> = match delta_result {
+                            Ok(delta) => match delta {
+                                crate::llm::StreamDelta::ContentDelta { text } => {
+                                    // Accumulate content
+                                    content_buf.push_str(&text);
+
+                                    // Send text as assistant message (incremental)
+                                    let msg = SseMessage::AssistantMessage {
+                                        id: Uuid::new_v4().to_string(),
+                                        content: text,
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&msg) {
+                                        vec![Ok(Event::default().data(json))]
+                                    } else {
+                                        vec![]
+                                    }
+                                }
+                                crate::llm::StreamDelta::Done { stop_reason: _ } => {
+                                    // Store final assistant message
+                                    let assistant_message = Message {
+                                        id: Uuid::new_v4().to_string(),
+                                        agent_id: agent_id_ref.clone(),
+                                        message_type: "assistant_message".to_string(),
+                                        role: MessageRole::Assistant,
+                                        content: content_buf.clone(),
+                                        tool_call_id: None,
+                                        tool_calls: None,
+                                        created_at: Utc::now(),
+                                    };
+                                    let _ = state_ref.add_message(agent_id_ref, assistant_message);
+
+                                    // Send stop_reason event
+                                    let stop_event = StopReasonEvent {
+                                        message_type: "stop_reason",
+                                        stop_reason: "end_turn".to_string(),
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&stop_event) {
+                                        vec![Ok(Event::default().data(json))]
+                                    } else {
+                                        vec![]
+                                    }
+                                }
+                                _ => vec![], // Ignore tool calls for now (Phase 7.9 simplified)
+                            },
+                            Err(e) => {
+                                // Send error as assistant message
+                                let error_msg = SseMessage::AssistantMessage {
+                                    id: Uuid::new_v4().to_string(),
+                                    content: format!("Error: {}", e),
+                                };
+                                if let Ok(json) = serde_json::to_string(&error_msg) {
+                                    vec![Ok(Event::default().data(json))]
+                                } else {
+                                    vec![]
+                                }
+                            }
+                        };
+
+                        futures::future::ready(Some(events))
+                    },
+                )
+                .flat_map(stream::iter)
+                .chain(stream::once(async {
+                    // Send [DONE]
+                    Ok(Event::default().data("[DONE]"))
+                }));
+
+            events_stream.boxed()
+        }
+        Err(e) => {
+            // Return error stream
+            let error_stream = stream::once(async move {
+                let error_msg = SseMessage::AssistantMessage {
+                    id: Uuid::new_v4().to_string(),
+                    content: format!("Error: {}", e),
+                };
+                if let Ok(json) = serde_json::to_string(&error_msg) {
+                    Ok(Event::default().data(json))
+                } else {
+                    Ok(Event::default().data(format!("Error: {}", e)))
+                }
+            })
+            .chain(stream::once(async {
+                Ok(Event::default().data("[DONE]"))
+            }));
+
+            error_stream.boxed()
+        }
+    }
 }
 
 /// Build system prompt from agent's system message and memory blocks
