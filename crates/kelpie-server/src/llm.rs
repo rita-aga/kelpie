@@ -1,12 +1,15 @@
 //! LLM client for agent message processing
 //!
 //! TigerStyle: Explicit configuration, OpenAI-compatible API support.
+//! Phase 7.8 REDO: Uses HttpClient trait for proper DST fault injection.
 
+use crate::http::{HttpClient, HttpMethod, HttpRequest, ReqwestHttpClient};
 use futures::stream::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
 use std::pin::Pin;
+use std::sync::Arc;
 
 /// LLM provider configuration
 #[derive(Debug, Clone)]
@@ -217,29 +220,43 @@ pub enum StreamDelta {
     /// Text content delta
     ContentDelta { text: String },
     /// Tool call started
-    ToolCallStart {
-        id: String,
-        name: String,
-    },
+    ToolCallStart { id: String, name: String },
     /// Tool call input delta
     ToolCallDelta { delta: String },
     /// Stream completed
     Done { stop_reason: String },
 }
 
-/// LLM client
-#[derive(Clone)]
+/// LLM client (Phase 7.8 REDO: uses HttpClient trait for DST)
 pub struct LlmClient {
     config: LlmConfig,
-    client: reqwest::Client,
+    http_client: Arc<dyn HttpClient>,
+}
+
+// Manual Clone implementation (Arc is Clone)
+impl Clone for LlmClient {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            http_client: Arc::clone(&self.http_client),
+        }
+    }
 }
 
 impl LlmClient {
-    /// Create a new LLM client
+    /// Create a new LLM client with production HTTP client
     pub fn new(config: LlmConfig) -> Self {
         Self {
             config,
-            client: reqwest::Client::new(),
+            http_client: Arc::new(ReqwestHttpClient::new()),
+        }
+    }
+
+    /// Create LLM client with custom HTTP client (for DST)
+    pub fn with_http_client(config: LlmConfig, http_client: Arc<dyn HttpClient>) -> Self {
+        Self {
+            config,
+            http_client,
         }
     }
 
@@ -314,9 +331,7 @@ impl LlmClient {
         messages: Vec<ChatMessage>,
         tools: Vec<ToolDefinition>,
     ) -> Result<
-        std::pin::Pin<
-            Box<dyn futures::stream::Stream<Item = Result<StreamDelta, String>> + Send>,
-        >,
+        std::pin::Pin<Box<dyn futures::stream::Stream<Item = Result<StreamDelta, String>> + Send>>,
         String,
     > {
         if self.config.is_anthropic() {
@@ -351,32 +366,31 @@ impl LlmClient {
         &self,
         messages: Vec<ChatMessage>,
     ) -> Result<CompletionResponse, String> {
-        let request = ChatCompletionRequest {
+        let request_body = ChatCompletionRequest {
             model: self.config.model.clone(),
             messages,
             max_tokens: self.config.max_tokens,
         };
 
-        let response = self
-            .client
-            .post(format!("{}/chat/completions", self.config.base_url))
-            .header("Authorization", format!("Bearer {}", self.config.api_key))
-            .header("Content-Type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| format!("HTTP request failed: {}", e))?;
+        // Build HTTP request
+        let http_request = HttpRequest::new(
+            HttpMethod::Post,
+            format!("{}/chat/completions", self.config.base_url),
+        )
+        .header("Authorization", format!("Bearer {}", self.config.api_key))
+        .json(&request_body)?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(format!("API error {}: {}", status, body));
+        // Send HTTP request
+        let response = self.http_client.send(http_request).await?;
+
+        // Check status
+        if !response.is_success() {
+            let body = response.text().unwrap_or_default();
+            return Err(format!("API error {}: {}", response.status, body));
         }
 
-        let completion: ChatCompletionResponse = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        // Parse JSON response
+        let completion: ChatCompletionResponse = response.json()?;
 
         let choice = completion
             .choices
@@ -414,7 +428,7 @@ impl LlmClient {
         system: Option<String>,
         tools: Vec<ToolDefinition>,
     ) -> Result<CompletionResponse, String> {
-        let request = AnthropicRequest {
+        let request_body = AnthropicRequest {
             model: self.config.model.clone(),
             messages,
             max_tokens: self.config.max_tokens,
@@ -422,27 +436,26 @@ impl LlmClient {
             tools,
         };
 
-        let response = self
-            .client
-            .post(format!("{}/messages", self.config.base_url))
-            .header("x-api-key", &self.config.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("Content-Type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| format!("HTTP request failed: {}", e))?;
+        // Build HTTP request
+        let http_request = HttpRequest::new(
+            HttpMethod::Post,
+            format!("{}/messages", self.config.base_url),
+        )
+        .header("x-api-key", &self.config.api_key)
+        .header("anthropic-version", "2023-06-01")
+        .json(&request_body)?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(format!("API error {}: {}", status, body));
+        // Send HTTP request
+        let response = self.http_client.send(http_request).await?;
+
+        // Check status
+        if !response.is_success() {
+            let body = response.text().unwrap_or_default();
+            return Err(format!("API error {}: {}", response.status, body));
         }
 
-        let completion: AnthropicResponse = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        // Parse JSON response
+        let completion: AnthropicResponse = response.json()?;
 
         // Extract text content
         let content = completion
@@ -484,7 +497,7 @@ impl LlmClient {
         let (system, anthropic_messages) = self.prepare_anthropic_messages(messages);
 
         // Build request with streaming enabled
-        let mut request = serde_json::json!({
+        let mut request_json = serde_json::json!({
             "model": self.config.model,
             "messages": anthropic_messages,
             "max_tokens": self.config.max_tokens,
@@ -492,33 +505,24 @@ impl LlmClient {
         });
 
         if let Some(system_msg) = system {
-            request["system"] = serde_json::Value::String(system_msg);
+            request_json["system"] = serde_json::Value::String(system_msg);
         }
 
         if !tools.is_empty() {
-            request["tools"] = serde_json::to_value(&tools).map_err(|e| e.to_string())?;
+            request_json["tools"] = serde_json::to_value(&tools).map_err(|e| e.to_string())?;
         }
 
-        // Make streaming request
-        let response = self
-            .client
-            .post(format!("{}/messages", self.config.base_url))
-            .header("x-api-key", &self.config.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("Content-Type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| format!("HTTP request failed: {}", e))?;
+        // Build HTTP request for streaming
+        let http_request = HttpRequest::new(
+            HttpMethod::Post,
+            format!("{}/messages", self.config.base_url),
+        )
+        .header("x-api-key", &self.config.api_key)
+        .header("anthropic-version", "2023-06-01")
+        .json(&request_json)?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(format!("API error {}: {}", status, body));
-        }
-
-        // Convert response to byte stream
-        let byte_stream = response.bytes_stream();
+        // Send streaming HTTP request
+        let byte_stream = self.http_client.send_streaming(http_request).await?;
 
         // Parse SSE events and convert to StreamDelta
         let stream = parse_sse_stream(byte_stream);
@@ -527,12 +531,14 @@ impl LlmClient {
     }
 }
 
-/// Parse Server-Sent Events stream from Anthropic API
+/// Parse Server-Sent Events stream from Anthropic API (Phase 7.8 REDO)
 ///
 /// Converts SSE events to StreamDelta items.
 /// Handles events: content_block_delta, message_stop
+///
+/// Updated to accept Result<Bytes, String> for HttpClient trait compatibility.
 fn parse_sse_stream(
-    byte_stream: impl Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + 'static,
+    byte_stream: impl Stream<Item = Result<bytes::Bytes, String>> + Send + 'static,
 ) -> impl Stream<Item = Result<StreamDelta, String>> + Send {
     use futures::stream;
 
@@ -561,7 +567,9 @@ fn parse_sse_stream(
                                 // Parse JSON
                                 if let Ok(event) = serde_json::from_str::<Value>(data) {
                                     // Handle content_block_delta events
-                                    if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
+                                    if let Some(event_type) =
+                                        event.get("type").and_then(|v| v.as_str())
+                                    {
                                         match event_type {
                                             "content_block_delta" => {
                                                 if let Some(text) = event

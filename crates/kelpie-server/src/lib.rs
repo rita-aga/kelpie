@@ -4,6 +4,7 @@
 //! Letta-compatible AI agent systems.
 
 pub mod actor;
+pub mod http;
 pub mod llm;
 pub mod memory;
 pub mod models;
