@@ -161,9 +161,10 @@ impl LlmClient for RealLlmAdapter {
         })
     }
 
-    /// Stream complete with real LLM streaming (Phase 7.8)
+    /// Stream complete with real LLM streaming (Phase 7.8 REDO - TRUE DST)
     ///
     /// Uses crate::llm::LlmClient.stream_complete_with_tools() for true token streaming.
+    /// Tested with HTTP mocking and fault injection.
     async fn stream_complete(
         &self,
         messages: Vec<LlmMessage>,
@@ -205,7 +206,7 @@ impl LlmClient for RealLlmAdapter {
                     }
                     crate::llm::StreamDelta::ToolCallDelta { delta } => {
                         Ok(StreamChunk::ToolCallDelta {
-                            id: "".to_string(), // TODO: track tool call ID
+                            id: "".to_string(), // TODO: track tool call ID across deltas
                             delta,
                         })
                     }
