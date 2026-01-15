@@ -1,0 +1,13 @@
+# Kelpie VM Filesystem Table
+#
+# TigerStyle: Explicit mount options, clear documentation
+
+# <filesystem>  <mount point>  <type>  <options>        <dump> <pass>
+proc            /proc          proc    defaults         0      0
+sysfs           /sys           sysfs   defaults         0      0
+devtmpfs        /dev           devtmpfs mode=0755      0      0
+tmpfs           /tmp           tmpfs   mode=1777       0      0
+tmpfs           /run           tmpfs   mode=0755       0      0
+
+# Workspace will be mounted by host via virtio-fs
+# workspace     /workspace     virtiofs defaults       0      0
