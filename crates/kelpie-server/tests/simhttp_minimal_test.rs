@@ -18,16 +18,12 @@ async fn test_simhttp_without_server() {
             let sim_http_client = Arc::new(SimHttpClient::new(
                 sim_env.faults.clone(),
                 sim_env.rng.clone(),
-                
             ));
 
             println!("Created SimHttpClient successfully");
 
             // Just create a request, don't send it
-            let request = HttpRequest::new(
-                HttpMethod::Get,
-                "http://example.com/test".to_string(),
-            );
+            let request = HttpRequest::new(HttpMethod::Get, "http://example.com/test".to_string());
 
             println!("Created HttpRequest: {:?}", request);
 
@@ -57,7 +53,6 @@ async fn test_simhttp_with_fault_no_call() {
             let sim_http_client = Arc::new(SimHttpClient::new(
                 sim_env.faults.clone(),
                 sim_env.rng.clone(),
-                
             ));
 
             println!("Created SimHttpClient with faults successfully");
@@ -85,11 +80,7 @@ async fn test_inject_network_faults_isolation() {
         .run_async(|sim_env| async move {
             println!("Starting fault injection test...");
 
-            let sim_http_client = SimHttpClient::new(
-                sim_env.faults.clone(),
-                sim_env.rng.clone(),
-                
-            );
+            let sim_http_client = SimHttpClient::new(sim_env.faults.clone(), sim_env.rng.clone());
 
             println!("About to call inject_network_faults...");
 
@@ -97,10 +88,7 @@ async fn test_inject_network_faults_isolation() {
             let start_time = sim_env.clock.now_ms();
 
             // Call the private method via a dummy HTTP request
-            let request = HttpRequest::new(
-                HttpMethod::Get,
-                "http://example.com/test".to_string(),
-            );
+            let request = HttpRequest::new(HttpMethod::Get, "http://example.com/test".to_string());
 
             println!("Attempting to send request (will fail - no server)...");
             let send_result = sim_http_client.send(request).await;
@@ -114,5 +102,9 @@ async fn test_inject_network_faults_isolation() {
         })
         .await;
 
-    assert!(result.is_ok(), "Inject faults test failed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Inject faults test failed: {:?}",
+        result.err()
+    );
 }

@@ -113,7 +113,10 @@ async fn test_dst_network_delay_actually_triggers() {
             }
 
             // Verify chunks received (proves faults didn't break the stream)
-            assert!(chunk_count >= 3, "Should have chunks despite network delays");
+            assert!(
+                chunk_count >= 3,
+                "Should have chunks despite network delays"
+            );
             assert_eq!(content, "ABC", "Content should be complete");
 
             tracing::info!(chunk_count = chunk_count, "Test completed successfully");
@@ -125,7 +128,11 @@ async fn test_dst_network_delay_actually_triggers() {
         })
         .await;
 
-    assert!(result.is_ok(), "Network delay test failed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Network delay test failed: {:?}",
+        result.err()
+    );
 }
 
 /// Test with REAL NetworkPacketLoss fault injection
@@ -202,7 +209,11 @@ async fn test_dst_network_packet_loss_actually_triggers() {
         })
         .await;
 
-    assert!(result.is_ok(), "Packet loss test failed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Packet loss test failed: {:?}",
+        result.err()
+    );
 }
 
 /// Test with COMBINED network faults
@@ -292,5 +303,9 @@ async fn test_dst_combined_network_faults() {
         })
         .await;
 
-    assert!(result.is_ok(), "Combined faults test failed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Combined faults test failed: {:?}",
+        result.err()
+    );
 }

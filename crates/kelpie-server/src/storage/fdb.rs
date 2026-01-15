@@ -107,11 +107,11 @@ impl FdbAgentRegistry {
 
     /// Serialize session to bytes
     fn serialize_session(session: &SessionState) -> Result<Bytes, StorageError> {
-        serde_json::to_vec(session)
-            .map(Bytes::from)
-            .map_err(|e| StorageError::SerializationFailed {
+        serde_json::to_vec(session).map(Bytes::from).map_err(|e| {
+            StorageError::SerializationFailed {
                 reason: e.to_string(),
-            })
+            }
+        })
     }
 
     /// Deserialize session from bytes
@@ -123,11 +123,11 @@ impl FdbAgentRegistry {
 
     /// Serialize message to bytes
     fn serialize_message(message: &Message) -> Result<Bytes, StorageError> {
-        serde_json::to_vec(message)
-            .map(Bytes::from)
-            .map_err(|e| StorageError::SerializationFailed {
+        serde_json::to_vec(message).map(Bytes::from).map_err(|e| {
+            StorageError::SerializationFailed {
                 reason: e.to_string(),
-            })
+            }
+        })
     }
 
     /// Deserialize message from bytes
@@ -361,7 +361,11 @@ impl AgentStorage for FdbAgentRegistry {
         assert!(!state.session_id.is_empty(), "session id cannot be empty");
 
         let actor_id = Self::agent_actor_id(&state.agent_id).map_err(Self::map_core_error)?;
-        let key = format!("{}{}", String::from_utf8_lossy(KEY_PREFIX_SESSION), state.session_id);
+        let key = format!(
+            "{}{}",
+            String::from_utf8_lossy(KEY_PREFIX_SESSION),
+            state.session_id
+        );
         let value = Self::serialize_session(state)?;
 
         self.fdb
@@ -382,7 +386,11 @@ impl AgentStorage for FdbAgentRegistry {
         assert!(!session_id.is_empty(), "session id cannot be empty");
 
         let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
-        let key = format!("{}{}", String::from_utf8_lossy(KEY_PREFIX_SESSION), session_id);
+        let key = format!(
+            "{}{}",
+            String::from_utf8_lossy(KEY_PREFIX_SESSION),
+            session_id
+        );
 
         match self.fdb.get(&actor_id, key.as_bytes()).await {
             Ok(Some(bytes)) => {
@@ -400,7 +408,11 @@ impl AgentStorage for FdbAgentRegistry {
         assert!(!session_id.is_empty(), "session id cannot be empty");
 
         let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
-        let key = format!("{}{}", String::from_utf8_lossy(KEY_PREFIX_SESSION), session_id);
+        let key = format!(
+            "{}{}",
+            String::from_utf8_lossy(KEY_PREFIX_SESSION),
+            session_id
+        );
 
         self.fdb
             .delete(&actor_id, key.as_bytes())
@@ -450,11 +462,11 @@ impl AgentStorage for FdbAgentRegistry {
                         reason: e.to_string(),
                     }
                 })?;
-                count_str.parse::<u64>().map_err(|e| {
-                    StorageError::DeserializationFailed {
+                count_str
+                    .parse::<u64>()
+                    .map_err(|e| StorageError::DeserializationFailed {
                         reason: e.to_string(),
-                    }
-                })?
+                    })?
             }
             Ok(None) => 0,
             Err(e) => return Err(Self::map_core_error(e)),
@@ -502,11 +514,11 @@ impl AgentStorage for FdbAgentRegistry {
                         reason: e.to_string(),
                     }
                 })?;
-                count_str.parse::<u64>().map_err(|e| {
-                    StorageError::DeserializationFailed {
+                count_str
+                    .parse::<u64>()
+                    .map_err(|e| StorageError::DeserializationFailed {
                         reason: e.to_string(),
-                    }
-                })?
+                    })?
             }
             Ok(None) => return Ok(Vec::new()),
             Err(e) => return Err(Self::map_core_error(e)),

@@ -79,9 +79,11 @@ impl HttpRequest {
     }
 
     pub fn json<T: serde::Serialize>(mut self, body: &T) -> Result<Self, String> {
-        let json = serde_json::to_vec(body).map_err(|e| format!("JSON serialization failed: {}", e))?;
+        let json =
+            serde_json::to_vec(body).map_err(|e| format!("JSON serialization failed: {}", e))?;
         self.body = Some(json);
-        self.headers.insert("Content-Type".to_string(), "application/json".to_string());
+        self.headers
+            .insert("Content-Type".to_string(), "application/json".to_string());
         Ok(self)
     }
 
@@ -109,7 +111,8 @@ impl HttpResponse {
     }
 
     pub fn json<T: serde::de::DeserializeOwned>(&self) -> Result<T, String> {
-        serde_json::from_slice(&self.body).map_err(|e| format!("JSON deserialization failed: {}", e))
+        serde_json::from_slice(&self.body)
+            .map_err(|e| format!("JSON deserialization failed: {}", e))
     }
 }
 
@@ -240,10 +243,9 @@ impl HttpClient for ReqwestHttpClient {
 
         // Convert to byte stream
         let byte_stream = response.bytes_stream();
-        let stream = Box::pin(futures::stream::StreamExt::map(
-            byte_stream,
-            |result| result.map_err(|e| format!("Stream error: {}", e)),
-        ));
+        let stream = Box::pin(futures::stream::StreamExt::map(byte_stream, |result| {
+            result.map_err(|e| format!("Stream error: {}", e))
+        }));
 
         Ok(stream)
     }
@@ -396,7 +398,10 @@ mod tests {
 
         assert_eq!(req.method, HttpMethod::Post);
         assert_eq!(req.url, "https://example.com");
-        assert_eq!(req.headers.get("Authorization"), Some(&"Bearer token".to_string()));
+        assert_eq!(
+            req.headers.get("Authorization"),
+            Some(&"Bearer token".to_string())
+        );
     }
 
     #[test]

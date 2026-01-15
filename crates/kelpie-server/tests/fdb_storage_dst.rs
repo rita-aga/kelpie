@@ -337,10 +337,8 @@ async fn test_dst_fdb_session_checkpoint_with_conflicts() {
 
             // Try to checkpoint 25 times with 20% conflict rate
             for i in 0..25 {
-                let session = SessionState::new(
-                    format!("session-{}", i),
-                    "agent-session".to_string(),
-                );
+                let session =
+                    SessionState::new(format!("session-{}", i), "agent-session".to_string());
 
                 // Create a message to include in checkpoint
                 let message = Message {
@@ -376,15 +374,11 @@ async fn test_dst_fdb_session_checkpoint_with_conflicts() {
                         .await?;
 
                         if loaded_session.is_none() {
-                            panic!(
-                                "BUG: Checkpoint succeeded but session not found in storage"
-                            );
+                            panic!("BUG: Checkpoint succeeded but session not found in storage");
                         }
 
                         if !messages.iter().any(|m| m.id == message.id) {
-                            panic!(
-                                "BUG: Checkpoint succeeded but message not found in storage"
-                            );
+                            panic!("BUG: Checkpoint succeeded but message not found in storage");
                         }
 
                         checkpoint_success += 1;
@@ -441,7 +435,13 @@ async fn test_dst_fdb_messages_with_high_fault_rate() {
 
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.2))
-        .with_fault(FaultConfig::new(FaultType::StorageLatency { min_ms: 50, max_ms: 200 }, 0.2))
+        .with_fault(FaultConfig::new(
+            FaultType::StorageLatency {
+                min_ms: 50,
+                max_ms: 200,
+            },
+            0.2,
+        ))
         .run_async(|env| async move {
             let storage = create_storage(&env);
 
@@ -921,7 +921,8 @@ async fn test_dst_fdb_delete_cascade() {
             .await?;
 
             // Add session
-            let session = SessionState::new("delete-session".to_string(), "delete-agent".to_string());
+            let session =
+                SessionState::new("delete-session".to_string(), "delete-agent".to_string());
             let storage_ref = storage.clone();
             let session_clone = session.clone();
             retry_write(|| {
@@ -947,12 +948,7 @@ async fn test_dst_fdb_delete_cascade() {
             retry_write(|| {
                 let storage = storage_ref.clone();
                 let m = message_clone.clone();
-                async move {
-                    storage
-                        .append_message("delete-agent", &m)
-                        .await
-                        .map(|_| ())
-                }
+                async move { storage.append_message("delete-agent", &m).await.map(|_| ()) }
             })
             .await?;
 

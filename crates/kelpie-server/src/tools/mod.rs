@@ -7,12 +7,14 @@
 //! - MCP tools from connected external servers
 //! - DST-compatible simulated tools for testing
 
+mod code_execution;
 mod heartbeat;
 mod memory;
 mod messaging;
 mod registry;
 mod web_search;
 
+pub use code_execution::register_run_code_tool;
 pub use heartbeat::{
     parse_pause_signal, register_heartbeat_tools, register_pause_heartbeats_with_clock, ClockSource,
 };
