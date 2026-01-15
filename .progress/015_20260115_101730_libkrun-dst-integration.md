@@ -604,14 +604,19 @@ These tests define the **behavioral contract** that real libkrun implementation 
 
 ---
 
-## Phase 3 Status: FFI Architecture Complete (Pending Real libkrun)
+## Phase 3 Status: FFI Architecture Only (NOT FUNCTIONAL)
 
 **Date:** 2026-01-15 11:15
-**Status:** ARCHITECTURE COMPLETE, BLOCKED ON SYSTEM DEPENDENCIES
+**Updated:** 2026-01-15 12:00 (no-cap verification)
+**Status:** ARCHITECTURE ONLY - IMPLEMENTATION NOT COMPLETE
 
-### What Was Built
+### What Was Built (ARCHITECTURE ONLY)
 
-Created complete FFI architecture in `kelpie-libkrun/src/ffi.rs`:
+Created FFI architecture scaffolding in `kelpie-libkrun/src/ffi.rs`:
+
+**IMPORTANT**: This is NOT functional code. It defines types, traits, and
+structure but all core functions are stubbed with TODOs or return
+"not yet implemented" errors.
 
 **Safe Wrapper Pattern:**
 ```rust
@@ -679,11 +684,34 @@ $ cargo build -p kelpie-libkrun
    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.40s
 ```
 
-❌ **With libkrun feature** (requires system deps):
+❌ **With libkrun feature** (intentionally fails):
 ```bash
 $ cargo build -p kelpie-libkrun --features libkrun
-error: Library not loaded: @rpath/libclang.dylib
+error: failed to run custom build command for `krun-sys`
+# Blocked on: libkrun + libclang system dependencies
+
+# Added compile guard in ffi.rs to prevent accidental use
+# See Cargo.toml warning: "libkrun feature is NOT YET FUNCTIONAL"
 ```
+
+### No-Cap Verification (2026-01-15 12:00)
+
+**Issues Found:**
+- ❌ 12+ TODO comments in production code path
+- ❌ Fake implementations (functions return "not implemented" errors)
+- ❌ ctx_id = -1 placeholder value
+- ❌ Drop impl logs "Freed context" but doesn't free it
+
+**Fixes Applied:**
+- ✅ Added compile_error! guard to prevent using libkrun feature
+- ✅ Added clear warning in Cargo.toml
+- ✅ Updated documentation to reflect "NOT FUNCTIONAL" status
+- ✅ Updated plan to say "ARCHITECTURE ONLY"
+
+**Current State:**
+- MockVm works perfectly ✅
+- LibkrunVm is scaffolding only (won't compile if enabled)
+- Clear warnings prevent misuse
 
 ### Testing Strategy
 

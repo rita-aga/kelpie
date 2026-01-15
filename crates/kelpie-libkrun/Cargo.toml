@@ -10,7 +10,17 @@ authors.workspace = true
 
 [features]
 default = []
-# Enable actual libkrun FFI bindings (requires libkrun installed)
+
+# NOTE: libkrun feature is NOT YET FUNCTIONAL
+# The FFI implementation contains only architectural scaffolding.
+# Enabling this feature will fail to compile (requires libkrun + libclang installed).
+# Use the default (MockVm) for testing until implementation is complete.
+#
+# To implement:
+# 1. Install: brew install libkrun llvm
+# 2. Complete FFI calls in src/ffi.rs (12+ TODOs)
+# 3. Implement guest agent protocol
+# 4. Test with: cargo test -p kelpie-dst --test libkrun_dst --features libkrun
 libkrun = ["dep:krun-sys"]
 
 [dependencies]

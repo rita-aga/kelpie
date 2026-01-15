@@ -2,23 +2,40 @@
 //!
 //! TigerStyle: Safe wrappers around unsafe krun-sys calls.
 //!
+//! # Status
+//!
+//! This module is **NOT YET IMPLEMENTED**. It contains architectural scaffolding
+//! that defines the structure for future libkrun integration, but does not
+//! contain working code.
+//!
+//! To implement this:
+//! 1. Install libkrun system dependencies
+//! 2. Uncomment and complete the FFI calls in this file
+//! 3. Implement guest agent communication protocol
+//! 4. Test against Phase 2 DST suite (21 tests)
+//!
 //! # Architecture
 //!
-//! This module provides safe Rust wrappers around the libkrun C API:
+//! This module will provide safe Rust wrappers around the libkrun C API:
 //! - Context-based API: create context, configure, start VM
 //! - Resource management: RAII using Drop trait
 //! - Error handling: Convert C error codes to LibkrunError
 //!
 //! # Safety
 //!
-//! All unsafe blocks are documented with SAFETY comments explaining why
+//! All unsafe blocks must be documented with SAFETY comments explaining why
 //! they are safe. FFI calls require:
 //! - Valid pointers (non-null, properly aligned)
 //! - Correct lifetime management
 //! - Thread-safety guarantees
 
 #[cfg(feature = "libkrun")]
-use krun_sys;
+compile_error!(
+    "libkrun feature is not yet functional. \
+     The FFI implementation is incomplete and contains only architectural scaffolding. \
+     Use the default (MockVm) implementation for testing. \
+     See crates/kelpie-libkrun/src/ffi.rs for implementation status."
+);
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
