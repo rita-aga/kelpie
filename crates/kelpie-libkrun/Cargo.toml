@@ -11,7 +11,7 @@ authors.workspace = true
 [features]
 default = []
 # Enable actual libkrun FFI bindings (requires libkrun installed)
-libkrun = ["dep:libc"]
+libkrun = ["dep:krun-sys"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -24,11 +24,7 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 # Optional: Only needed when libkrun feature is enabled
-libc = { version = "0.2", optional = true }
-
-[build-dependencies]
-# Will be used for bindgen when libkrun feature is enabled
-# bindgen = { version = "0.69", optional = true }
+krun-sys = { version = "1.10", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

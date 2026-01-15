@@ -7,10 +7,14 @@
 
 ## Executive Summary
 
+**DECISION: Kelpie implements DOUBLE SANDBOXING (Option A) - THE KELPIE WAY**
+
 Kelpie implements **TWO levels of sandboxing** with **THREE sandbox implementations**:
 
-1. **Tool-level sandboxing** (for Letta compatibility) - REQUIRED
-2. **Agent-level sandboxing** (Kelpie advantage) - OPTIONAL
+1. **Agent-level sandboxing** - LibkrunSandbox (MicroVM per agent) - **DEFAULT**
+2. **Tool-level sandboxing** - Process isolation inside VM - **ALWAYS ON**
+
+**This is NOT optional. This IS Kelpie's differentiator. No cheating.**
 
 ---
 
@@ -240,13 +244,17 @@ Both provide VM-level isolation. When to use which?
 
 ### Recommendation
 
-**For Letta compatibility (Phase 1-10):**
-- **Use ProcessSandbox for tools** (required)
-- **Agents run in-process** (Letta-compatible)
+**DECISION MADE: LibkrunSandbox for ALL agents (Phase 0.5)**
+- **Agents:** LibkrunSandbox (MicroVM per agent) - DEFAULT
+- **Tools:** Process isolation inside VM - ALWAYS
+- **NOT optional:** This IS the Kelpie way
 
-**For Kelpie advantage (future/optional):**
-- **Development:** LibkrunSandbox (cross-platform)
-- **Production:** FirecrackerSandbox (Linux, maximum security)
+**Why LibkrunSandbox (not Firecracker):**
+- Cross-platform (macOS development + Linux production)
+- Faster boot (~50ms vs ~125ms)
+- Lighter overhead (~3MB vs ~5MB per VM)
+- Sufficient isolation for most use cases
+- Can upgrade to Firecracker for max security if needed
 
 ---
 

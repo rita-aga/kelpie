@@ -28,14 +28,15 @@
 Currently Kelpie has ~90% Letta API compatibility (verified via testing and LETTA_REPLACEMENT_GUIDE.md). This task achieves **100% complete compatibility** with ZERO deferred features, allowing Kelpie to be a perfect drop-in replacement for Letta.
 
 **Goals - ALL IMPLEMENTED:**
-1. Fix the path difference for memory block updates
-2. Add ALL missing built-in tools (`send_message`, `conversation_search_date`)
-3. Add ALL missing prebuilt tools (`web_search`, `run_code`)
-4. Implement custom tool execution for Python SDK compatibility (sandbox + source storage)
-5. Complete MCP client execution wiring for ALL transports (stdio, HTTP, SSE)
-6. Add ALL missing API endpoints (import/export, summarization, scheduling, projects, batch, agent groups)
-7. Ensure all new features have full DST coverage per CONSTRAINTS.md
-8. Achieve 100% API parity - NOTHING deferred
+1. **Agent-level sandboxing with LibkrunSandbox** (MicroVM per agent - THE KELPIE WAY)
+2. Fix the path difference for memory block updates
+3. Add ALL missing built-in tools (`send_message`, `conversation_search_date`)
+4. Add ALL missing prebuilt tools (`web_search`, `run_code`)
+5. Implement custom tool execution for Python SDK compatibility (sandbox + source storage)
+6. Complete MCP client execution wiring for ALL transports (stdio, HTTP, SSE)
+7. Add ALL missing API endpoints (import/export, summarization, scheduling, projects, batch, agent groups)
+8. Ensure all new features have full DST coverage per CONSTRAINTS.md
+9. Achieve 100% API parity + SUPERIOR isolation - NOTHING deferred
 
 **Why this matters:**
 - Kelpie can replace Letta in existing projects with ZERO code changes
@@ -66,18 +67,22 @@ agent = client.agents.create(
 )
 ```
 
-**How Kelpie handles this:**
-1. **Tool Registration:** `POST /v1/tools` receives schema + Python source code
-2. **Storage:** Store source code in FDB (keyed by tool name)
-3. **Execution:** When agent calls tool:
+**How Kelpie handles this (THE KELPIE WAY - with superior isolation):**
+1. **Agent Isolation:** Agent runs in LibkrunSandbox (MicroVM)
+2. **Tool Registration:** `POST /v1/tools` receives schema + Python source code
+3. **Storage:** Store source code in FDB (keyed by tool name)
+4. **Execution:** When agent calls tool:
+   - Agent is already running inside LibkrunSandbox (MicroVM)
    - Load source code from storage
-   - Spawn ProcessSandbox with Python runtime
+   - Spawn child process INSIDE VM with namespaces/cgroups/seccomp
    - Inject environment (LETTA_AGENT_ID, LETTA_API_KEY, pre-initialized client)
    - Execute Python function with args
    - Return result to agent
-4. **Sandboxing:** Per-tool isolation (NOT per-agent) with resource limits
+5. **Double Sandboxing:**
+   - **Layer 1 (MicroVM):** Agent 1 isolated from Agent 2 (hardware-level)
+   - **Layer 2 (Process):** Tool isolated from agent (OS-level)
 
-**Key insight:** Letta runs as a **service** that executes user-defined Python code server-side in sandboxes. Kelpie must do the same for compatibility.
+**Key insight:** Letta runs as a **service** with weak isolation (agents in-process, tools in cloud). Kelpie runs as a **secure service** with defense-in-depth (agents in VMs, tools in processes).
 
 ---
 
@@ -204,10 +209,56 @@ agent = client.agents.create(
 | 15:30 | Add prebuilt tools (web_search, run_code) | Research revealed missing Letta prebuilt tools | +3 days scope |
 | 15:35 | Local sandbox for run_code (not E2B) | Self-hosted philosophy, no cloud dependencies | More implementation work, security responsibility |
 | 15:40 | Add custom tool execution (Python SDK) | Required for Letta Python SDK compatibility | +4 days scope, sandbox complexity |
+| 16:00 | **AGENT-LEVEL SANDBOXING (LibkrunSandbox)** | User requirement: "do it the Kelpie way, no cheating" | +5 days scope, THE differentiator |
+| 16:01 | Double sandboxing (Option A) | Defense in depth: VM for agents, process for tools | More complexity, superior isolation |
 
 ---
 
-### Decision 5: Prebuilt Tools Implementation
+### Decision 5: Agent-Level Sandboxing (THE CRITICAL ONE)
+
+**Context:** User requirement: "Do it the Kelpie way, no cheating." Letta runs agents in-process with no agent-level isolation. ProcessSandbox alone is weak.
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: LibkrunSandbox (MicroVM) | Each agent in MicroVM, tools in processes inside VM | - **Hardware-level isolation**<br>- **THE KELPIE WAY**<br>- Defense in depth<br>- True multi-tenant<br>- Agent crash isolated<br>- Tool crash isolated<br>- Superior to Letta | - +5 days scope<br>- More complexity<br>- Memory overhead (~50MB/agent)<br>- Boot time (~50-100ms) |
+| B: FirecrackerSandbox | Like LibkrunSandbox but Linux-only | - Same benefits as A<br>- Slightly faster (~125ms boot) | - Linux-only (no macOS dev)<br>- Requires root/KVM<br>- More setup |
+| C: ProcessSandbox only | Agents in-process, tools in ProcessSandbox | - Simple<br>- Fast<br>- Letta-compatible | - **CHEATING**<br>- Weak isolation<br>- Agent crash = server crash<br>- NOT the Kelpie way |
+| D: No sandboxing | Like Letta (in-process) | - Simplest<br>- 100% Letta compat | - **COMPLETELY CHEATING**<br>- Zero isolation advantage<br>- Why bother with Kelpie? |
+
+**Decision:** Option A - LibkrunSandbox (MicroVM per agent) + Process isolation for tools
+
+**Reasoning:**
+1. **User requirement:** "Do it the Kelpie way, no cheating"
+2. **ProcessSandbox is weak:** Just OS process isolation, not enough
+3. **This IS the Kelpie differentiator:** What sets us apart from Letta
+4. **Defense in depth:** VM for agents + Process for tools = double isolation
+5. **True multi-tenant:** Agents can't access each other's memory (hardware isolation)
+6. **Agent resilience:** Agent crash isolated to one VM, doesn't affect others
+7. **Tool resilience:** Tool crash isolated to one process, doesn't crash agent
+8. **Cross-platform:** LibkrunSandbox works on macOS (dev) and Linux (prod)
+9. **Marketing value:** "Same API, Better Isolation" - this is the headline
+
+**Trade-offs accepted:**
+- +5 days to timeline (worth it for differentiation)
+- ~50MB memory overhead per agent (acceptable for isolation)
+- ~50-100ms boot time per agent (can optimize with VM pool)
+- More complexity (security is hard, we embrace it)
+- **This is what makes Kelpie better than Letta**
+
+**Architecture:**
+```
+Letta: All agents in-process → Tools in E2B cloud
+Kelpie: Each agent in MicroVM → Tools in process inside VM
+
+Layer 1 (MicroVM): Agent 1 ↔ Agent 2 isolation
+Layer 2 (Process): Agent ↔ Tool isolation
+```
+
+**This is non-negotiable.** No cheating.
+
+---
+
+### Decision 6: Prebuilt Tools Implementation
 
 **Context:** Research revealed Letta has 2 prebuilt tools beyond base tools: `web_search` and `run_code`. These are critical for 100% compatibility.
 
@@ -232,7 +283,7 @@ agent = client.agents.create(
 
 ---
 
-### Decision 6: run_code Sandbox Provider
+### Decision 7: run_code Sandbox Provider
 
 **Context:** Letta uses E2B (cloud sandbox service). Kelpie could use E2B or local ProcessSandbox.
 
@@ -259,7 +310,7 @@ agent = client.agents.create(
 
 ---
 
-### Decision 7: Custom Tool Execution (Python SDK)
+### Decision 8: Custom Tool Execution (Python SDK)
 
 **Context:** Letta Python SDK users define tools in Python that run on the server. Kelpie needs to execute these Python tools.
 
@@ -296,6 +347,140 @@ agent = client.agents.create(
 - [ ] Add integration test for both paths
 - [ ] Update LETTA_REPLACEMENT_GUIDE.md (mark as ✅)
 - [ ] Commit: "feat: Add Letta-compatible route alias for memory blocks"
+
+### Phase 0.5: Agent-Level Sandboxing with LibkrunSandbox (5 days) - THE KELPIE WAY
+
+**Architecture Decision: Double Sandboxing (Defense in Depth)**
+- **Agent isolation:** Each agent runs in its own LibkrunSandbox (MicroVM)
+- **Tool isolation:** Tools use process sandboxing INSIDE the VM (namespaces, cgroups, seccomp)
+
+**Why this matters:**
+- NOT cheating like Letta (agents in-process)
+- Hardware-level isolation between agents
+- Process-level isolation between agent and its tools
+- True multi-tenant security (can't access other agents' memory)
+- Agent crash isolated to one VM
+- Tool crash isolated to one process
+- **This is a Kelpie differentiator**
+
+#### 0.5.1: LibkrunSandbox Integration for Agents (2 days)
+- [ ] Review existing libkrun integration (`kelpie-sandbox/src/libkrun.rs`)
+- [ ] Design agent runtime inside VM:
+  - [ ] VM configuration: 512MB RAM, 2 vCPUs, network isolation
+  - [ ] Agent runtime as PID 1 inside VM
+  - [ ] Communication channel: vsock for control plane
+  - [ ] Filesystem: root disk with agent runtime + Python/dependencies
+  - [ ] Boot time optimization (target: <100ms per agent)
+- [ ] Extend `AgentActor` to run inside LibkrunSandbox:
+  - [ ] Modify `AgentActor::new()` to accept sandbox parameter
+  - [ ] Wire message handling through vsock
+  - [ ] Wire LLM calls through vsock (out to host)
+  - [ ] Wire storage operations through vsock (out to host)
+  - [ ] Ensure memory blocks stay in VM (isolated)
+- [ ] Create `SandboxedAgentActor` wrapper:
+  - [ ] Manages LibkrunSandbox lifecycle (boot, shutdown, snapshot)
+  - [ ] Routes API calls to agent inside VM
+  - [ ] Handles VM crashes (restart agent)
+  - [ ] Monitors resource usage (memory, CPU)
+- [ ] Write unit tests:
+  - [ ] Agent boot in VM
+  - [ ] Message send/receive through vsock
+  - [ ] LLM call forwarding
+  - [ ] Storage operation forwarding
+  - [ ] VM shutdown/cleanup
+- [ ] Write DST tests:
+  - [ ] Agent creation with VM boot failure (0.1 probability)
+  - [ ] Agent message handling with VM crash (0.1 probability)
+  - [ ] Agent under memory pressure (OutOfMemory fault)
+  - [ ] Agent under CPU starvation (CPUStarvation fault)
+  - [ ] Multiple agents in concurrent VMs (10+ agents)
+  - [ ] VM snapshot/restore after agent state changes
+- [ ] Integration tests:
+  - [ ] Create agent → Send message → Verify in VM
+  - [ ] Agent crash → Restart → State recovery
+  - [ ] Agent memory isolation (cannot access other agent's data)
+
+#### 0.5.2: Tool Process Isolation Inside VM (2 days)
+- [ ] Implement tool execution sandbox INSIDE LibkrunSandbox:
+  - [ ] Use Linux namespaces for isolation:
+    - [ ] PID namespace (isolated process tree)
+    - [ ] Mount namespace (isolated filesystem view)
+    - [ ] Network namespace (isolated network stack)
+    - [ ] User namespace (run as unprivileged user)
+  - [ ] Use cgroups for resource limits:
+    - [ ] Memory limit: 256MB per tool
+    - [ ] CPU limit: 80% max per tool
+    - [ ] Prevents tool from starving agent
+  - [ ] Use seccomp for syscall filtering:
+    - [ ] Whitelist: read, write, open, exec, etc.
+    - [ ] Blacklist: ptrace, reboot, mount, etc.
+    - [ ] Block dangerous syscalls
+  - [ ] Implement timeout enforcement:
+    - [ ] 30s max per tool execution
+    - [ ] Kill only tool process, not agent
+    - [ ] Cleanup orphaned processes
+- [ ] Create `VmToolExecutor` module:
+  - [ ] `execute_tool_in_vm(vm, tool_code, args)` function
+  - [ ] Fork child process with namespaces
+  - [ ] Set cgroup limits on child
+  - [ ] Apply seccomp filter
+  - [ ] Execute tool code
+  - [ ] Capture stdout/stderr
+  - [ ] Return result or timeout error
+- [ ] Environment injection for tools (inside VM):
+  - [ ] `LETTA_AGENT_ID` - current agent ID
+  - [ ] `LETTA_API_KEY` - API key for calling Kelpie
+  - [ ] `LETTA_BASE_URL` - Kelpie server URL (accessible via vsock/network)
+  - [ ] Pre-initialized Letta client (pip install letta in VM image)
+- [ ] Write unit tests:
+  - [ ] Tool execution with namespaces
+  - [ ] Resource limit enforcement
+  - [ ] Timeout enforcement
+  - [ ] Syscall filtering (seccomp)
+  - [ ] Environment injection
+- [ ] Write DST tests:
+  - [ ] Tool execution inside VM with tool timeout
+  - [ ] Tool memory exhaustion (hits cgroup limit, doesn't crash agent)
+  - [ ] Tool CPU spike (cgroup throttles, doesn't starve agent)
+  - [ ] Tool trying dangerous syscalls (seccomp blocks)
+  - [ ] Concurrent tool executions in same VM (5+ tools)
+  - [ ] Tool crash doesn't affect agent
+- [ ] Integration tests:
+  - [ ] Agent calls Python tool → Executes in process → Returns result
+  - [ ] Tool uses Letta client → Calls back to Kelpie API
+  - [ ] Tool timeout → Agent continues normally
+  - [ ] Multiple tools run concurrently → No interference
+
+#### 0.5.3: Performance & Optimization (1 day)
+- [ ] VM image optimization:
+  - [ ] Minimal root filesystem (Alpine Linux or similar)
+  - [ ] Pre-installed: Python, Node.js, essential tools
+  - [ ] Pre-installed: Letta SDK, common dependencies
+  - [ ] Readonly root, writable /tmp
+  - [ ] Target image size: <100MB
+- [ ] VM pool management:
+  - [ ] Pre-warm VMs (pool of ready VMs)
+  - [ ] Fast agent activation (assign agent to pre-warmed VM)
+  - [ ] VM reuse after agent deletion (clean + return to pool)
+  - [ ] Pool size: configurable (default 10 VMs)
+- [ ] Boot time optimization:
+  - [ ] Snapshot baseline VM (kernel + rootfs)
+  - [ ] Fast VM clone from snapshot
+  - [ ] Target: <100ms agent activation
+- [ ] Resource limits configuration:
+  - [ ] Per-agent: 512MB RAM, 2 vCPUs (default)
+  - [ ] Per-tool: 256MB RAM, 80% CPU (default)
+  - [ ] Configurable via agent creation API
+- [ ] Write benchmarks:
+  - [ ] Agent activation time (target: <100ms)
+  - [ ] Tool execution overhead (target: <10ms)
+  - [ ] Message throughput (agents in VMs vs in-process)
+  - [ ] Memory overhead per agent (VM + runtime)
+- [ ] Document performance characteristics:
+  - [ ] Boot time: ~50-100ms per agent
+  - [ ] Memory overhead: ~50MB per agent (VM + runtime)
+  - [ ] Tool execution: +1-5ms vs in-process
+  - [ ] Isolation: Hardware-level (MicroVM) + Process-level
 
 ### Phase 1: Missing Built-in Tools (2 days)
 
@@ -1072,6 +1257,7 @@ Letta Python SDK → POST /v1/tools {schema, source_code, runtime}
 - [ ] **Options & Decisions filled in** ✅
 - [ ] **Quick Decision Log maintained** ✅
 - [ ] Phase 0 complete (path alias - 15 min)
+- [ ] **Phase 0.5 complete (agent-level sandboxing - 5 days) - THE KELPIE WAY**
 - [ ] Phase 1 complete (base tools - 2 days)
 - [ ] Phase 1.5 complete (prebuilt tools - 3 days)
 - [ ] Phase 2 complete (MCP all transports - 5 days)
@@ -1089,6 +1275,8 @@ Letta Python SDK → POST /v1/tools {schema, source_code, runtime}
 - [ ] /no-cap passed
 - [ ] Vision aligned (DST coverage for ALL features)
 - [ ] **DST coverage added** for:
+  - [ ] **Agent sandboxing with VM crashes/resource exhaustion (Phase 0.5)**
+  - [ ] **Tool process isolation inside VM (Phase 0.5)**
   - [ ] send_message + conversation_search_date (Phase 1)
   - [ ] web_search + run_code (Phase 1.5)
   - [ ] MCP stdio + HTTP + SSE (all transports) (Phase 2)
@@ -2126,23 +2314,25 @@ Based on CONSTRAINTS.md §267, verify/add these fault types:
 | What | Why | When Expected |
 |------|-----|---------------|
 | `/v1/agents/{id}/blocks/{label}` path | Need alias route | Phase 0 (15 min) |
-| `send_message` tool | Not implemented | Phase 1 (day 2) |
-| `conversation_search_date` tool | Not implemented | Phase 1 (day 2) |
-| `web_search` tool | Not implemented | Phase 1.5 (day 5) |
-| `run_code` tool | Not implemented | Phase 1.5 (day 5) |
-| Custom Python tool execution | No sandbox integration | Phase 9 (day 26) |
-| Letta Python SDK tool registration | No source code storage | Phase 9 (day 26) |
-| Real MCP execution (stdio) | execute_mcp() not wired | Phase 2 (day 10) |
-| Real MCP execution (HTTP) | Not implemented | Phase 2 (day 12) |
-| Real MCP execution (SSE) | Not implemented | Phase 2 (day 14) |
-| Agent import endpoint | Not implemented | Phase 3 (day 16) |
-| Agent export endpoint | Not implemented | Phase 3 (day 16) |
-| Conversation summarization | Not implemented | Phase 4 (day 18) |
-| Message scheduling | Not implemented | Phase 5 (day 20) |
-| Projects API | Not implemented | Phase 6 (day 22) |
-| Batch operations | Not implemented | Phase 7 (day 24) |
-| Agent groups | Not implemented | Phase 8 (day 26) |
-| 100% Letta compatibility | All features need implementation | After Phase 10 (day 33) |
+| **Agent-level sandboxing (LibkrunSandbox)** | Not integrated | Phase 0.5 (day 5) |
+| **Tool process isolation in VM** | Not implemented | Phase 0.5 (day 5) |
+| `send_message` tool | Not implemented | Phase 1 (day 7) |
+| `conversation_search_date` tool | Not implemented | Phase 1 (day 7) |
+| `web_search` tool | Not implemented | Phase 1.5 (day 10) |
+| `run_code` tool | Not implemented | Phase 1.5 (day 10) |
+| Custom Python tool execution | No sandbox integration | Phase 9 (day 31) |
+| Letta Python SDK tool registration | No source code storage | Phase 9 (day 31) |
+| Real MCP execution (stdio) | execute_mcp() not wired | Phase 2 (day 15) |
+| Real MCP execution (HTTP) | Not implemented | Phase 2 (day 17) |
+| Real MCP execution (SSE) | Not implemented | Phase 2 (day 19) |
+| Agent import endpoint | Not implemented | Phase 3 (day 21) |
+| Agent export endpoint | Not implemented | Phase 3 (day 21) |
+| Conversation summarization | Not implemented | Phase 4 (day 23) |
+| Message scheduling | Not implemented | Phase 5 (day 25) |
+| Projects API | Not implemented | Phase 6 (day 27) |
+| Batch operations | Not implemented | Phase 7 (day 29) |
+| Agent groups | Not implemented | Phase 8 (day 31) |
+| 100% Letta compatibility + SUPERIOR isolation | All features need implementation | After Phase 10 (day 38) |
 
 ### Known Limitations ⚠️
 - This is a LARGE scope (20+ days of work)
@@ -2154,9 +2344,10 @@ Based on CONSTRAINTS.md §267, verify/add these fault types:
 
 ## Estimated Timeline
 
-**Total: 27-33 days (5-7 weeks full-time)**
+**Total: 32-38 days (6-8 weeks full-time)**
 
 - Phase 0: 15 minutes (path alias)
+- **Phase 0.5: 5 days (agent-level sandboxing with LibkrunSandbox - THE KELPIE WAY)**
 - Phase 1: 2 days (tools: send_message, conversation_search_date + DST)
 - Phase 1.5: 3 days (prebuilt tools: web_search, run_code + DST)
 - Phase 2: 5 days (MCP all transports + DST)
