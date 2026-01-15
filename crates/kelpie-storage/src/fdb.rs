@@ -644,6 +644,67 @@ impl ActorKV for FdbKV {
         Ok(keys)
     }
 
+    #[instrument(skip(self, prefix), fields(actor_id = %actor_id.qualified_name(), prefix_len = prefix.len()))]
+    async fn scan_prefix(
+        &self,
+        actor_id: &ActorId,
+        prefix: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Bytes)>> {
+        // Preconditions
+        assert!(
+            prefix.len() <= ACTOR_KV_KEY_SIZE_BYTES_MAX,
+            "prefix size {} exceeds max {}",
+            prefix.len(),
+            ACTOR_KV_KEY_SIZE_BYTES_MAX
+        );
+        assert!(
+            !actor_id.namespace().is_empty(),
+            "actor namespace cannot be empty"
+        );
+
+        let start_key = self.encode_prefix(actor_id, prefix);
+
+        // Calculate end key (prefix + 0xFF for range scan)
+        let mut end_key = start_key.clone();
+        end_key.push(0xFF);
+
+        let txn = self.db.create_trx().map_err(|e| Error::StorageReadFailed {
+            key: format!("prefix:{}", String::from_utf8_lossy(prefix)),
+            reason: format!("create transaction failed: {}", e),
+        })?;
+
+        let range_option = RangeOption::from((start_key.as_slice(), end_key.as_slice()));
+
+        let range =
+            txn.get_range(&range_option, 0, false)
+                .await
+                .map_err(|e| Error::StorageReadFailed {
+                    key: format!("prefix:{}", String::from_utf8_lossy(prefix)),
+                    reason: format!("range scan failed: {}", e),
+                })?;
+
+        let mut results = Vec::new();
+        for kv in range.iter() {
+            if let Some(user_key) = self.decode_user_key(actor_id, kv.key()) {
+                // Only include keys that match the prefix
+                if prefix.is_empty() || user_key.starts_with(prefix) {
+                    let value = Bytes::copy_from_slice(kv.value());
+                    results.push((user_key, value));
+                }
+            }
+        }
+
+        debug!(count = results.len(), "FDB scan_prefix complete");
+
+        // Postcondition
+        assert!(
+            results.iter().all(|(k, _)| k.len() <= ACTOR_KV_KEY_SIZE_BYTES_MAX),
+            "returned keys must be within size limit"
+        );
+
+        Ok(results)
+    }
+
     #[instrument(skip(self), fields(actor_id = %actor_id.qualified_name()))]
     async fn begin_transaction(&self, actor_id: &ActorId) -> Result<Box<dyn ActorTransaction>> {
         // Preconditions
@@ -682,6 +743,14 @@ impl ActorKV for Arc<FdbKV> {
 
     async fn list_keys(&self, actor_id: &ActorId, prefix: &[u8]) -> Result<Vec<Vec<u8>>> {
         (**self).list_keys(actor_id, prefix).await
+    }
+
+    async fn scan_prefix(
+        &self,
+        actor_id: &ActorId,
+        prefix: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Bytes)>> {
+        (**self).scan_prefix(actor_id, prefix).await
     }
 
     async fn begin_transaction(&self, actor_id: &ActorId) -> Result<Box<dyn ActorTransaction>> {
