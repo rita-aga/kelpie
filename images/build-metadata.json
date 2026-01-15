@@ -1,0 +1,10 @@
+{
+  "version": "1.0.0-dev-20260115-c7ff4b2",
+  "semver": "1.0.0-dev",
+  "build_date": "2026-01-15T13:30:25Z",
+  "git_sha": "c7ff4b2",
+  "alpine_version": "3.19",
+  "architectures": "linux/arm64",
+  "registry": "local",
+  "pushed": false
+}
