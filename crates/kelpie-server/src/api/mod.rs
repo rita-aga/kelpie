@@ -8,6 +8,7 @@ pub mod blocks;
 pub mod messages;
 pub mod standalone_blocks;
 pub mod streaming;
+pub mod teleport;
 pub mod tools;
 
 use axum::{
@@ -44,6 +45,8 @@ pub fn router(state: AppState) -> Router {
         .nest("/v1/blocks", standalone_blocks::router())
         // Tool routes
         .nest("/v1/tools", tools::router())
+        // Teleport routes
+        .nest("/v1/teleport", teleport::router())
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state)
@@ -59,6 +62,7 @@ async fn capabilities() -> Json<CapabilitiesResponse> {
             "tools".to_string(),
             "archival_memory".to_string(),
             "semantic_search".to_string(),
+            "teleport".to_string(),
         ],
         api_version: "v1".to_string(),
         llm_models: vec![

@@ -68,10 +68,7 @@ async fn test_dst_teleport_roundtrip_under_faults() {
             let sandbox_config = test_config();
 
             // Step 1: Create agent with sandbox on "source host"
-            let mut source_sandbox = env
-                .sandbox_factory
-                .create(sandbox_config.clone())
-                .await?;
+            let mut source_sandbox = env.sandbox_factory.create(sandbox_config.clone()).await?;
             source_sandbox.start().await?;
 
             let agent_id = format!("agent-{}", env.rng.next_u64());
@@ -121,10 +118,7 @@ async fn test_dst_teleport_roundtrip_under_faults() {
                                 Ok(downloaded_package) => {
                                     // Verify package integrity
                                     assert_eq!(downloaded_package.agent_id, agent_id);
-                                    assert_eq!(
-                                        downloaded_package.source_arch,
-                                        Architecture::Arm64
-                                    );
+                                    assert_eq!(downloaded_package.source_arch, Architecture::Arm64);
                                     assert_eq!(downloaded_package.kind, SnapshotKind::Teleport);
                                     assert!(
                                         downloaded_package.is_full_teleport(),
@@ -132,10 +126,8 @@ async fn test_dst_teleport_roundtrip_under_faults() {
                                     );
 
                                     // Create new sandbox on "target host"
-                                    let mut target_sandbox = env
-                                        .sandbox_factory
-                                        .create(sandbox_config.clone())
-                                        .await?;
+                                    let mut target_sandbox =
+                                        env.sandbox_factory.create(sandbox_config.clone()).await?;
 
                                     let start_result = target_sandbox.start().await;
                                     if start_result.is_ok() {
@@ -360,7 +352,10 @@ async fn test_dst_teleport_architecture_validation() {
             Ok(())
         });
 
-    assert!(result.await.is_ok(), "Architecture validation test should pass");
+    assert!(
+        result.await.is_ok(),
+        "Architecture validation test should pass"
+    );
 }
 
 // ============================================================================
@@ -411,11 +406,7 @@ async fn test_dst_teleport_concurrent_operations() {
 
                     // Establish unique state for this agent
                     sandbox
-                        .exec(
-                            "echo",
-                            &[&format!("agent-{}", i)],
-                            ExecOptions::default(),
-                        )
+                        .exec("echo", &[&format!("agent-{}", i)], ExecOptions::default())
                         .await
                         .ok()?;
 
@@ -474,7 +465,10 @@ async fn test_dst_teleport_concurrent_operations() {
             Ok(())
         });
 
-    assert!(result.await.is_ok(), "Concurrent teleport test should complete");
+    assert!(
+        result.await.is_ok(),
+        "Concurrent teleport test should complete"
+    );
 }
 
 // ============================================================================
@@ -570,12 +564,13 @@ async fn test_dst_teleport_interrupted_midway() {
                     // Upload failed (crash or fault) - verify no orphaned package
                     let packages = env.teleport_storage.list().await;
 
-                    let found_package = packages
-                        .iter()
-                        .find(|id| id.contains(&agent_id))
-                        .and_then(|id| {
-                            futures::executor::block_on(env.teleport_storage.download(id)).ok()
-                        });
+                    let found_package =
+                        packages
+                            .iter()
+                            .find(|id| id.contains(&agent_id))
+                            .and_then(|id| {
+                                futures::executor::block_on(env.teleport_storage.download(id)).ok()
+                            });
 
                     if let Some(pkg) = found_package {
                         // Package exists - it should be complete
@@ -639,20 +634,18 @@ async fn stress_test_teleport_operations() {
                     .with_vm_cpu_state(Bytes::from(format!("cpu-{}", i)))
                     .with_base_image_version("1.0.0");
 
-                    let package_id = env
-                        .teleport_storage
-                        .upload(package)
-                        .await
-                        .map_err(|e| kelpie_core::Error::Internal {
+                    let package_id = env.teleport_storage.upload(package).await.map_err(|e| {
+                        kelpie_core::Error::Internal {
                             message: e.to_string(),
-                        })?;
-                    let _downloaded = env
-                        .teleport_storage
-                        .download(&package_id)
-                        .await
-                        .map_err(|e| kelpie_core::Error::Internal {
-                            message: e.to_string(),
-                        })?;
+                        }
+                    })?;
+                    let _downloaded =
+                        env.teleport_storage
+                            .download(&package_id)
+                            .await
+                            .map_err(|e| kelpie_core::Error::Internal {
+                                message: e.to_string(),
+                            })?;
 
                     Ok(())
                 }

@@ -52,7 +52,7 @@ mod libkrun;
 pub use config::{ResourceLimits, SandboxConfig};
 pub use error::{SandboxError, SandboxResult};
 pub use exec::{ExecOptions, ExecOutput, ExitStatus};
-pub use mock::MockSandbox;
+pub use mock::{MockSandbox, MockSandboxFactory};
 pub use pool::{PoolConfig, SandboxPool};
 pub use process::{ProcessSandbox, ProcessSandboxFactory};
 pub use snapshot::{

@@ -109,10 +109,7 @@ async fn test_dst_service_send_message() {
                 "Response should have messages array"
             );
             let messages = response.get("messages").unwrap().as_array().unwrap();
-            assert!(
-                !messages.is_empty(),
-                "Messages array should not be empty"
-            );
+            assert!(!messages.is_empty(), "Messages array should not be empty");
 
             Ok(())
         })

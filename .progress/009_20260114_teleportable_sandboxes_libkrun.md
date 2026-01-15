@@ -744,7 +744,15 @@ fn stress_test_rapid_suspend_resume() {
   - [x] All tests passing with SimTeleportStorage
   - [x] Determinism verified (DST_SEED=12345: 4/10 storage successes, 3/5 concurrent successes)
   - [x] Added Clone to SimSandboxFactory for concurrent test support
-- [ ] Phase 4b: TeleportService implementation (production code - not started)
+- [x] **Phase 4b: TeleportService implementation** ✅ COMPLETE
+  - [x] TeleportStorage trait (async trait with upload/download/delete/list)
+  - [x] LocalTeleportStorage (in-memory for development/testing)
+  - [x] TeleportPackage struct with full state support
+  - [x] TeleportService (teleport_out/teleport_in operations)
+  - [x] REST API endpoints (/v1/teleport/info, /v1/teleport/packages)
+  - [x] MockSandboxFactory exported for testing
+  - [x] 7 unit tests + 5 DST tests passing
+  - [x] DST-first verified (existing tests still pass)
 - [ ] Phase 5: Base images
 - [ ] Phase 6: Integration & Stress testing (full chaos DST)
 - [ ] Phase 7: CLI
@@ -927,21 +935,48 @@ cargo fmt
 - `crates/kelpie-dst/src/sandbox.rs` - Added Clone to SimSandboxFactory
 - `crates/kelpie-dst/src/teleport.rs` - Fixed unused variable warning
 
-**Next Steps (Phase 4b - Production Implementation):**
-- Implement TeleportService trait (if needed)
-- Integrate TeleportService with kelpie-server
-- Add API endpoints for teleport operations
-- Wire up real storage backends (S3/FDB)
-- [Note: May not be needed if SimTeleportStorage is sufficient for current goals]
+**Phase 4b - Production Implementation COMPLETE (2026-01-14):**
+
+Files Created:
+- `crates/kelpie-server/src/storage/teleport.rs` - TeleportStorage trait + LocalTeleportStorage implementation
+- `crates/kelpie-server/src/service/teleport_service.rs` - TeleportService with teleport_out/teleport_in
+- `crates/kelpie-server/src/api/teleport.rs` - REST API endpoints for teleport packages
+
+Implementation Details:
+- **TeleportStorage trait** - Async trait with upload/download/delete/list operations
+- **LocalTeleportStorage** - In-memory implementation for development/testing
+- **TeleportPackage** - Full package struct with VM memory, CPU state, agent state, workspace ref
+- **Architecture validation** - ARM64/X86_64 with cross-arch checkpoint support
+- **TeleportService** - Service layer wrapping storage + sandbox factory
+  - `teleport_out()` - Snapshot agent + upload to storage
+  - `teleport_in()` - Download from storage + restore agent
+- **REST API** - Endpoints for /v1/teleport/info, /v1/teleport/packages
+- **MockSandboxFactory export** - Enabled for testing
+
+Test Results:
+- 7 unit tests in kelpie-server (teleport storage + service)
+- 5 DST tests passing (teleport_service_dst.rs)
+- Clippy: Clean
+- Formatter: Applied
+
+DST-First Verified:
+- All existing DST tests continue to pass
+- Production TeleportService works with SimTeleportStorage in DST
+- Fault injection: Upload/download failures, architecture mismatches, crash scenarios
+
+**Next Steps (Phase 5 - Base Images):**
+- Build Alpine Linux base images (multi-arch)
+- Image versioning and validation
+- Integration with libkrun (when feature enabled)
 
 **Overall Verification Status:**
-- Tests: [pending final phases]
-- Clippy: [pending final phases]
-- Formatter: [pending final phases]
-- /no-cap: [pending final phases]
-- Vision alignment: [pending final phases]
+- Tests: ✅ 12 teleport tests passing (7 unit + 5 DST)
+- Clippy: ✅ Clean
+- Formatter: ✅ Applied
+- /no-cap: [deferred to final phase]
+- Vision alignment: ✅ DST-first followed
 
-**DST Coverage (when complete):**
-- Fault types tested: [pending final phases]
-- Seeds tested: [pending final phases]
-- Determinism verified: [pending final phases]
+**DST Coverage (Phase 4b):**
+- Fault types tested: TeleportUploadFail, TeleportDownloadFail, SnapshotCreateFail, SnapshotRestoreFail, ArchMismatch
+- Seeds tested: Random + fixed 12345
+- Determinism verified: ✅ Same seed = same behavior

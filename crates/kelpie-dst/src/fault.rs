@@ -381,12 +381,17 @@ impl FaultInjectorBuilder {
     }
 
     /// Add crash faults with default probabilities
+    ///
+    /// TigerStyle: Crash faults MUST be filtered to write/transaction operations.
+    /// CrashAfterWrite should never trigger on read operations.
     pub fn with_crash_faults(self, probability: f64) -> Self {
-        self.with_fault(FaultConfig::new(FaultType::CrashAfterWrite, probability))
-            .with_fault(FaultConfig::new(
-                FaultType::CrashDuringTransaction,
-                probability,
-            ))
+        self.with_fault(
+            FaultConfig::new(FaultType::CrashAfterWrite, probability).with_filter("write"),
+        )
+        .with_fault(
+            FaultConfig::new(FaultType::CrashDuringTransaction, probability)
+                .with_filter("transaction"),
+        )
     }
 
     /// Add MCP (Model Context Protocol) faults with default probabilities

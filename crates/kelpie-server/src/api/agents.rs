@@ -193,12 +193,57 @@ async fn delete_agent(
 mod tests {
     use super::*;
     use crate::api;
+    use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use kelpie_dst::{DeterministicRng, FaultInjector, SimStorage};
+    use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
+    use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
+    use kelpie_server::service;
+    use std::sync::Arc;
     use tower::ServiceExt;
 
+    /// Mock LLM client for testing that returns simple responses
+    struct MockLlmClient;
+
+    #[async_trait]
+    impl LlmClient for MockLlmClient {
+        async fn complete(&self, _messages: Vec<LlmMessage>) -> kelpie_core::Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: "Test response".to_string(),
+                tool_calls: vec![],
+            })
+        }
+    }
+
+    /// Create a test AppState with AgentService for API testing
     async fn test_app() -> Router {
-        api::router(AppState::new())
+        // Create a minimal AgentService setup for testing
+        let llm: Arc<dyn LlmClient> = Arc::new(MockLlmClient);
+        let actor = AgentActor::new(llm);
+        let factory = Arc::new(CloneFactory::new(actor));
+
+        // Use SimStorage for testing (in-memory KV store)
+        let rng = DeterministicRng::new(42);
+        let faults = Arc::new(FaultInjector::new(rng.fork()));
+        let storage = SimStorage::new(rng.fork(), faults);
+        let kv = Arc::new(storage);
+
+        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState>::new(
+            factory,
+            kv,
+            DispatcherConfig::default(),
+        );
+        let handle = dispatcher.handle();
+
+        tokio::spawn(async move {
+            dispatcher.run().await;
+        });
+
+        let service = service::AgentService::new(handle.clone());
+        let state = AppState::with_agent_service(service, handle);
+
+        api::router(state)
     }
 
     #[tokio::test]

@@ -4,7 +4,9 @@
 
 use super::llm_trait::{LlmClient, LlmMessage, LlmToolCall};
 use super::state::AgentActorState;
-use crate::models::{AgentState, CreateAgentRequest, Message, MessageRole, ToolCall, UpdateAgentRequest, UsageStats};
+use crate::models::{
+    AgentState, CreateAgentRequest, Message, MessageRole, ToolCall, UpdateAgentRequest, UsageStats,
+};
 use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::actor::{Actor, ActorContext};
@@ -193,12 +195,19 @@ impl AgentActor {
         request: HandleMessageFullRequest,
     ) -> Result<HandleMessageFullResponse> {
         // TigerStyle: Validate preconditions
-        assert!(!request.content.is_empty(), "message content must not be empty");
+        assert!(
+            !request.content.is_empty(),
+            "message content must not be empty"
+        );
 
         // Clone agent data before any mutable operations
-        let agent = ctx.state.agent().ok_or_else(|| Error::Internal {
-            message: "Agent not created".to_string(),
-        })?.clone();
+        let agent = ctx
+            .state
+            .agent()
+            .ok_or_else(|| Error::Internal {
+                message: "Agent not created".to_string(),
+            })?
+            .clone();
 
         // 1. Create and store user message
         let user_msg = Message {

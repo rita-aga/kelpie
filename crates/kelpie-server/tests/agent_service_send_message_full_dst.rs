@@ -285,10 +285,7 @@ async fn test_dst_send_message_full_concurrent_with_faults() {
                 let agent_id_clone = agent_id.clone();
                 let handle = tokio::spawn(async move {
                     service_clone
-                        .send_message_full(
-                            &agent_id_clone,
-                            format!("Message to agent {}", idx + 1),
-                        )
+                        .send_message_full(&agent_id_clone, format!("Message to agent {}", idx + 1))
                         .await
                 });
                 handles.push(handle);
