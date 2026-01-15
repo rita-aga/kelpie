@@ -9,6 +9,7 @@ pub mod import_export;
 pub mod messages;
 pub mod standalone_blocks;
 pub mod streaming;
+pub mod summarization;
 pub mod teleport;
 pub mod tools;
 
@@ -41,7 +42,7 @@ pub fn router(state: AppState) -> Router {
         // Capabilities
         .route("/v1/capabilities", get(capabilities))
         // Agent routes
-        .nest("/v1/agents", agents::router())
+        .nest("/v1/agents", agents::router().merge(summarization::router()))
         // Standalone blocks routes (letta-code compatibility)
         .nest("/v1/blocks", standalone_blocks::router())
         // Tool routes
