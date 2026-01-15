@@ -1,13 +1,24 @@
 //! Messaging Tools for Letta Compatibility
 //!
-//! TigerStyle: Agent-to-user messaging with dual-mode support.
+//! TigerStyle: Agent-to-user messaging tools (foundation only).
 //!
 //! Implements Letta's messaging tools:
 //! - send_message: Send a message to the user
+//!
+//! Note: This is currently a foundation implementation. The tool is registered
+//! and validates input, but dual-mode support (detecting tool calls vs direct
+//! LLM response) is NOT YET IMPLEMENTED. That requires AgentActor integration.
 
 use crate::tools::{BuiltinToolHandler, UnifiedToolRegistry};
 use serde_json::{json, Value};
 use std::sync::Arc;
+
+// =============================================================================
+// TigerStyle Constants
+// =============================================================================
+
+/// Maximum message size in bytes (100 KiB)
+const MESSAGE_SIZE_BYTES_MAX: usize = 100 * 1024;
 
 /// Register messaging tools with the unified registry
 pub async fn register_messaging_tools(registry: &UnifiedToolRegistry) {
@@ -20,8 +31,13 @@ pub async fn register_messaging_tools(registry: &UnifiedToolRegistry) {
 ///
 /// This tool allows agents to explicitly send messages to users.
 /// In Letta, agents call this tool to communicate with users.
-/// In dual-mode, if the agent doesn't call this tool, we fall back
-/// to using the LLM's direct response.
+///
+/// WARNING: This is a foundation implementation only. The tool validates
+/// input and returns success, but actual message routing to users is NOT
+/// yet implemented. Dual-mode support requires AgentActor integration to:
+/// - Detect when agent calls send_message vs returns direct response
+/// - Route tool output to user instead of LLM context
+/// - Support multiple send_message calls per turn
 async fn register_send_message(registry: &UnifiedToolRegistry) {
     let handler: BuiltinToolHandler = Arc::new(|input: &Value| {
         let input = input.clone();
@@ -37,8 +53,7 @@ async fn register_send_message(registry: &UnifiedToolRegistry) {
                 return "Error: message cannot be empty".to_string();
             }
 
-            // Validate message size (max 100KB)
-            const MESSAGE_SIZE_BYTES_MAX: usize = 100 * 1024;
+            // Validate message size (uses module-level constant)
             if message.len() > MESSAGE_SIZE_BYTES_MAX {
                 return format!(
                     "Error: message too large ({} bytes, max {} bytes)",
@@ -47,8 +62,8 @@ async fn register_send_message(registry: &UnifiedToolRegistry) {
                 );
             }
 
-            // Return success - the actual message content is captured
-            // by the agent message handling logic
+            // Return success - Note: actual message routing not yet implemented
+            // TODO: Integrate with AgentActor to route this output to user
             format!("Message sent: {}", message)
         })
     });
