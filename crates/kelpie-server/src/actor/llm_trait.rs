@@ -3,8 +3,10 @@
 //! TigerStyle: Trait abstraction allows both real LLM and SimLlmClient
 
 use async_trait::async_trait;
+use futures::stream::{self, Stream};
 use kelpie_core::Result;
 use serde_json::Value;
+use std::pin::Pin;
 
 /// Chat message for LLM
 #[derive(Debug, Clone)]
@@ -28,11 +30,85 @@ pub struct LlmToolCall {
     pub input: Value,
 }
 
+/// Stream chunk from LLM streaming (Phase 7.7)
+///
+/// Represents incremental pieces of LLM response as they arrive.
+#[derive(Debug, Clone)]
+pub enum StreamChunk {
+    /// Content delta (token or partial token)
+    ContentDelta { delta: String },
+
+    /// Tool call starting
+    ToolCallStart {
+        id: String,
+        name: String,
+        input: Value,
+    },
+
+    /// Tool call argument delta (streaming tool input)
+    ToolCallDelta {
+        id: String,
+        delta: String,
+    },
+
+    /// Stream complete
+    Done { stop_reason: String },
+}
+
 /// LLM client trait - abstraction over real and simulated LLM
+///
+/// Phase 7.7: Extended with streaming support via stream_complete()
 #[async_trait]
 pub trait LlmClient: Send + Sync {
-    /// Complete a chat conversation
+    /// Complete a chat conversation (batch mode)
     async fn complete(&self, messages: Vec<LlmMessage>) -> Result<LlmResponse>;
+
+    /// Complete with streaming (Phase 7.7)
+    ///
+    /// Returns stream of chunks as they arrive from LLM.
+    /// Default implementation converts batch complete() to stream.
+    ///
+    /// # Arguments
+    /// * `messages` - Conversation history
+    ///
+    /// # Returns
+    /// Stream of StreamChunk items
+    ///
+    /// # Errors
+    /// Returns error if LLM call fails
+    async fn stream_complete(
+        &self,
+        messages: Vec<LlmMessage>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
+        // Default: convert batch to stream for backward compatibility
+        let response = self.complete(messages).await?;
+
+        // Create stream from batch response
+        let mut chunks = Vec::new();
+
+        // Add content as single delta
+        if !response.content.is_empty() {
+            chunks.push(Ok(StreamChunk::ContentDelta {
+                delta: response.content,
+            }));
+        }
+
+        // Add tool calls as ToolCallStart chunks
+        for tool_call in response.tool_calls {
+            chunks.push(Ok(StreamChunk::ToolCallStart {
+                id: tool_call.id,
+                name: tool_call.name,
+                input: tool_call.input,
+            }));
+        }
+
+        // Add done chunk
+        chunks.push(Ok(StreamChunk::Done {
+            stop_reason: "end_turn".to_string(),
+        }));
+
+        Ok(Box::pin(stream::iter(chunks)))
+    }
 }
 
 /// Adapter to use crate::llm::LlmClient with the actor LlmClient trait

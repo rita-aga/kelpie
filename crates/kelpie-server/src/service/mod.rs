@@ -9,13 +9,15 @@ pub use teleport_service::{
     TeleportPackageInfo, TeleportService,
 };
 
-use crate::actor::{HandleMessageFullRequest, HandleMessageFullResponse};
+use crate::actor::{HandleMessageFullRequest, HandleMessageFullResponse, StreamChunk};
 use crate::models::{AgentState, CreateAgentRequest, StreamEvent, UpdateAgentRequest};
 use bytes::Bytes;
+use futures::stream::Stream;
 use kelpie_core::actor::ActorId;
 use kelpie_core::{Error, Result};
 use kelpie_runtime::DispatcherHandle;
 use serde_json::Value;
+use std::pin::Pin;
 use tokio::sync::mpsc;
 
 /// AgentService - service layer for agent operations
@@ -401,5 +403,67 @@ impl AgentService {
             .await?;
 
         Ok(())
+    }
+
+    /// Stream message with LLM token streaming (Phase 7.7)
+    ///
+    /// Returns stream of chunks as LLM generates response.
+    /// Currently uses default stream_complete which converts batch to stream.
+    ///
+    /// # Arguments
+    /// * `agent_id` - Agent ID string
+    /// * `content` - Message content from user
+    ///
+    /// # Returns
+    /// Stream of StreamChunk items
+    ///
+    /// # Errors
+    /// - Invalid agent_id
+    /// - Agent not found/created
+    /// - LLM call failure
+    ///
+    /// # TigerStyle
+    /// - For now, uses send_message_full then converts to stream
+    /// - Phase 7.8 will add true streaming via actor operation
+    pub async fn stream_message(
+        &self,
+        agent_id: &str,
+        content: String,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
+        // Phase 7.7: Simple implementation using batch then convert to stream
+        // This makes tests pass while we implement true streaming in Phase 7.8
+
+        // Call batch send_message_full
+        let response = self.send_message_full(agent_id, content).await?;
+
+        // Convert response to stream chunks
+        let mut chunks = Vec::new();
+
+        // Add each message's content as deltas
+        for message in response.messages {
+            if !message.content.is_empty() {
+                chunks.push(Ok(StreamChunk::ContentDelta {
+                    delta: message.content,
+                }));
+            }
+
+            // Add tool calls if present
+            if let Some(tool_calls) = message.tool_calls {
+                for tool_call in tool_calls {
+                    chunks.push(Ok(StreamChunk::ToolCallStart {
+                        id: tool_call.id,
+                        name: tool_call.name,
+                        input: tool_call.arguments,
+                    }));
+                }
+            }
+        }
+
+        // Add done chunk
+        chunks.push(Ok(StreamChunk::Done {
+            stop_reason: "end_turn".to_string(),
+        }));
+
+        Ok(Box::pin(futures::stream::iter(chunks)))
     }
 }
