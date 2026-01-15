@@ -1,13 +1,16 @@
 //! Messaging Tools for Letta Compatibility
 //!
-//! TigerStyle: Agent-to-user messaging tools (foundation only).
+//! TigerStyle: Agent-to-user messaging with dual-mode support.
 //!
 //! Implements Letta's messaging tools:
 //! - send_message: Send a message to the user
 //!
-//! Note: This is currently a foundation implementation. The tool is registered
-//! and validates input, but dual-mode support (detecting tool calls vs direct
-//! LLM response) is NOT YET IMPLEMENTED. That requires AgentActor integration.
+//! Dual-mode operation:
+//! - If agent calls send_message("text"), that text is used as the response
+//! - If agent doesn't call send_message, LLM's direct response is used
+//! - Supports multiple send_message calls per turn (concatenated with newlines)
+//!
+//! Implementation: AgentActor's extract_send_message_content() handles routing.
 
 use crate::tools::{BuiltinToolHandler, UnifiedToolRegistry};
 use serde_json::{json, Value};
@@ -32,12 +35,10 @@ pub async fn register_messaging_tools(registry: &UnifiedToolRegistry) {
 /// This tool allows agents to explicitly send messages to users.
 /// In Letta, agents call this tool to communicate with users.
 ///
-/// WARNING: This is a foundation implementation only. The tool validates
-/// input and returns success, but actual message routing to users is NOT
-/// yet implemented. Dual-mode support requires AgentActor integration to:
-/// - Detect when agent calls send_message vs returns direct response
-/// - Route tool output to user instead of LLM context
-/// - Support multiple send_message calls per turn
+/// Dual-mode operation (implemented in AgentActor):
+/// - Agent calls send_message("text") -> extract_send_message_content() uses that text
+/// - Agent doesn't call send_message -> falls back to direct LLM response
+/// - Multiple send_message calls -> concatenated with newlines
 async fn register_send_message(registry: &UnifiedToolRegistry) {
     let handler: BuiltinToolHandler = Arc::new(|input: &Value| {
         let input = input.clone();
@@ -62,8 +63,8 @@ async fn register_send_message(registry: &UnifiedToolRegistry) {
                 );
             }
 
-            // Return success - Note: actual message routing not yet implemented
-            // TODO: Integrate with AgentActor to route this output to user
+            // Return confirmation - AgentActor's extract_send_message_content()
+            // handles actual message routing to user
             format!("Message sent: {}", message)
         })
     });

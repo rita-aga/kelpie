@@ -355,13 +355,16 @@ impl AgentActor {
             response = self.llm.complete(llm_messages.clone()).await?;
         }
 
-        // 5. Store final assistant response
+        // 5. Store final assistant response (with dual-mode send_message support)
+        // Check if agent used send_message tool in final iteration
+        let final_content = self.extract_send_message_content(&response, ctx).await?;
+
         let assistant_msg = Message {
             id: uuid::Uuid::new_v4().to_string(),
             agent_id: ctx.id.id().to_string(),
             message_type: "assistant_message".to_string(),
             role: MessageRole::Assistant,
-            content: response.content.clone(),
+            content: final_content,
             tool_call_id: None,
             tool_calls: None,
             created_at: chrono::Utc::now(),
@@ -378,6 +381,51 @@ impl AgentActor {
                 total_tokens: total_prompt_tokens + total_completion_tokens,
             },
         })
+    }
+
+    /// Extract send_message content for dual-mode support
+    ///
+    /// If the LLM response includes send_message tool calls, extract and return
+    /// the message content from those calls. Supports multiple send_message calls
+    /// in one turn (concatenates them). If no send_message calls, returns the
+    /// direct LLM response content as fallback.
+    ///
+    /// This implements Letta's dual-mode messaging:
+    /// - Agent calls send_message("text") -> use that text
+    /// - Agent doesn't call send_message -> use LLM's direct response
+    async fn extract_send_message_content(
+        &self,
+        response: &super::llm_trait::LlmResponse,
+        _ctx: &ActorContext<AgentActorState>,
+    ) -> Result<String> {
+        // Find all send_message tool calls
+        let send_message_calls: Vec<&LlmToolCall> = response
+            .tool_calls
+            .iter()
+            .filter(|tc| tc.name == "send_message")
+            .collect();
+
+        // If no send_message calls, use direct LLM response (fallback mode)
+        if send_message_calls.is_empty() {
+            return Ok(response.content.clone());
+        }
+
+        // Extract message content from send_message calls
+        let mut messages = Vec::new();
+        for tool_call in send_message_calls {
+            if let Some(message) = tool_call.input.get("message").and_then(|v| v.as_str()) {
+                messages.push(message.to_string());
+            }
+        }
+
+        // Concatenate multiple send_message calls with newlines
+        if messages.is_empty() {
+            // send_message was called but no valid message parameter - return direct response
+            Ok(response.content.clone())
+        } else {
+            // Use send_message content (join multiple calls with newlines)
+            Ok(messages.join("\n\n"))
+        }
     }
 
     /// Execute a tool call (Phase 6.8)
@@ -405,6 +453,19 @@ impl AgentActor {
                 // Placeholder - return simulated result
                 // TODO: Integrate with kelpie-sandbox in Phase 8
                 Ok(format!("Executed: {}", command))
+            }
+            "send_message" => {
+                // Extract message parameter
+                let message = tool_call
+                    .input
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| Error::Internal {
+                        message: "send_message tool requires 'message' parameter".to_string(),
+                    })?;
+
+                // Return confirmation - actual message routing handled by extract_send_message_content
+                Ok(format!("Message sent: {}", message))
             }
             _ => Err(Error::Internal {
                 message: format!("Unknown tool: {}", tool_call.name),
@@ -573,5 +634,129 @@ impl Actor for AgentActor {
         ctx.kv_set(state_key, &state_bytes).await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::actor::llm_trait::{LlmResponse, LlmToolCall};
+    use kelpie_core::actor::{ActorId, NoOpKV};
+    use serde_json::json;
+
+    /// Test dual-mode: send_message tool call content is extracted
+    #[tokio::test]
+    async fn test_extract_send_message_content_single() {
+        let actor = AgentActor::new(Arc::new(MockLlm));
+
+        let response = LlmResponse {
+            content: "This should be ignored".to_string(),
+            tool_calls: vec![LlmToolCall {
+                id: "call_1".to_string(),
+                name: "send_message".to_string(),
+                input: json!({
+                    "message": "Hello from send_message!"
+                }),
+            }],
+        };
+
+        let kv = Box::new(NoOpKV);
+        let actor_id = ActorId::new("test", "agent1").unwrap();
+        let state = AgentActorState::default();
+        let ctx = ActorContext::new(actor_id, state, kv);
+
+        let result = actor.extract_send_message_content(&response, &ctx).await.unwrap();
+        assert_eq!(result, "Hello from send_message!");
+    }
+
+    /// Test dual-mode: multiple send_message calls are concatenated
+    #[tokio::test]
+    async fn test_extract_send_message_content_multiple() {
+        let actor = AgentActor::new(Arc::new(MockLlm));
+
+        let response = LlmResponse {
+            content: "This should be ignored".to_string(),
+            tool_calls: vec![
+                LlmToolCall {
+                    id: "call_1".to_string(),
+                    name: "send_message".to_string(),
+                    input: json!({
+                        "message": "First message"
+                    }),
+                },
+                LlmToolCall {
+                    id: "call_2".to_string(),
+                    name: "send_message".to_string(),
+                    input: json!({
+                        "message": "Second message"
+                    }),
+                },
+            ],
+        };
+
+        let kv = Box::new(NoOpKV);
+        let actor_id = ActorId::new("test", "agent1").unwrap();
+        let state = AgentActorState::default();
+        let ctx = ActorContext::new(actor_id, state, kv);
+
+        let result = actor.extract_send_message_content(&response, &ctx).await.unwrap();
+        assert_eq!(result, "First message\n\nSecond message");
+    }
+
+    /// Test dual-mode: no send_message call uses direct LLM response (fallback)
+    #[tokio::test]
+    async fn test_extract_send_message_content_fallback() {
+        let actor = AgentActor::new(Arc::new(MockLlm));
+
+        let response = LlmResponse {
+            content: "Direct LLM response".to_string(),
+            tool_calls: vec![LlmToolCall {
+                id: "call_1".to_string(),
+                name: "shell".to_string(),
+                input: json!({
+                    "command": "ls"
+                }),
+            }],
+        };
+
+        let kv = Box::new(NoOpKV);
+        let actor_id = ActorId::new("test", "agent1").unwrap();
+        let state = AgentActorState::default();
+        let ctx = ActorContext::new(actor_id, state, kv);
+
+        let result = actor.extract_send_message_content(&response, &ctx).await.unwrap();
+        assert_eq!(result, "Direct LLM response");
+    }
+
+    /// Test dual-mode: empty tool calls uses direct response
+    #[tokio::test]
+    async fn test_extract_send_message_content_no_tools() {
+        let actor = AgentActor::new(Arc::new(MockLlm));
+
+        let response = LlmResponse {
+            content: "Direct response, no tools".to_string(),
+            tool_calls: vec![],
+        };
+
+        let kv = Box::new(NoOpKV);
+        let actor_id = ActorId::new("test", "agent1").unwrap();
+        let state = AgentActorState::default();
+        let ctx = ActorContext::new(actor_id, state, kv);
+
+        let result = actor.extract_send_message_content(&response, &ctx).await.unwrap();
+        assert_eq!(result, "Direct response, no tools");
+    }
+
+    /// Mock LLM for testing
+    struct MockLlm;
+
+    #[async_trait]
+    impl LlmClient for MockLlm {
+        async fn complete(&self, _messages: Vec<LlmMessage>) -> Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: "Mock response".to_string(),
+                tool_calls: vec![],
+            })
+        }
     }
 }
