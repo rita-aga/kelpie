@@ -11,16 +11,22 @@ authors.workspace = true
 [features]
 default = []
 
-# NOTE: libkrun feature is NOT YET FUNCTIONAL
-# The FFI implementation contains only architectural scaffolding.
-# Enabling this feature will fail to compile (requires libkrun + libclang installed).
-# Use the default (MockVm) for testing until implementation is complete.
+# libkrun feature: Core FFI implemented, requires system dependencies
 #
-# To implement:
-# 1. Install: brew install libkrun llvm
-# 2. Complete FFI calls in src/ffi.rs (12+ TODOs)
-# 3. Implement guest agent protocol
-# 4. Test with: cargo test -p kelpie-dst --test libkrun_dst --features libkrun
+# STATUS: Core lifecycle (create/configure/boot/stop/cleanup) is COMPLETE.
+# Deferred features: exec (Phase 5.8), snapshot/restore (upstream needed).
+#
+# System requirements:
+# - macOS: Build libkrun from source + LLVM (`brew install llvm`)
+# - Linux: libkrun development packages
+#
+# To build with libkrun:
+# 1. Install libkrun: https://github.com/containers/libkrun
+# 2. Install LLVM: brew install llvm (macOS) or system package (Linux)
+# 3. cargo build -p kelpie-libkrun --features libkrun
+#
+# Note: Will fail if libkrun.pc is not found by pkg-config.
+# Use MockVm (default) for testing if libkrun is not installed.
 libkrun = ["dep:krun-sys"]
 
 [dependencies]

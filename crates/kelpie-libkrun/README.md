@@ -2,20 +2,32 @@
 
 Safe Rust bindings for libkrun microVM library.
 
-## Status: NOT YET FUNCTIONAL ⚠️
+## Status: PARTIALLY IMPLEMENTED ⚙️
 
-**The `libkrun` feature is currently NOT IMPLEMENTED.**
+**The `libkrun` feature has core FFI implemented but requires system dependencies.**
 
 This crate contains:
 - ✅ Working `MockVm` implementation (default, for testing)
-- ❌ Incomplete `LibkrunVm` implementation (architectural scaffolding only)
+- ⚙️ Partially complete `LibkrunVm` implementation
 
-The FFI code in `src/ffi.rs` contains type definitions and structure but does NOT have working implementations. All functions either:
-- Return `"not yet implemented"` errors
-- Are commented out as TODOs
-- Use placeholder values
+**Implementation Status:**
 
-**Do not enable the `libkrun` feature** - it will fail to compile and provide no functionality.
+| Feature | Status | Notes |
+|---------|--------|-------|
+| VM Creation | ✅ Complete | `krun_create_ctx()` |
+| VM Configuration | ✅ Complete | `krun_set_vm_config()`, `krun_set_root()` |
+| VM Boot | ✅ Complete | `krun_start_enter()` |
+| VM Stop | ✅ Complete | Graceful shutdown |
+| Resource Cleanup | ✅ Complete | `krun_free_ctx()` in Drop |
+| Pause/Resume | ❌ Not Supported | libkrun 1.x limitation |
+| Command Execution | 🚧 Deferred | Requires Phase 5.8 (guest agent protocol) |
+| Snapshot/Restore | 🚧 Deferred | Requires QEMU monitor or upstream feature |
+
+**The core lifecycle (create → configure → boot → stop → cleanup) is fully implemented with real krun-sys FFI calls.**
+
+**System Requirements:**
+- macOS: libkrun + LLVM (must build from source)
+- Linux: libkrun development packages
 
 ## Usage (MockVm)
 
@@ -41,42 +53,48 @@ async fn main() {
 }
 ```
 
-## Implementing libkrun Support
+## Completing libkrun Integration
 
-To complete the libkrun integration:
+Core FFI is implemented. To finish integration:
 
 ### 1. Install System Dependencies
 
 ```bash
 # macOS
-brew install libkrun llvm
+# libkrun is not available via Homebrew - must build from source
+git clone https://github.com/containers/libkrun.git
+cd libkrun
+make
+sudo make install
+
+brew install llvm
 
 # Linux
 # Build libkrun from source: https://github.com/containers/libkrun
+# Or use package manager if available
 ```
 
-### 2. Complete FFI Implementation
+### 2. FFI Implementation Status
 
-Edit `src/ffi.rs` and complete the 12+ TODO sections:
+Core lifecycle is **COMPLETE** ✅:
+- ✅ `krun_create_ctx()` - VM creation
+- ✅ `krun_set_vm_config()` - CPU/memory config
+- ✅ `krun_set_root()` - Root disk setup
+- ✅ `krun_start_enter()` - VM boot
+- ✅ `krun_free_ctx()` - Resource cleanup
+- ✅ State machine transitions
 
-- [ ] Line 99: Uncomment `krun_create_ctx()` call
-- [ ] Line 142: Uncomment `krun_set_vm_config()` call
-- [ ] Line 158: Uncomment `krun_set_root()` call
-- [ ] Line 184: Uncomment `krun_start_enter()` call
-- [ ] Line 195: Implement guest agent readiness check
-- [ ] Line 215: Implement guest agent communication protocol (virtio-vsock/Unix socket)
-- [ ] Line 235: Uncomment `krun_free_ctx()` in Drop impl
-- [ ] Line 291: Implement graceful VM shutdown
-- [ ] Line 309: Implement pause (if libkrun supports it)
-- [ ] Line 326: Implement resume (if libkrun supports it)
-- [ ] Line 361: Implement snapshot (memory dump)
-- [ ] Line 376: Implement restore (memory load)
+**Deferred to Phase 5.8** (guest agent protocol):
+- 🚧 Guest agent readiness check (virtio-vsock health check)
+- 🚧 Command execution protocol (JSON-RPC over virtio-vsock)
 
-### 3. Remove Compile Guard
+**Requires upstream support**:
+- ❌ Pause/resume (libkrun 1.x limitation, no API)
+- ❌ Snapshot/restore (needs QEMU monitor integration)
 
-Remove or comment out the `compile_error!` in `src/ffi.rs` line 32-38.
+See detailed implementation notes in `src/ffi.rs` for each deferred feature.
 
-### 4. Test Against DST Suite
+### 3. Test Against DST Suite
 
 Run the 21 DST tests from Phase 5.7.2:
 
