@@ -12,7 +12,7 @@ authors.workspace = true
 default = []
 otel = ["kelpie-core/otel", "prometheus"]
 dst = ["kelpie-tools/dst", "dep:kelpie-dst"]
-fdb = ["dep:foundationdb"]
+fdb = ["dep:foundationdb", "kelpie-storage/fdb"]
 
 [dependencies]
 # Core kelpie crates

@@ -78,12 +78,67 @@ impl StorageError {
                 | StorageError::ReadFailed { .. }
                 | StorageError::TransactionConflict { .. }
                 | StorageError::ConnectionFailed { .. }
-        )
+        ) || {
+            #[cfg(feature = "dst")]
+            {
+                matches!(self, StorageError::FaultInjected { .. })
+            }
+            #[cfg(not(feature = "dst"))]
+            {
+                false
+            }
+        }
     }
 
     /// Check if this error indicates data not found
     pub fn is_not_found(&self) -> bool {
         matches!(self, StorageError::NotFound { .. })
+    }
+}
+
+// Convert StorageError to kelpie_core::Error for DST tests
+impl From<StorageError> for kelpie_core::Error {
+    fn from(err: StorageError) -> Self {
+        match err {
+            StorageError::NotFound { resource, id } => {
+                if resource == "agent" {
+                    kelpie_core::Error::ActorNotFound { id }
+                } else {
+                    kelpie_core::Error::Internal {
+                        message: format!("{} not found: {}", resource, id),
+                    }
+                }
+            }
+            StorageError::AlreadyExists { resource, id } => kelpie_core::Error::Internal {
+                message: format!("{} with id {} already exists", resource, id),
+            },
+            StorageError::WriteFailed { operation, reason } => kelpie_core::Error::Internal {
+                message: format!("Write failed: {} - {}", operation, reason),
+            },
+            StorageError::ReadFailed { operation, reason } => kelpie_core::Error::Internal {
+                message: format!("Read failed: {} - {}", operation, reason),
+            },
+            StorageError::TransactionConflict { reason } => kelpie_core::Error::Internal {
+                message: format!("Transaction conflict: {}", reason),
+            },
+            StorageError::SerializationFailed { reason } => kelpie_core::Error::Internal {
+                message: format!("Serialization failed: {}", reason),
+            },
+            StorageError::DeserializationFailed { reason } => kelpie_core::Error::Internal {
+                message: format!("Deserialization failed: {}", reason),
+            },
+            StorageError::ConnectionFailed { reason } => kelpie_core::Error::Internal {
+                message: format!("Connection failed: {}", reason),
+            },
+            StorageError::LimitExceeded { resource, limit } => kelpie_core::Error::Internal {
+                message: format!("{} limit exceeded: {}", resource, limit),
+            },
+            #[cfg(feature = "dst")]
+            StorageError::FaultInjected { operation } => kelpie_core::Error::Internal {
+                message: format!("Fault injected: {}", operation),
+            },
+            StorageError::Internal { message } => kelpie_core::Error::Internal { message },
+        }
     }
 }
 

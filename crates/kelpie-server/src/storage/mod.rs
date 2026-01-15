@@ -4,7 +4,13 @@
 //!
 //! This module provides the `AgentStorage` trait that abstracts over:
 //! - SimStorage (in-memory, fault-injectable for DST)
-//! - FdbStorage (FoundationDB for production)
+//! - FdbAgentRegistry (FoundationDB via FdbKV for production)
+//!
+//! # Unified Architecture
+//!
+//! Both implementations use the same underlying abstraction:
+//! - Registry: Global agent metadata (special actor "system/agent_registry")
+//! - Per-agent: Blocks/sessions/messages (regular actors "agents/{id}")
 //!
 //! # Key Design Decisions
 //!
@@ -16,9 +22,14 @@ mod teleport;
 mod traits;
 mod types;
 
+#[cfg(feature = "fdb")]
+mod fdb;
+
 #[cfg(feature = "dst")]
 mod sim;
 
+#[cfg(feature = "fdb")]
+pub use fdb::FdbAgentRegistry;
 pub use teleport::{
     Architecture, LocalTeleportStorage, SnapshotKind, TeleportPackage, TeleportStorage,
     TeleportStorageError, TeleportStorageResult, TELEPORT_ID_LENGTH_BYTES_MAX,

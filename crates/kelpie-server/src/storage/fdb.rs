@@ -1,23 +1,25 @@
-//! FoundationDB Storage Backend
+//! FoundationDB Agent Registry
 //!
-//! TigerStyle: Production-ready, linearizable storage for agent persistence.
+//! TigerStyle: AgentStorage implementation using FdbKV for unified storage.
 //!
-//! # Key Space Design
+//! Architecture:
+//! - Global agent registry stored as special actor ("system/agent_registry")
+//! - Per-agent data stored in actor's own KV space
+//! - Single FDB connection shared across all storage operations
 //!
-//! Keys are encoded using FDB tuple layer:
+//! Key Space (via FdbKV/ActorKV):
 //! ```text
-//! ("kelpie", "agents", agent_id, "metadata")           -> AgentMetadata
-//! ("kelpie", "agents", agent_id, "blocks", label)      -> Block
-//! ("kelpie", "sessions", agent_id, session_id)         -> SessionState
-//! ("kelpie", "messages", agent_id, timestamp_ms)       -> Message
+//! Registry: ("kelpie", "actors", "system", "agent_registry", "data", "agent-123")
+//! Per-agent: ("kelpie", "actors", "agents", "agent-123", "data", "blocks")
+//! Per-agent: ("kelpie", "actors", "agents", "agent-123", "data", "session:xyz")
+//! Per-agent: ("kelpie", "actors", "agents", "agent-123", "data", "message:0")
 //! ```
 
 use async_trait::async_trait;
-use foundationdb::api::FdbApiBuilder;
-use foundationdb::tuple::Subspace;
-use foundationdb::{Database, RangeOption, Transaction as FdbTransaction};
+use bytes::Bytes;
+use kelpie_core::{ActorId, Result as CoreResult};
+use kelpie_storage::FdbKV;
 use std::sync::Arc;
-use tracing::{debug, instrument, warn};
 
 use crate::models::{Block, Message};
 
@@ -28,207 +30,158 @@ use super::types::{AgentMetadata, SessionState};
 // Constants (TigerStyle)
 // =============================================================================
 
-/// Key prefix for Kelpie data
-const KEY_PREFIX_KELPIE: &str = "kelpie";
+/// Registry actor ID for global agent metadata
+const REGISTRY_NAMESPACE: &str = "system";
+const REGISTRY_ID: &str = "agent_registry";
 
-/// Key prefix for agents
-const KEY_PREFIX_AGENTS: &str = "agents";
-
-/// Key prefix for sessions
-const KEY_PREFIX_SESSIONS: &str = "sessions";
-
-/// Key prefix for messages
-const KEY_PREFIX_MESSAGES: &str = "messages";
-
-/// Subkey for agent metadata
-const SUBKEY_METADATA: &str = "metadata";
-
-/// Subkey for blocks
-const SUBKEY_BLOCKS: &str = "blocks";
-
-/// Maximum retry attempts for retriable errors
-const TRANSACTION_RETRY_COUNT_MAX: usize = 5;
-
-/// Transaction timeout in milliseconds
-const TRANSACTION_TIMEOUT_MS: u64 = 5000;
+/// Key prefixes for per-agent data
+const KEY_PREFIX_BLOCKS: &[u8] = b"blocks";
+const KEY_PREFIX_SESSION: &[u8] = b"session:";
+const KEY_PREFIX_MESSAGE: &[u8] = b"message:";
+const KEY_PREFIX_MESSAGE_COUNT: &[u8] = b"message_count";
 
 // =============================================================================
-// FdbStorage Implementation
+// FdbAgentRegistry Implementation
 // =============================================================================
 
-/// FoundationDB storage backend for agent persistence
+/// FDB-backed agent registry using FdbKV
 ///
-/// TigerStyle: Linearizable storage with explicit key encoding.
-#[derive(Clone)]
-pub struct FdbStorage {
-    /// FDB database handle (connection pooled internally)
-    db: Arc<Database>,
-    /// Subspace for agent data
-    agents_subspace: Subspace,
-    /// Subspace for session data
-    sessions_subspace: Subspace,
-    /// Subspace for message data
-    messages_subspace: Subspace,
+/// Uses FdbKV under the hood:
+/// - Registry: Special actor ("system/agent_registry") stores agent metadata
+/// - Per-agent: Regular actors ("agents/{id}") store blocks/sessions/messages
+pub struct FdbAgentRegistry {
+    /// Shared FDB KV instance
+    fdb: Arc<FdbKV>,
 }
 
-impl FdbStorage {
-    /// Connect to FoundationDB cluster
+impl FdbAgentRegistry {
+    /// Create new FDB agent registry
     ///
     /// # Arguments
-    ///
-    /// * `cluster_file` - Path to FDB cluster file. If None, uses default location.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if connection fails or FDB network cannot be started.
-    #[instrument(skip_all, fields(cluster_file))]
-    pub async fn connect(cluster_file: Option<&str>) -> Result<Self, StorageError> {
-        // Boot FDB network (must be called once per process)
-        let network_builder = FdbApiBuilder::default()
-            .build()
-            .map_err(|e| StorageError::ConnectionFailed {
-                reason: format!("FDB API build failed: {}", e),
-            })?;
-
-        // Start network thread (non-blocking after first call)
-        unsafe {
-            network_builder
-                .boot()
-                .map_err(|e| StorageError::ConnectionFailed {
-                    reason: format!("FDB network boot failed: {}", e),
-                })?;
-        }
-
-        // Open database
-        let db = Database::new(cluster_file).map_err(|e| StorageError::ConnectionFailed {
-            reason: format!("FDB database open failed: {}", e),
-        })?;
-
-        // Create subspaces for different data types
-        let agents_subspace = Subspace::from((KEY_PREFIX_KELPIE, KEY_PREFIX_AGENTS));
-        let sessions_subspace = Subspace::from((KEY_PREFIX_KELPIE, KEY_PREFIX_SESSIONS));
-        let messages_subspace = Subspace::from((KEY_PREFIX_KELPIE, KEY_PREFIX_MESSAGES));
-
-        debug!("Connected to FoundationDB");
-
-        Ok(Self {
-            db: Arc::new(db),
-            agents_subspace,
-            sessions_subspace,
-            messages_subspace,
-        })
+    /// * `fdb` - Shared FdbKV instance
+    pub fn new(fdb: Arc<FdbKV>) -> Self {
+        Self { fdb }
     }
 
-    /// Execute a transaction with retry logic
-    async fn run_transaction<F, T>(&self, mut f: F) -> Result<T, StorageError>
-    where
-        F: FnMut(&FdbTransaction) -> Result<T, StorageError>,
-    {
-        let mut attempts = 0;
-
-        loop {
-            let txn = self
-                .db
-                .create_trx()
-                .map_err(|e| StorageError::Internal {
-                    message: format!("Failed to create transaction: {}", e),
-                })?;
-
-            // Set transaction timeout
-            txn.set_option(foundationdb::options::TransactionOption::Timeout(
-                TRANSACTION_TIMEOUT_MS as i32,
-            ))
-            .map_err(|e| StorageError::Internal {
-                message: format!("Failed to set timeout: {}", e),
-            })?;
-
-            match f(&txn) {
-                Ok(result) => {
-                    // Commit the transaction
-                    txn.commit().await.map_err(|e| {
-                        if e.is_retryable() {
-                            StorageError::TransactionConflict {
-                                reason: e.to_string(),
-                            }
-                        } else {
-                            StorageError::WriteFailed {
-                                operation: "commit".to_string(),
-                                reason: e.to_string(),
-                            }
-                        }
-                    })?;
-                    return Ok(result);
-                }
-                Err(e) if e.is_retriable() && attempts < TRANSACTION_RETRY_COUNT_MAX => {
-                    attempts += 1;
-                    warn!(attempt = attempts, error = %e, "Retrying transaction");
-                    continue;
-                }
-                Err(e) => return Err(e),
-            }
-        }
+    /// Get registry actor ID (for storing agent metadata)
+    fn registry_actor_id() -> CoreResult<ActorId> {
+        ActorId::new(REGISTRY_NAMESPACE, REGISTRY_ID)
     }
 
-    /// Serialize a value to JSON bytes
-    fn serialize<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, StorageError> {
-        serde_json::to_vec(value).map_err(|e| StorageError::SerializationFailed {
-            reason: e.to_string(),
-        })
+    /// Get actor ID for an agent
+    fn agent_actor_id(agent_id: &str) -> CoreResult<ActorId> {
+        ActorId::new("agents", agent_id)
     }
 
-    /// Deserialize JSON bytes to a value
-    fn deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, StorageError> {
+    /// Serialize metadata to bytes
+    fn serialize_metadata(agent: &AgentMetadata) -> Result<Bytes, StorageError> {
+        serde_json::to_vec(agent)
+            .map(Bytes::from)
+            .map_err(|e| StorageError::SerializationFailed {
+                reason: e.to_string(),
+            })
+    }
+
+    /// Deserialize metadata from bytes
+    fn deserialize_metadata(bytes: &Bytes) -> Result<AgentMetadata, StorageError> {
         serde_json::from_slice(bytes).map_err(|e| StorageError::DeserializationFailed {
             reason: e.to_string(),
         })
     }
+
+    /// Serialize blocks to bytes
+    fn serialize_blocks(blocks: &[Block]) -> Result<Bytes, StorageError> {
+        serde_json::to_vec(blocks)
+            .map(Bytes::from)
+            .map_err(|e| StorageError::SerializationFailed {
+                reason: e.to_string(),
+            })
+    }
+
+    /// Deserialize blocks from bytes
+    fn deserialize_blocks(bytes: &Bytes) -> Result<Vec<Block>, StorageError> {
+        serde_json::from_slice(bytes).map_err(|e| StorageError::DeserializationFailed {
+            reason: e.to_string(),
+        })
+    }
+
+    /// Serialize session to bytes
+    fn serialize_session(session: &SessionState) -> Result<Bytes, StorageError> {
+        serde_json::to_vec(session)
+            .map(Bytes::from)
+            .map_err(|e| StorageError::SerializationFailed {
+                reason: e.to_string(),
+            })
+    }
+
+    /// Deserialize session from bytes
+    fn deserialize_session(bytes: &Bytes) -> Result<SessionState, StorageError> {
+        serde_json::from_slice(bytes).map_err(|e| StorageError::DeserializationFailed {
+            reason: e.to_string(),
+        })
+    }
+
+    /// Serialize message to bytes
+    fn serialize_message(message: &Message) -> Result<Bytes, StorageError> {
+        serde_json::to_vec(message)
+            .map(Bytes::from)
+            .map_err(|e| StorageError::SerializationFailed {
+                reason: e.to_string(),
+            })
+    }
+
+    /// Deserialize message from bytes
+    fn deserialize_message(bytes: &Bytes) -> Result<Message, StorageError> {
+        serde_json::from_slice(bytes).map_err(|e| StorageError::DeserializationFailed {
+            reason: e.to_string(),
+        })
+    }
+
+    /// Convert kelpie_core::Error to StorageError
+    fn map_core_error(err: kelpie_core::Error) -> StorageError {
+        StorageError::Internal {
+            message: err.to_string(),
+        }
+    }
 }
 
 #[async_trait]
-impl AgentStorage for FdbStorage {
+impl AgentStorage for FdbAgentRegistry {
     // =========================================================================
-    // Agent Metadata Operations
+    // Agent Metadata Operations (Global Registry)
     // =========================================================================
 
     async fn save_agent(&self, agent: &AgentMetadata) -> Result<(), StorageError> {
         // Preconditions
         assert!(!agent.id.is_empty(), "agent id cannot be empty");
+        assert!(!agent.name.is_empty(), "agent name cannot be empty");
 
-        let key = self
-            .agents_subspace
-            .pack(&(&agent.id, SUBKEY_METADATA));
-        let value = Self::serialize(agent)?;
+        let registry_id = Self::registry_actor_id().map_err(Self::map_core_error)?;
+        let key = agent.id.as_bytes();
+        let value = Self::serialize_metadata(agent)?;
 
-        self.run_transaction(|txn| {
-            txn.set(&key, &value);
-            Ok(())
-        })
-        .await
+        self.fdb
+            .set(&registry_id, key, &value)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
     }
 
     async fn load_agent(&self, id: &str) -> Result<Option<AgentMetadata>, StorageError> {
         // Preconditions
         assert!(!id.is_empty(), "agent id cannot be empty");
 
-        let key = self.agents_subspace.pack(&(id, SUBKEY_METADATA));
+        let registry_id = Self::registry_actor_id().map_err(Self::map_core_error)?;
+        let key = id.as_bytes();
 
-        let txn = self
-            .db
-            .create_trx()
-            .map_err(|e| StorageError::Internal {
-                message: format!("Failed to create transaction: {}", e),
-            })?;
-
-        match txn.get(&key, false).await {
-            Ok(Some(value)) => {
-                let agent = Self::deserialize(&value)?;
-                Ok(Some(agent))
+        match self.fdb.get(&registry_id, key).await {
+            Ok(Some(bytes)) => {
+                let metadata = Self::deserialize_metadata(&bytes)?;
+                Ok(Some(metadata))
             }
             Ok(None) => Ok(None),
-            Err(e) => Err(StorageError::ReadFailed {
-                operation: "load_agent".to_string(),
-                reason: e.to_string(),
-            }),
+            Err(e) => Err(Self::map_core_error(e)),
         }
     }
 
@@ -236,111 +189,88 @@ impl AgentStorage for FdbStorage {
         // Preconditions
         assert!(!id.is_empty(), "agent id cannot be empty");
 
-        // Delete agent metadata
-        let metadata_key = self.agents_subspace.pack(&(id, SUBKEY_METADATA));
+        // Delete from registry
+        let registry_id = Self::registry_actor_id().map_err(Self::map_core_error)?;
+        let key = id.as_bytes();
 
-        // Delete all blocks for agent
-        let blocks_start = self.agents_subspace.pack(&(id, SUBKEY_BLOCKS, ""));
-        let blocks_end = self.agents_subspace.pack(&(id, SUBKEY_BLOCKS, "\xff"));
+        self.fdb
+            .delete(&registry_id, key)
+            .await
+            .map_err(Self::map_core_error)?;
 
-        // Delete all sessions for agent
-        let sessions_start = self.sessions_subspace.pack(&(id, ""));
-        let sessions_end = self.sessions_subspace.pack(&(id, "\xff"));
+        // Delete per-agent data
+        let agent_id = Self::agent_actor_id(id).map_err(Self::map_core_error)?;
 
-        // Delete all messages for agent
-        let messages_start = self.messages_subspace.pack(&(id, 0u64));
-        let messages_end = self.messages_subspace.pack(&(id, u64::MAX));
+        // Delete blocks
+        self.fdb
+            .delete(&agent_id, KEY_PREFIX_BLOCKS)
+            .await
+            .map_err(Self::map_core_error)?;
 
-        self.run_transaction(|txn| {
-            txn.clear(&metadata_key);
-            txn.clear_range(&blocks_start, &blocks_end);
-            txn.clear_range(&sessions_start, &sessions_end);
-            txn.clear_range(&messages_start, &messages_end);
-            Ok(())
-        })
-        .await
+        // Delete message count
+        self.fdb
+            .delete(&agent_id, KEY_PREFIX_MESSAGE_COUNT)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        // TODO: Delete all sessions (need scan + delete loop)
+        // TODO: Delete all messages (need scan + delete loop)
+
+        Ok(())
     }
 
     async fn list_agents(&self) -> Result<Vec<AgentMetadata>, StorageError> {
-        let start = self.agents_subspace.pack(&("", SUBKEY_METADATA));
-        let end = self.agents_subspace.pack(&("\xff", SUBKEY_METADATA));
+        let registry_id = Self::registry_actor_id().map_err(Self::map_core_error)?;
 
-        let txn = self
-            .db
-            .create_trx()
-            .map_err(|e| StorageError::Internal {
-                message: format!("Failed to create transaction: {}", e),
-            })?;
-
-        let range = RangeOption::from((start.as_slice(), end.as_slice()));
-        let results = txn.get_range(&range, 1000, false).await.map_err(|e| {
-            StorageError::ReadFailed {
-                operation: "list_agents".to_string(),
-                reason: e.to_string(),
-            }
-        })?;
+        // Scan all keys in registry (empty prefix = all keys)
+        let kvs = self
+            .fdb
+            .scan_prefix(&registry_id, b"")
+            .await
+            .map_err(Self::map_core_error)?;
 
         let mut agents = Vec::new();
-        for kv in results {
-            let agent: AgentMetadata = Self::deserialize(kv.value())?;
-            agents.push(agent);
+        for (_key, value) in kvs {
+            let metadata = Self::deserialize_metadata(&value)?;
+            agents.push(metadata);
         }
+
+        // Sort by ID for deterministic ordering
+        agents.sort_by(|a, b| a.id.cmp(&b.id));
 
         Ok(agents)
     }
 
     // =========================================================================
-    // Block Operations
+    // Core Memory Block Operations (Per-Agent)
     // =========================================================================
 
     async fn save_blocks(&self, agent_id: &str, blocks: &[Block]) -> Result<(), StorageError> {
+        // Preconditions
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
 
-        self.run_transaction(|txn| {
-            for block in blocks {
-                let key = self
-                    .agents_subspace
-                    .pack(&(agent_id, SUBKEY_BLOCKS, &block.label));
-                let value = Self::serialize(block)?;
-                txn.set(&key, &value);
-            }
-            Ok(())
-        })
-        .await
+        let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
+        let value = Self::serialize_blocks(blocks)?;
+
+        self.fdb
+            .set(&actor_id, KEY_PREFIX_BLOCKS, &value)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
     }
 
     async fn load_blocks(&self, agent_id: &str) -> Result<Vec<Block>, StorageError> {
+        // Preconditions
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
 
-        let start = self
-            .agents_subspace
-            .pack(&(agent_id, SUBKEY_BLOCKS, ""));
-        let end = self
-            .agents_subspace
-            .pack(&(agent_id, SUBKEY_BLOCKS, "\xff"));
+        let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
 
-        let txn = self
-            .db
-            .create_trx()
-            .map_err(|e| StorageError::Internal {
-                message: format!("Failed to create transaction: {}", e),
-            })?;
-
-        let range = RangeOption::from((start.as_slice(), end.as_slice()));
-        let results = txn.get_range(&range, 100, false).await.map_err(|e| {
-            StorageError::ReadFailed {
-                operation: "load_blocks".to_string(),
-                reason: e.to_string(),
-            }
-        })?;
-
-        let mut blocks = Vec::new();
-        for kv in results {
-            let block: Block = Self::deserialize(kv.value())?;
-            blocks.push(block);
+        match self.fdb.get(&actor_id, KEY_PREFIX_BLOCKS).await {
+            Ok(Some(bytes)) => Self::deserialize_blocks(&bytes),
+            Ok(None) => Ok(Vec::new()),
+            Err(e) => Err(Self::map_core_error(e)),
         }
-
-        Ok(blocks)
     }
 
     async fn update_block(
@@ -349,44 +279,30 @@ impl AgentStorage for FdbStorage {
         label: &str,
         value: &str,
     ) -> Result<Block, StorageError> {
+        // Preconditions
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
         assert!(!label.is_empty(), "label cannot be empty");
 
-        let key = self
-            .agents_subspace
-            .pack(&(agent_id, SUBKEY_BLOCKS, label));
+        // Load existing blocks
+        let mut blocks = self.load_blocks(agent_id).await?;
 
-        // Load existing block or create new one
-        let txn = self
-            .db
-            .create_trx()
-            .map_err(|e| StorageError::Internal {
-                message: format!("Failed to create transaction: {}", e),
-            })?;
+        // Find and update block
+        for block in &mut blocks {
+            if block.label == label {
+                block.value = value.to_string();
+                block.updated_at = chrono::Utc::now();
 
-        let mut block = match txn.get(&key, false).await {
-            Ok(Some(existing)) => Self::deserialize(&existing)?,
-            Ok(None) => Block::new(label, ""),
-            Err(e) => {
-                return Err(StorageError::ReadFailed {
-                    operation: "update_block".to_string(),
-                    reason: e.to_string(),
-                })
+                // Save updated blocks
+                self.save_blocks(agent_id, &blocks).await?;
+
+                return Ok(block.clone());
             }
-        };
+        }
 
-        // Update value
-        block.value = value.to_string();
-
-        // Save updated block
-        let serialized = Self::serialize(&block)?;
-        self.run_transaction(|txn| {
-            txn.set(&key, &serialized);
-            Ok(())
+        Err(StorageError::NotFound {
+            resource: "block",
+            id: label.to_string(),
         })
-        .await?;
-
-        Ok(block)
     }
 
     async fn append_block(
@@ -395,67 +311,53 @@ impl AgentStorage for FdbStorage {
         label: &str,
         content: &str,
     ) -> Result<Block, StorageError> {
+        // Preconditions
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
         assert!(!label.is_empty(), "label cannot be empty");
 
-        let key = self
-            .agents_subspace
-            .pack(&(agent_id, SUBKEY_BLOCKS, label));
+        // Load existing blocks
+        let mut blocks = self.load_blocks(agent_id).await?;
 
-        // Load existing block or create new one
-        let txn = self
-            .db
-            .create_trx()
-            .map_err(|e| StorageError::Internal {
-                message: format!("Failed to create transaction: {}", e),
-            })?;
+        // Find existing block or create new
+        for block in &mut blocks {
+            if block.label == label {
+                block.value.push_str(content);
+                block.updated_at = chrono::Utc::now();
 
-        let mut block = match txn.get(&key, false).await {
-            Ok(Some(existing)) => Self::deserialize(&existing)?,
-            Ok(None) => Block::new(label, ""),
-            Err(e) => {
-                return Err(StorageError::ReadFailed {
-                    operation: "append_block".to_string(),
-                    reason: e.to_string(),
-                })
+                // Save updated blocks
+                self.save_blocks(agent_id, &blocks).await?;
+
+                return Ok(block.clone());
             }
-        };
-
-        // Append content
-        if !block.value.is_empty() {
-            block.value.push('\n');
         }
-        block.value.push_str(content);
 
-        // Save updated block
-        let serialized = Self::serialize(&block)?;
-        self.run_transaction(|txn| {
-            txn.set(&key, &serialized);
-            Ok(())
-        })
-        .await?;
+        // Create new block
+        let block = Block::new(label, content);
+        blocks.push(block.clone());
+        self.save_blocks(agent_id, &blocks).await?;
 
         Ok(block)
     }
 
     // =========================================================================
-    // Session Operations
+    // Session State Operations (Per-Agent)
     // =========================================================================
 
     async fn save_session(&self, state: &SessionState) -> Result<(), StorageError> {
+        // Preconditions
         assert!(!state.agent_id.is_empty(), "agent id cannot be empty");
         assert!(!state.session_id.is_empty(), "session id cannot be empty");
 
-        let key = self
-            .sessions_subspace
-            .pack(&(&state.agent_id, &state.session_id));
-        let value = Self::serialize(state)?;
+        let actor_id = Self::agent_actor_id(&state.agent_id).map_err(Self::map_core_error)?;
+        let key = format!("{}{}", String::from_utf8_lossy(KEY_PREFIX_SESSION), state.session_id);
+        let value = Self::serialize_session(state)?;
 
-        self.run_transaction(|txn| {
-            txn.set(&key, &value);
-            Ok(())
-        })
-        .await
+        self.fdb
+            .set(&actor_id, key.as_bytes(), &value)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
     }
 
     async fn load_session(
@@ -463,68 +365,55 @@ impl AgentStorage for FdbStorage {
         agent_id: &str,
         session_id: &str,
     ) -> Result<Option<SessionState>, StorageError> {
+        // Preconditions
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
         assert!(!session_id.is_empty(), "session id cannot be empty");
 
-        let key = self.sessions_subspace.pack(&(agent_id, session_id));
+        let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
+        let key = format!("{}{}", String::from_utf8_lossy(KEY_PREFIX_SESSION), session_id);
 
-        let txn = self
-            .db
-            .create_trx()
-            .map_err(|e| StorageError::Internal {
-                message: format!("Failed to create transaction: {}", e),
-            })?;
-
-        match txn.get(&key, false).await {
-            Ok(Some(value)) => {
-                let state = Self::deserialize(&value)?;
-                Ok(Some(state))
+        match self.fdb.get(&actor_id, key.as_bytes()).await {
+            Ok(Some(bytes)) => {
+                let session = Self::deserialize_session(&bytes)?;
+                Ok(Some(session))
             }
             Ok(None) => Ok(None),
-            Err(e) => Err(StorageError::ReadFailed {
-                operation: "load_session".to_string(),
-                reason: e.to_string(),
-            }),
+            Err(e) => Err(Self::map_core_error(e)),
         }
     }
 
     async fn delete_session(&self, agent_id: &str, session_id: &str) -> Result<(), StorageError> {
+        // Preconditions
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
         assert!(!session_id.is_empty(), "session id cannot be empty");
 
-        let key = self.sessions_subspace.pack(&(agent_id, session_id));
+        let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
+        let key = format!("{}{}", String::from_utf8_lossy(KEY_PREFIX_SESSION), session_id);
 
-        self.run_transaction(|txn| {
-            txn.clear(&key);
-            Ok(())
-        })
-        .await
+        self.fdb
+            .delete(&actor_id, key.as_bytes())
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
     }
 
     async fn list_sessions(&self, agent_id: &str) -> Result<Vec<SessionState>, StorageError> {
+        // Preconditions
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
 
-        let start = self.sessions_subspace.pack(&(agent_id, ""));
-        let end = self.sessions_subspace.pack(&(agent_id, "\xff"));
+        let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
 
-        let txn = self
-            .db
-            .create_trx()
-            .map_err(|e| StorageError::Internal {
-                message: format!("Failed to create transaction: {}", e),
-            })?;
-
-        let range = RangeOption::from((start.as_slice(), end.as_slice()));
-        let results = txn.get_range(&range, 100, false).await.map_err(|e| {
-            StorageError::ReadFailed {
-                operation: "list_sessions".to_string(),
-                reason: e.to_string(),
-            }
-        })?;
+        // Scan all keys with session prefix
+        let kvs = self
+            .fdb
+            .scan_prefix(&actor_id, KEY_PREFIX_SESSION)
+            .await
+            .map_err(Self::map_core_error)?;
 
         let mut sessions = Vec::new();
-        for kv in results {
-            let session: SessionState = Self::deserialize(kv.value())?;
+        for (_key, value) in kvs {
+            let session = Self::deserialize_session(&value)?;
             sessions.push(session);
         }
 
@@ -532,24 +421,54 @@ impl AgentStorage for FdbStorage {
     }
 
     // =========================================================================
-    // Message Operations
+    // Message Operations (Per-Agent)
     // =========================================================================
 
     async fn append_message(&self, agent_id: &str, message: &Message) -> Result<(), StorageError> {
+        // Preconditions
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
 
-        // Use timestamp as part of key for ordering
-        let timestamp_ms = message.created_at.timestamp_millis() as u64;
-        let key = self
-            .messages_subspace
-            .pack(&(agent_id, timestamp_ms, &message.id));
-        let value = Self::serialize(message)?;
+        let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
 
-        self.run_transaction(|txn| {
-            txn.set(&key, &value);
-            Ok(())
-        })
-        .await
+        // Get current message count
+        let count = match self.fdb.get(&actor_id, KEY_PREFIX_MESSAGE_COUNT).await {
+            Ok(Some(bytes)) => {
+                let count_str = String::from_utf8(bytes.to_vec()).map_err(|e| {
+                    StorageError::DeserializationFailed {
+                        reason: e.to_string(),
+                    }
+                })?;
+                count_str.parse::<u64>().map_err(|e| {
+                    StorageError::DeserializationFailed {
+                        reason: e.to_string(),
+                    }
+                })?
+            }
+            Ok(None) => 0,
+            Err(e) => return Err(Self::map_core_error(e)),
+        };
+
+        // Store message at index
+        let message_key = format!("{}{}", String::from_utf8_lossy(KEY_PREFIX_MESSAGE), count);
+        let message_value = Self::serialize_message(message)?;
+
+        self.fdb
+            .set(&actor_id, message_key.as_bytes(), &message_value)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        // Increment count
+        let new_count = count + 1;
+        self.fdb
+            .set(
+                &actor_id,
+                KEY_PREFIX_MESSAGE_COUNT,
+                &Bytes::from(new_count.to_string()),
+            )
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
     }
 
     async fn load_messages(
@@ -557,37 +476,47 @@ impl AgentStorage for FdbStorage {
         agent_id: &str,
         limit: usize,
     ) -> Result<Vec<Message>, StorageError> {
+        // Preconditions
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
         assert!(limit > 0, "limit must be positive");
 
-        // Read messages in reverse order (most recent first)
-        let start = self.messages_subspace.pack(&(agent_id, 0u64, ""));
-        let end = self.messages_subspace.pack(&(agent_id, u64::MAX, "\xff"));
+        let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
 
-        let txn = self
-            .db
-            .create_trx()
-            .map_err(|e| StorageError::Internal {
-                message: format!("Failed to create transaction: {}", e),
-            })?;
+        // Get message count
+        let count = match self.fdb.get(&actor_id, KEY_PREFIX_MESSAGE_COUNT).await {
+            Ok(Some(bytes)) => {
+                let count_str = String::from_utf8(bytes.to_vec()).map_err(|e| {
+                    StorageError::DeserializationFailed {
+                        reason: e.to_string(),
+                    }
+                })?;
+                count_str.parse::<u64>().map_err(|e| {
+                    StorageError::DeserializationFailed {
+                        reason: e.to_string(),
+                    }
+                })?
+            }
+            Ok(None) => return Ok(Vec::new()),
+            Err(e) => return Err(Self::map_core_error(e)),
+        };
 
-        let range = RangeOption::from((start.as_slice(), end.as_slice()));
-        let results = txn
-            .get_range(&range, limit as i32, true) // reverse order
-            .await
-            .map_err(|e| StorageError::ReadFailed {
-                operation: "load_messages".to_string(),
-                reason: e.to_string(),
-            })?;
+        // Calculate range (most recent messages)
+        let start_idx = count.saturating_sub(limit as u64);
 
         let mut messages = Vec::new();
-        for kv in results {
-            let message: Message = Self::deserialize(kv.value())?;
-            messages.push(message);
+        for i in start_idx..count {
+            let message_key = format!("{}{}", String::from_utf8_lossy(KEY_PREFIX_MESSAGE), i);
+            match self.fdb.get(&actor_id, message_key.as_bytes()).await {
+                Ok(Some(bytes)) => {
+                    let message = Self::deserialize_message(&bytes)?;
+                    messages.push(message);
+                }
+                Ok(None) => {
+                    // Message not found - skip
+                }
+                Err(e) => return Err(Self::map_core_error(e)),
+            }
         }
-
-        // Reverse to get chronological order
-        messages.reverse();
 
         Ok(messages)
     }
@@ -597,70 +526,80 @@ impl AgentStorage for FdbStorage {
         agent_id: &str,
         since_ms: u64,
     ) -> Result<Vec<Message>, StorageError> {
+        // Preconditions
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
 
-        let start = self.messages_subspace.pack(&(agent_id, since_ms, ""));
-        let end = self.messages_subspace.pack(&(agent_id, u64::MAX, "\xff"));
+        // Load all messages and filter by timestamp
+        // TODO: Optimize with secondary index
+        let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
 
-        let txn = self
-            .db
-            .create_trx()
-            .map_err(|e| StorageError::Internal {
-                message: format!("Failed to create transaction: {}", e),
-            })?;
-
-        let range = RangeOption::from((start.as_slice(), end.as_slice()));
-        let results = txn.get_range(&range, 1000, false).await.map_err(|e| {
-            StorageError::ReadFailed {
-                operation: "load_messages_since".to_string(),
-                reason: e.to_string(),
-            }
-        })?;
+        let kvs = self
+            .fdb
+            .scan_prefix(&actor_id, KEY_PREFIX_MESSAGE)
+            .await
+            .map_err(Self::map_core_error)?;
 
         let mut messages = Vec::new();
-        for kv in results {
-            let message: Message = Self::deserialize(kv.value())?;
-            messages.push(message);
+        for (_key, value) in kvs {
+            let message = Self::deserialize_message(&value)?;
+            if message.created_at.timestamp_millis() as u64 > since_ms {
+                messages.push(message);
+            }
         }
 
         Ok(messages)
     }
 
     async fn count_messages(&self, agent_id: &str) -> Result<usize, StorageError> {
+        // Preconditions
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
 
-        let start = self.messages_subspace.pack(&(agent_id, 0u64, ""));
-        let end = self.messages_subspace.pack(&(agent_id, u64::MAX, "\xff"));
+        let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
 
-        let txn = self
-            .db
-            .create_trx()
-            .map_err(|e| StorageError::Internal {
-                message: format!("Failed to create transaction: {}", e),
-            })?;
-
-        let range = RangeOption::from((start.as_slice(), end.as_slice()));
-        let results = txn.get_range(&range, 10000, false).await.map_err(|e| {
-            StorageError::ReadFailed {
-                operation: "count_messages".to_string(),
-                reason: e.to_string(),
+        match self.fdb.get(&actor_id, KEY_PREFIX_MESSAGE_COUNT).await {
+            Ok(Some(bytes)) => {
+                let count_str = String::from_utf8(bytes.to_vec()).map_err(|e| {
+                    StorageError::DeserializationFailed {
+                        reason: e.to_string(),
+                    }
+                })?;
+                let count = count_str.parse::<usize>().map_err(|e| {
+                    StorageError::DeserializationFailed {
+                        reason: e.to_string(),
+                    }
+                })?;
+                Ok(count)
             }
-        })?;
-
-        Ok(results.len())
+            Ok(None) => Ok(0),
+            Err(e) => Err(Self::map_core_error(e)),
+        }
     }
 
     async fn delete_messages(&self, agent_id: &str) -> Result<(), StorageError> {
+        // Preconditions
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
 
-        let start = self.messages_subspace.pack(&(agent_id, 0u64, ""));
-        let end = self.messages_subspace.pack(&(agent_id, u64::MAX, "\xff"));
+        let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
 
-        self.run_transaction(|txn| {
-            txn.clear_range(&start, &end);
-            Ok(())
-        })
-        .await
+        // Get message count
+        let count = self.count_messages(agent_id).await?;
+
+        // Delete all message keys
+        for i in 0..count {
+            let message_key = format!("{}{}", String::from_utf8_lossy(KEY_PREFIX_MESSAGE), i);
+            self.fdb
+                .delete(&actor_id, message_key.as_bytes())
+                .await
+                .map_err(Self::map_core_error)?;
+        }
+
+        // Reset count
+        self.fdb
+            .set(&actor_id, KEY_PREFIX_MESSAGE_COUNT, &Bytes::from("0"))
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
     }
 
     // =========================================================================
@@ -672,33 +611,57 @@ impl AgentStorage for FdbStorage {
         session: &SessionState,
         message: Option<&Message>,
     ) -> Result<(), StorageError> {
+        // Preconditions
         assert!(!session.agent_id.is_empty(), "agent id cannot be empty");
         assert!(!session.session_id.is_empty(), "session id cannot be empty");
 
-        let session_key = self
-            .sessions_subspace
-            .pack(&(&session.agent_id, &session.session_id));
-        let session_value = Self::serialize(session)?;
+        // Save session
+        self.save_session(session).await?;
 
-        let message_data = if let Some(msg) = message {
-            let timestamp_ms = msg.created_at.timestamp_millis() as u64;
-            let key = self
-                .messages_subspace
-                .pack(&(&session.agent_id, timestamp_ms, &msg.id));
-            let value = Self::serialize(msg)?;
-            Some((key, value))
-        } else {
-            None
-        };
+        // Append message if provided
+        if let Some(msg) = message {
+            self.append_message(&session.agent_id, msg).await?;
+        }
 
-        // Atomic transaction: save session and message together
-        self.run_transaction(|txn| {
-            txn.set(&session_key, &session_value);
-            if let Some((key, value)) = &message_data {
-                txn.set(key, value);
-            }
-            Ok(())
-        })
-        .await
+        // TODO: Use FDB transaction for atomicity
+        // Currently these are separate operations
+        // Need to expose begin_transaction() on FdbKV
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::AgentType;
+
+    #[test]
+    fn test_registry_actor_id() {
+        let id = FdbAgentRegistry::registry_actor_id().unwrap();
+        assert_eq!(id.namespace(), "system");
+        assert_eq!(id.id(), "agent_registry");
+    }
+
+    #[test]
+    fn test_agent_actor_id() {
+        let id = FdbAgentRegistry::agent_actor_id("test-agent").unwrap();
+        assert_eq!(id.namespace(), "agents");
+        assert_eq!(id.id(), "test-agent");
+    }
+
+    #[test]
+    fn test_metadata_serialization() {
+        let agent = AgentMetadata::new(
+            "test-123".to_string(),
+            "Test Agent".to_string(),
+            AgentType::MemgptAgent,
+        );
+
+        let bytes = FdbAgentRegistry::serialize_metadata(&agent).unwrap();
+        let deserialized = FdbAgentRegistry::deserialize_metadata(&bytes).unwrap();
+
+        assert_eq!(agent.id, deserialized.id);
+        assert_eq!(agent.name, deserialized.name);
     }
 }

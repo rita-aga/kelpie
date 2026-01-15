@@ -42,6 +42,11 @@ struct Cli {
     /// Enable verbose logging
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
+
+    /// FoundationDB cluster file path (enables FDB storage)
+    #[cfg(feature = "fdb")]
+    #[arg(long)]
+    fdb_cluster_file: Option<String>,
 }
 
 #[tokio::main]
@@ -79,12 +84,47 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid bind address '{}': {}", cli.bind, e))?;
 
-    // Create application state with Prometheus registry (if available)
+    // Initialize storage backend (if configured)
+    #[cfg(feature = "fdb")]
+    let storage = if let Some(ref cluster_file) = cli.fdb_cluster_file {
+        use kelpie_storage::FdbKV;
+        use kelpie_server::storage::FdbAgentRegistry;
+
+        tracing::info!("Connecting to FoundationDB: {}", cluster_file);
+        let fdb_kv = FdbKV::connect(Some(cluster_file))
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to FDB: {}", e))?;
+
+        let registry = FdbAgentRegistry::new(Arc::new(fdb_kv));
+        tracing::info!("FDB storage initialized");
+        Some(Arc::new(registry) as Arc<dyn kelpie_server::storage::AgentStorage>)
+    } else {
+        tracing::info!("Running in-memory mode (no persistence)");
+        None
+    };
+
+    #[cfg(not(feature = "fdb"))]
+    let storage: Option<Arc<dyn kelpie_server::storage::AgentStorage>> = {
+        tracing::info!("Running in-memory mode (no persistence)");
+        None
+    };
+
+    // Create application state
     #[cfg(feature = "otel")]
-    let state = AppState::with_registry(_telemetry_guard.registry());
+    let state = if let Some(storage) = storage {
+        let mut state = AppState::with_storage(storage);
+        state.set_prometheus_registry(_telemetry_guard.registry().cloned());
+        state
+    } else {
+        AppState::with_registry(_telemetry_guard.registry())
+    };
 
     #[cfg(not(feature = "otel"))]
-    let state = AppState::new();
+    let state = if let Some(storage) = storage {
+        AppState::with_storage(storage)
+    } else {
+        AppState::new()
+    };
 
     // Register builtin tools
     register_builtin_tools(&state).await;
