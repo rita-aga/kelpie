@@ -111,6 +111,14 @@ pub enum LibkrunError {
     #[error("libkrun FFI error: {reason}")]
     FfiError { reason: String },
 
+    /// libkrun context creation failed
+    #[error("libkrun context creation failed: {reason}")]
+    ContextCreationFailed { reason: String },
+
+    /// VM configuration failed
+    #[error("VM configuration failed: {reason}")]
+    ConfigurationFailed { reason: String },
+
     /// libkrun not available
     #[error("libkrun not available: compiled without libkrun feature")]
     LibkrunNotAvailable,

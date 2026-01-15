@@ -59,7 +59,7 @@ pub use config::{VmConfig, VmConfigBuilder};
 pub use error::{LibkrunError, LibkrunResult};
 pub use snapshot::{VmSnapshot, VmSnapshotMetadata};
 pub use traits::{ExecOptions as VmExecOptions, ExecOutput as VmExecOutput, VmInstance, VmState};
-pub use virtio_fs::{VirtioFsMount, VirtioFsConfig};
+pub use virtio_fs::{VirtioFsConfig, VirtioFsMount};
 
 #[cfg(feature = "libkrun")]
 pub use ffi::LibkrunVm;

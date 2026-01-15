@@ -603,3 +603,119 @@ These tests define the **behavioral contract** that real libkrun implementation 
 **Next Step:** Phase 3 - Implement real libkrun FFI to satisfy this contract
 
 ---
+
+## Phase 3 Status: FFI Architecture Complete (Pending Real libkrun)
+
+**Date:** 2026-01-15 11:15
+**Status:** ARCHITECTURE COMPLETE, BLOCKED ON SYSTEM DEPENDENCIES
+
+### What Was Built
+
+Created complete FFI architecture in `kelpie-libkrun/src/ffi.rs`:
+
+**Safe Wrapper Pattern:**
+```rust
+pub struct LibkrunVm {
+    id: String,
+    config: VmConfig,
+    state: VmState,
+    ctx_id: i32,  // libkrun context
+}
+
+impl VmInstance for LibkrunVm {
+    async fn start(&mut self) -> LibkrunResult<()>;
+    async fn exec(&self, cmd: &str, args: &[&str]) -> LibkrunResult<ExecOutput>;
+    async fn snapshot(&self) -> LibkrunResult<VmSnapshot>;
+    // ... all trait methods
+}
+```
+
+**Key Design Decisions:**
+1. **Use krun-sys crate** instead of writing custom bindgen
+   - Leverages existing bindings: [krun-sys v1.10.1](https://crates.io/crates/krun-sys)
+   - libkrun C API: [containers/libkrun](https://github.com/containers/libkrun)
+   - Context-based API: `krun_create_ctx()` → configure → `krun_start_enter()`
+
+2. **RAII resource management** via Drop trait
+   - Context automatically freed when LibkrunVm drops
+   - No manual cleanup required
+
+3. **TigerStyle safety** throughout:
+   - All FFI calls marked with `unsafe` blocks
+   - SAFETY comments explain preconditions (placeholder TODOs)
+   - Assertions on state transitions (2+ per function)
+
+### What's Incomplete (Requires Real libkrun)
+
+**Blocked TODOs in ffi.rs:**
+- Line 64: `krun_create_ctx()` call (currently returns -1 placeholder)
+- Line 77: `krun_set_vm_config()` call
+- Line 87: `krun_set_root()` call
+- Line 102: `krun_start_enter()` call
+- Line 124: Guest agent communication (virtio-vsock/Unix socket)
+- Line 193: `krun_free_ctx()` in Drop impl
+- Line 256: Pause/resume calls
+- Line 273: Snapshot/restore implementation
+
+**System Dependencies Required:**
+```bash
+# To build with libkrun feature:
+cargo build -p kelpie-libkrun --features libkrun
+
+# Current error:
+# error: failed to run custom build command for `krun-sys v1.10.1`
+# Caused by: dyld: Library not loaded: @rpath/libclang.dylib
+
+# Required:
+# 1. Install libkrun (brew install libkrun or build from source)
+# 2. Install libclang (brew install llvm or xcode-select --install)
+```
+
+### Compilation Status
+
+✅ **Without libkrun feature** (using MockVm):
+```bash
+$ cargo build -p kelpie-libkrun
+   Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.40s
+```
+
+❌ **With libkrun feature** (requires system deps):
+```bash
+$ cargo build -p kelpie-libkrun --features libkrun
+error: Library not loaded: @rpath/libclang.dylib
+```
+
+### Testing Strategy
+
+The FFI code follows the **behavioral contract** from Phase 2 (21 tests). Once libkrun is installed:
+
+1. **Run DST tests with libkrun feature:**
+   ```bash
+   cargo test -p kelpie-dst --test libkrun_dst --features libkrun
+   ```
+   
+2. **Expected behavior:**
+   - Tests will use real LibkrunVm instead of SimSandbox
+   - Should satisfy same behavioral contract
+   - Determinism will be "behavioral" (outcomes) not "bit-for-bit"
+
+3. **Debugging failed tests:**
+   ```bash
+   DST_SEED=<seed> cargo test -p kelpie-dst --features libkrun --test libkrun_dst <test_name>
+   ```
+
+### Next Steps (When libkrun Available)
+
+1. **Install system dependencies** (libkrun, libclang)
+2. **Complete TODOs in ffi.rs** (uncomment krun-sys calls, test)
+3. **Implement guest agent communication** (virtio-vsock protocol)
+4. **Run Phase 2 tests against real libkrun** (validate behavioral contract)
+5. **Fix bugs found by DST** (iterate until all 21 tests pass)
+
+### Sources
+
+- libkrun repository: https://github.com/containers/libkrun
+- krun-sys crate: https://lib.rs/crates/krun-sys
+- krun-sys on crates.io: https://crates.io/crates/krun-sys
+
+---
