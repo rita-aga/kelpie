@@ -35,6 +35,12 @@ WORKDIR /build
 # Stage 2: Runtime Image
 FROM alpine:${ALPINE_VERSION}
 
+# Re-declare build args for this stage (required for labels)
+ARG VERSION
+ARG BUILD_DATE
+ARG GIT_SHA
+ARG ALPINE_VERSION
+
 # Image metadata
 LABEL org.opencontainers.image.title="Kelpie Base Image"
 LABEL org.opencontainers.image.description="Minimal Alpine Linux VM image for Kelpie sandboxes"
