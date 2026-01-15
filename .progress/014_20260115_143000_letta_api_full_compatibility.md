@@ -86,6 +86,56 @@ agent = client.agents.create(
 
 ---
 
+## Architecture & Capability Levels
+
+### The Kelpie Advantage: Isolation + Capability
+
+**Critical insight from research:** Isolation does NOT mean restricted capability. Kelpie can provide Claude Code-level "omnipotent" access (SSH to EC2, Docker, full filesystem) while maintaining superior VM-based isolation.
+
+**Related Documentation:**
+- **`.progress/CAPABILITY_LEVELS.md`** - Comprehensive guide on configurable capability levels (Level 0: Isolated → Level 4: Omnipotent)
+- **`.progress/ARCHITECTURE_COMPARISON.md`** - Kelpie vs Letta architecture comparison
+- **`.progress/SANDBOXING_STRATEGY.md`** - Double sandboxing strategy (Option A)
+- **`.progress/CODING_AGENTS_COMPARISON.md`** - Comparison with Claude Code, Letta Code, Clawdbot
+
+### Capability Levels Summary
+
+| Level | Use Case | Network | SSH Keys | Docker | Agent Isolation |
+|-------|----------|---------|----------|--------|-----------------|
+| **L0: Isolated** | Single project dev | ❌ None | ❌ No | ❌ No | ✅ VM |
+| **L1: Network** | Git push, npm install | ✅ Allowlist | ❌ No | ❌ No | ✅ VM |
+| **L2: SSH** | DevOps, EC2 deployment | ✅ Allowlist | ✅ Read-only | ❌ No | ✅ VM |
+| **L3: Docker** | Container development | ✅ Allowlist | ✅ Read-only | ✅ Yes | ✅ VM |
+| **L4: Omnipotent** | Trusted agents, sysadmin | ✅ Full | ✅ Full | ✅ Yes | ✅ VM |
+
+**Key points:**
+1. **Remote access = same as Claude Code:** When agent SSHs to EC2, Kelpie has IDENTICAL access to Claude Code (both use SSH with same permissions)
+2. **Local isolation = better than Claude Code:** Agent runs in VM, not on host - crash isolated, resource limited, multi-project isolated
+3. **Configurable:** Start with Level 0 (maximum security), grant capabilities as needed
+4. **Default:** Phase 0.5 implements Level 0-1, other levels added incrementally based on user needs
+
+### Why This Matters for Letta Compatibility
+
+**Letta agents typically need Level 1 (Network Access):**
+- Push to GitHub repos
+- Install npm/pip packages
+- Call external APIs (within tool code)
+- Web search (prebuilt tool)
+
+**For users migrating from Letta:**
+- Start with Level 1 configuration (network + git)
+- Gradually add capabilities (SSH, Docker) if needed
+- Still get BETTER isolation than Letta (agents in VMs vs in-process)
+
+**For "Claude Code on Kelpie" users:**
+- Use Level 4 configuration (full host access)
+- Get same capabilities + better crash isolation
+- VM contains failures (doesn't crash host)
+
+See **`.progress/CAPABILITY_LEVELS.md`** for detailed configuration examples, security scenarios, and migration paths from Claude Code/Letta.
+
+---
+
 ## Options & Decisions [REQUIRED]
 
 ### Decision 1: Path Compatibility Strategy
@@ -255,6 +305,8 @@ Layer 2 (Process): Agent ↔ Tool isolation
 ```
 
 **This is non-negotiable.** No cheating.
+
+**See also:** `.progress/CAPABILITY_LEVELS.md` - Comprehensive guide on how Kelpie can support Claude Code-level "omnipotent" access (SSH to EC2, Docker, etc.) while maintaining superior VM-based isolation.
 
 ---
 
