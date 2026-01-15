@@ -14,13 +14,14 @@ This crate contains:
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| VM Creation | ✅ Complete | `krun_create_ctx()` |
+| VM Creation | ✅ Complete | `krun_create_ctx()` - allocates VM context |
 | VM Configuration | ✅ Complete | `krun_set_vm_config()`, `krun_set_root()` |
-| VM Boot | ✅ Complete | `krun_start_enter()` |
-| VM Stop | ✅ Complete | Graceful shutdown |
-| Resource Cleanup | ✅ Complete | `krun_free_ctx()` in Drop |
-| Pause/Resume | ❌ Not Supported | libkrun 1.x limitation |
-| Command Execution | 🚧 Deferred | Requires Phase 5.8 (guest agent protocol) |
+| VM Boot (Process Start) | ✅ Complete | `krun_start_enter()` - starts VM process |
+| Guest Agent Readiness | 🚧 Deferred | Health check deferred to Phase 5.8 (boot returns when process starts, not when guest ready) |
+| VM Stop | ✅ Complete | State transition (context freed in Drop) |
+| Resource Cleanup | ✅ Complete | `krun_free_ctx()` in Drop trait |
+| Pause/Resume | ❌ Not Supported | libkrun 1.x limitation (no API) |
+| Command Execution | 🚧 Deferred | Requires Phase 5.8 (guest agent protocol via virtio-vsock) |
 | Snapshot/Restore | 🚧 Deferred | Requires QEMU monitor or upstream feature |
 
 **The core lifecycle (create → configure → boot → stop → cleanup) is fully implemented with real krun-sys FFI calls.**

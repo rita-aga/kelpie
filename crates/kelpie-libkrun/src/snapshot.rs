@@ -249,10 +249,7 @@ mod tests {
         // Create fake large data by setting metadata size
         // (actual data is smaller, but we're testing the validation)
         let data = Bytes::from("small");
-        let result = VmSnapshot {
-            metadata,
-            data,
-        };
+        let result = VmSnapshot { metadata, data };
 
         // Size check happens at creation, so we verify metadata
         assert!(result.metadata.size_bytes > VM_SNAPSHOT_SIZE_BYTES_MAX);

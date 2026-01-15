@@ -195,7 +195,8 @@ impl VmInstance for MockVm {
     }
 
     async fn exec(&self, cmd: &str, args: &[&str]) -> LibkrunResult<ExecOutput> {
-        self.exec_with_options(cmd, args, ExecOptions::default()).await
+        self.exec_with_options(cmd, args, ExecOptions::default())
+            .await
     }
 
     async fn exec_with_options(
@@ -266,11 +267,7 @@ impl VmInstance for MockVm {
             }
             _ => {
                 // Unknown command - return error
-                (
-                    127,
-                    String::new(),
-                    format!("command not found: {}", cmd),
-                )
+                (127, String::new(), format!("command not found: {}", cmd))
             }
         };
 
@@ -418,7 +415,10 @@ mod tests {
 
         let result = vm.exec("echo", &["test"]).await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), LibkrunError::NotRunning { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            LibkrunError::NotRunning { .. }
+        ));
     }
 
     #[tokio::test]
@@ -439,7 +439,10 @@ mod tests {
 
         let result = vm.exec("echo", &["test"]).await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), LibkrunError::ExecFailed { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            LibkrunError::ExecFailed { .. }
+        ));
     }
 
     #[tokio::test]
