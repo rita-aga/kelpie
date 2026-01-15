@@ -536,7 +536,10 @@ fn parse_date_param(val: &Value) -> Result<chrono::DateTime<chrono::Utc>, String
                 .or_else(|_| {
                     // Try date only (assume start of day UTC)
                     chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").map(|nd| {
-                        Utc.from_utc_datetime(&nd.and_hms_opt(0, 0, 0).unwrap())
+                        Utc.from_utc_datetime(
+                            &nd.and_hms_opt(0, 0, 0)
+                                .expect("00:00:00 is always a valid time"),
+                        )
                     })
                 })
                 .map_err(|e| {
