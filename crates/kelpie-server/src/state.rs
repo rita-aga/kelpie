@@ -450,21 +450,22 @@ impl AppState {
     // After Phase 6 migration completes, these will be removed and handlers
     // will call agent_service() directly.
 
-    /// Get an agent by ID (requires AgentService)
+    /// Get an agent by ID (dual-mode)
     ///
-    /// Phase 6.11: Requires AgentService to be configured.
+    /// Phase 6.11: Prefers AgentService if available, falls back to HashMap.
     pub async fn get_agent_async(&self, id: &str) -> Result<Option<AgentState>, StateError> {
-        let service = self.agent_service().ok_or_else(|| StateError::Internal {
-            message: "AgentService not configured".to_string(),
-        })?;
-
-        service
-            .get_agent(id)
-            .await
-            .map(Some)
-            .map_err(|e| StateError::Internal {
-                message: format!("Service error: {}", e),
-            })
+        if let Some(service) = self.agent_service() {
+            service
+                .get_agent(id)
+                .await
+                .map(Some)
+                .map_err(|e| StateError::Internal {
+                    message: format!("Service error: {}", e),
+                })
+        } else {
+            // Fallback to HashMap for backward compatibility
+            self.get_agent(id)
+        }
     }
 
     /// Create an agent (requires AgentService)
@@ -506,20 +507,21 @@ impl AppState {
             })
     }
 
-    /// Delete an agent (requires AgentService)
+    /// Delete an agent (dual-mode)
     ///
-    /// Phase 6.11: Requires AgentService to be configured.
+    /// Phase 6.11: Prefers AgentService if available, falls back to HashMap.
     pub async fn delete_agent_async(&self, id: &str) -> Result<(), StateError> {
-        let service = self.agent_service().ok_or_else(|| StateError::Internal {
-            message: "AgentService not configured".to_string(),
-        })?;
-
-        service
-            .delete_agent(id)
-            .await
-            .map_err(|e| StateError::Internal {
-                message: format!("Service error: {}", e),
-            })
+        if let Some(service) = self.agent_service() {
+            service
+                .delete_agent(id)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("Service error: {}", e),
+                })
+        } else {
+            // Fallback to HashMap for backward compatibility
+            self.delete_agent(id)
+        }
     }
 
     /// List agents (dual-mode)
@@ -657,10 +659,17 @@ impl AppState {
     }
 
     // =========================================================================
-    // Agent operations
+    // Agent operations (HashMap-based - DEPRECATED)
     // =========================================================================
+    //
+    // Phase 6.11: These methods use in-memory HashMap and are DEPRECATED.
+    // Production code should use *_async() methods with AgentService instead.
+    //
+    // These methods are kept for backward compatibility with existing tests only.
+    // They will be removed in a future phase once all tests migrate to AgentService.
 
-    /// Create a new agent
+    /// Create a new agent (DEPRECATED - use create_agent_async)
+    #[deprecated(since = "0.1.0", note = "Use create_agent_async with AgentService")]
     pub fn create_agent(&self, agent: AgentState) -> Result<AgentState, StateError> {
         let mut agents = self
             .inner
