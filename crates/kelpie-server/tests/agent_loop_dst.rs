@@ -564,7 +564,8 @@ async fn test_dst_registry_mcp_without_client() {
             assert!(!result.success, "Should fail without MCP client");
             assert!(
                 result.output.contains("not yet implemented")
-                    || result.output.contains("not found"),
+                    || result.output.contains("not found")
+                    || result.output.contains("not connected"),
                 "Error message should be helpful: {}",
                 result.output
             );

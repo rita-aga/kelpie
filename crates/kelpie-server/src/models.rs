@@ -636,6 +636,88 @@ pub struct HealthResponse {
     pub uptime_seconds: u64,
 }
 
+// =============================================================================
+// Import/Export Models
+// =============================================================================
+
+/// Request to import an agent from external source
+///
+/// TigerStyle: Explicit structure for agent import with validation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportAgentRequest {
+    /// Agent configuration to import
+    pub agent: AgentImportData,
+    /// Optional messages to import (conversation history)
+    #[serde(default)]
+    pub messages: Vec<MessageImportData>,
+}
+
+/// Agent data for import (similar to AgentState but without generated fields)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentImportData {
+    /// Agent name (required)
+    pub name: String,
+    /// Agent type
+    #[serde(default)]
+    pub agent_type: AgentType,
+    /// Model being used
+    pub model: Option<String>,
+    /// System prompt
+    pub system: Option<String>,
+    /// Description
+    pub description: Option<String>,
+    /// Memory blocks
+    #[serde(default)]
+    pub blocks: Vec<BlockImportData>,
+    /// Attached tool IDs
+    #[serde(default)]
+    pub tool_ids: Vec<String>,
+    /// Tags
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Metadata
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+}
+
+/// Block data for import
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockImportData {
+    /// Block label
+    pub label: String,
+    /// Current value
+    pub value: String,
+    /// Description
+    pub description: Option<String>,
+    /// Size limit
+    pub limit: Option<usize>,
+}
+
+/// Message data for import
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageImportData {
+    /// Message role
+    pub role: MessageRole,
+    /// Message content
+    pub content: String,
+    /// Tool call ID if this is a tool response
+    pub tool_call_id: Option<String>,
+    /// Tool calls made by assistant
+    pub tool_calls: Option<Vec<ToolCall>>,
+}
+
+/// Response from exporting an agent
+///
+/// TigerStyle: Complete agent state for portability.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportAgentResponse {
+    /// Agent configuration
+    pub agent: AgentState,
+    /// Optional messages (conversation history)
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub messages: Vec<Message>,
+}
+
 /// Streaming event emitted during agent message processing
 ///
 /// Phase 7: Letta-compatible SSE events for real-time message streaming

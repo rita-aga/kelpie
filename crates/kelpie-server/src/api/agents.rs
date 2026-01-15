@@ -34,10 +34,12 @@ const LIST_LIMIT_MAX: usize = 100;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_agents).post(create_agent))
+        .route("/import", axum::routing::post(super::import_export::import_agent))
         .route(
             "/:agent_id",
             get(get_agent).patch(update_agent).delete(delete_agent),
         )
+        .route("/:agent_id/export", get(super::import_export::export_agent))
         // Nested block routes
         .route("/:agent_id/blocks", get(super::blocks::list_blocks))
         // Smart route: supports both UUID (block_id) and label access

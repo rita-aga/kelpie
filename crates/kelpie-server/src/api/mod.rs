@@ -5,6 +5,7 @@
 pub mod agents;
 pub mod archival;
 pub mod blocks;
+pub mod import_export;
 pub mod messages;
 pub mod standalone_blocks;
 pub mod streaming;
