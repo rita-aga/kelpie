@@ -779,6 +779,57 @@ Currently Kelpie has ~90% Letta API compatibility (verified via testing and LETT
 - [ ] Fault injection probability: 0.1-0.3 (find bugs)
 - [ ] Multiple seeds tested (10+)
 
+**CRITICAL: What DST-First ACTUALLY Means:**
+
+DST-first does NOT mean:
+- ❌ Writing unit tests with mocks (MockStorage, MockLlm, etc.)
+- ❌ Integration tests disguised as "DST"
+- ❌ Standalone tests that happen to use some simulated components
+
+DST-first MEANS:
+- ✅ Running the ENTIRE Kelpie system in `Simulation::new(config).run_async(|sim_env| { ... })`
+- ✅ Using `sim_env.storage` (SimStorage), `sim_env.clock` (SimClock), `sim_env.faults` (FaultInjector)
+- ✅ Injecting REAL faults that ACTUALLY trigger during execution
+- ✅ Testing the FULL system behavior under chaos, not isolated units
+
+Example of TRUE DST (from agent_integration_dst.rs):
+```rust
+let result = Simulation::new(config)
+    .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.3))
+    .run_async(|sim_env| async move {
+        // This is FULL SYSTEM - not mocks
+        let llm = Arc::new(SimLlmClient::new(
+            sim_env.fork_rng_raw(),
+            sim_env.faults.clone(),  // Real fault injection
+        ));
+        let agent_env = SimAgentEnv::new(
+            sim_env.storage.clone(),  // SimStorage, not MockStorage
+            llm,
+            sim_env.clock.clone(),    // SimClock for time control
+            sim_env.faults.clone(),
+            sim_env.fork_rng(),
+        );
+
+        // Test feature - it ACTUALLY experiences faults
+        let agent_id = agent_env.create_agent(config)?;
+        agent_env.send_message(&agent_id, "test").await?;
+
+        Ok(())
+    })
+    .await;
+```
+
+vs WRONG approach (NOT DST-first):
+```rust
+// ❌ WRONG - Unit test with mocks (NOT DST)
+#[test]
+fn test_with_mock() {
+    let mock_storage = MockStorage::new();  // This is NOT DST
+    let mock_llm = MockLlm::new();
+    // ... test logic with mocks
+}
+```
+
 **Integration tests:**
 - End-to-end workflows for every feature
 - Real LLM integration (requires API keys)
@@ -824,6 +875,829 @@ cargo fmt
 cargo test -p kelpie-server test_send_message
 cargo test -p kelpie-tools test_mcp_stdio
 ```
+
+---
+
+## TRUE DST-First Approach Per Phase
+
+This section shows how EACH phase uses TRUE Simulation harness (not mocks).
+
+### Phase 0: Path Alias - No DST Needed
+**Why:** Simple route alias, no business logic to test under faults.
+**Test approach:** Integration test only (verify both paths work).
+
+---
+
+### Phase 1: Tools (send_message + conversation_search_date) - TRUE DST
+
+**What TRUE DST looks like:**
+
+```rust
+// crates/kelpie-server/tests/send_message_tool_dst.rs
+
+#[tokio::test]
+async fn test_send_message_tool_with_storage_faults() {
+    let config = SimConfig::new(42);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.2))
+        .with_fault(FaultConfig::new(FaultType::LlmTimeout, 0.1))
+        .run_async(|sim_env| async move {
+            // Create FULL system in simulation
+            let llm = Arc::new(SimLlmClient::new(
+                sim_env.fork_rng_raw(),
+                sim_env.faults.clone(),
+            ));
+
+            let agent_env = SimAgentEnv::new(
+                sim_env.storage.clone(),  // Real SimStorage, not mocks
+                llm,
+                sim_env.clock.clone(),
+                sim_env.faults.clone(),
+                sim_env.fork_rng(),
+            );
+
+            // Create agent and register send_message tool
+            let agent_id = agent_env.create_agent(AgentTestConfig {
+                tools: vec!["send_message".to_string()],
+                ..Default::default()
+            })?;
+
+            // Send message that triggers tool usage
+            // This ACTUALLY experiences storage faults (20% of writes fail)
+            let response = agent_env
+                .send_message(&agent_id, "Please use send_message to reply")
+                .await?;
+
+            // Verify send_message was captured
+            assert!(response.content.contains("sent via tool"));
+
+            // Try multiple calls - some will fail due to StorageWriteFail
+            let mut success_count = 0;
+            for i in 0..10 {
+                match agent_env
+                    .send_message(&agent_id, &format!("Message {}", i))
+                    .await
+                {
+                    Ok(_) => success_count += 1,
+                    Err(e) => {
+                        // Storage fault triggered - this is REAL fault injection
+                        assert!(e.to_string().contains("storage") || e.to_string().contains("timeout"));
+                    }
+                }
+            }
+
+            // With 20% + 10% = 30% fault rate, expect some failures
+            assert!(success_count < 10, "Expected some failures with fault injection");
+            assert!(success_count > 0, "Expected some successes");
+
+            Ok(())
+        })
+        .await;
+
+    assert!(result.is_ok());
+}
+```
+
+**NOT this (WRONG - mocks):**
+```rust
+// ❌ WRONG - Unit test with mocks (NOT DST-first)
+#[test]
+fn test_send_message_with_mock() {
+    let mock_storage = MockStorage::new();  // NOT DST
+    let agent = Agent::new(mock_storage);
+    agent.register_tool("send_message");
+    // ... this is NOT DST-first
+}
+```
+
+**conversation_search_date DST:**
+```rust
+#[tokio::test]
+async fn test_conversation_search_date_with_faults() {
+    let config = SimConfig::new(12345);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.2))
+        .with_fault(FaultConfig::new(FaultType::StorageLatency, 0.3))
+        .run_async(|sim_env| async move {
+            let agent_env = SimAgentEnv::new(
+                sim_env.storage.clone(),
+                Arc::new(SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone())),
+                sim_env.clock.clone(),
+                sim_env.faults.clone(),
+                sim_env.fork_rng(),
+            );
+
+            let agent_id = agent_env.create_agent(AgentTestConfig::default())?;
+
+            // Create conversation history
+            for i in 0..20 {
+                agent_env.send_message(&agent_id, &format!("Msg {}", i)).await?;
+                sim_env.clock.advance_ms(3600_000); // 1 hour between messages
+            }
+
+            // Search with date range - REAL storage faults trigger
+            let tool_input = json!({
+                "start_date": "2024-01-15T00:00:00Z",
+                "end_date": "2024-01-15T12:00:00Z"
+            });
+
+            // This call experiences REAL StorageReadFail (20%) and Latency (30%)
+            let result = agent_env
+                .execute_tool(&agent_id, "conversation_search_date", &tool_input)
+                .await;
+
+            // May fail due to storage faults - that's the point
+            match result {
+                Ok(results) => {
+                    // Success despite faults (or no fault triggered)
+                    assert!(results.is_array());
+                }
+                Err(e) => {
+                    // Storage fault triggered
+                    assert!(e.to_string().contains("storage"));
+                }
+            }
+
+            Ok(())
+        })
+        .await;
+
+    assert!(result.is_ok());
+}
+```
+
+---
+
+### Phase 2: MCP Execution (ALL Transports) - TRUE DST
+
+**What TRUE DST looks like for MCP:**
+
+```rust
+// crates/kelpie-tools/tests/mcp_stdio_dst.rs
+
+#[tokio::test]
+async fn test_mcp_stdio_with_process_faults() {
+    let config = SimConfig::new(999);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::ProcessCrash, 0.15))
+        .with_fault(FaultConfig::new(FaultType::ProcessTimeout, 0.1))
+        .run_async(|sim_env| async move {
+            // Create MCP client in simulation
+            let mcp_config = McpConfig {
+                transport: McpTransport::Stdio {
+                    command: "python3".to_string(),
+                    args: vec!["-m", "mcp_server_example"].iter().map(|s| s.to_string()).collect(),
+                },
+                timeout_ms: 5000,
+            };
+
+            let mcp_client = McpClient::new(
+                mcp_config,
+                sim_env.faults.clone(),  // Real fault injection
+                sim_env.clock.clone(),
+            );
+
+            // Execute tool - REAL process faults trigger
+            let tool_result = mcp_client
+                .execute_tool("weather", json!({"location": "SF"}))
+                .await;
+
+            // With 15% ProcessCrash + 10% ProcessTimeout = 25% failure rate
+            match tool_result {
+                Ok(result) => {
+                    // Success despite fault risk
+                    assert!(result.is_string());
+                }
+                Err(e) => {
+                    // Process fault triggered - REAL fault
+                    let err_msg = e.to_string();
+                    assert!(
+                        err_msg.contains("process crash") || err_msg.contains("timeout"),
+                        "Expected process fault, got: {}",
+                        err_msg
+                    );
+                }
+            }
+
+            // Try multiple calls - verify some fail, some succeed
+            let mut success = 0;
+            let mut crash = 0;
+            let mut timeout = 0;
+
+            for _ in 0..20 {
+                match mcp_client.execute_tool("test", json!({})).await {
+                    Ok(_) => success += 1,
+                    Err(e) => {
+                        if e.to_string().contains("crash") {
+                            crash += 1;
+                        } else if e.to_string().contains("timeout") {
+                            timeout += 1;
+                        }
+                    }
+                }
+            }
+
+            // Verify faults actually triggered
+            assert!(crash > 0 || timeout > 0, "Expected some faults to trigger");
+            assert!(success > 0, "Expected some successes");
+
+            Ok(())
+        })
+        .await;
+
+    assert!(result.is_ok());
+}
+```
+
+**MCP HTTP with Network Faults:**
+```rust
+#[tokio::test]
+async fn test_mcp_http_with_network_faults() {
+    let config = SimConfig::new(888);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::NetworkPartition, 0.1))
+        .with_fault(FaultConfig::new(FaultType::NetworkDelay { min_ms: 100, max_ms: 500 }, 0.3))
+        .run_async(|sim_env| async move {
+            // Setup HTTP MCP server in simulation
+            let mcp_config = McpConfig {
+                transport: McpTransport::Http {
+                    url: "http://localhost:8080/mcp".to_string(),
+                    headers: HashMap::new(),
+                },
+                timeout_ms: 10000,
+            };
+
+            let mcp_client = McpClient::new(
+                mcp_config,
+                sim_env.faults.clone(),
+                sim_env.clock.clone(),
+            );
+
+            let start = sim_env.clock.now_ms();
+
+            // Execute tool - REAL network faults trigger
+            let result = mcp_client
+                .execute_tool("calculate", json!({"expr": "2+2"}))
+                .await;
+
+            let elapsed = sim_env.clock.now_ms() - start;
+
+            // Network faults affect execution
+            match result {
+                Ok(val) => {
+                    // May have experienced NetworkDelay (30% chance)
+                    if elapsed > 100 {
+                        // Delay fault triggered
+                    }
+                }
+                Err(e) => {
+                    // NetworkPartition fault triggered (10% chance)
+                    assert!(e.to_string().contains("network"));
+                }
+            }
+
+            Ok(())
+        })
+        .await;
+
+    assert!(result.is_ok());
+}
+```
+
+**MCP SSE with Reconnection:**
+```rust
+#[tokio::test]
+async fn test_mcp_sse_with_disconnect_faults() {
+    let config = SimConfig::new(777);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::NetworkPartition, 0.2))
+        .run_async(|sim_env| async move {
+            let mcp_config = McpConfig {
+                transport: McpTransport::Sse {
+                    url: "http://localhost:8080/sse".to_string(),
+                    headers: HashMap::new(),
+                },
+                timeout_ms: 15000,
+            };
+
+            let mcp_client = McpClient::new(
+                mcp_config,
+                sim_env.faults.clone(),
+                sim_env.clock.clone(),
+            );
+
+            // Connect - may experience NetworkPartition
+            let connection_result = mcp_client.connect().await;
+
+            if let Ok(conn) = connection_result {
+                // Execute tool - connection may drop mid-execution
+                let result = mcp_client.execute_tool("stream_data", json!({})).await;
+
+                match result {
+                    Ok(_) => {
+                        // Success (no partition or reconnected)
+                    }
+                    Err(e) => {
+                        // Partition during execution - verify reconnect attempted
+                        assert!(e.to_string().contains("network") || e.to_string().contains("reconnect"));
+                    }
+                }
+            }
+
+            Ok(())
+        })
+        .await;
+
+    assert!(result.is_ok());
+}
+```
+
+---
+
+### Phase 3: Import/Export - TRUE DST
+
+```rust
+// crates/kelpie-server/tests/import_export_dst.rs
+
+#[tokio::test]
+async fn test_agent_export_with_storage_faults() {
+    let config = SimConfig::new(555);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.2))
+        .with_fault(FaultConfig::new(FaultType::StorageLatency, 0.3))
+        .run_async(|sim_env| async move {
+            let agent_env = SimAgentEnv::new(
+                sim_env.storage.clone(),
+                Arc::new(SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone())),
+                sim_env.clock.clone(),
+                sim_env.faults.clone(),
+                sim_env.fork_rng(),
+            );
+
+            // Create agent with data
+            let agent_id = agent_env.create_agent(AgentTestConfig::default())?;
+            for i in 0..100 {
+                agent_env.send_message(&agent_id, &format!("Message {}", i)).await?;
+            }
+
+            // Export - REAL storage faults trigger during reads
+            let export_result = agent_env.export_agent(&agent_id).await;
+
+            match export_result {
+                Ok(export_data) => {
+                    // Success despite fault risk
+                    assert!(export_data.contains_key("messages"));
+                    assert_eq!(export_data["messages"].as_array().unwrap().len(), 100);
+                }
+                Err(e) => {
+                    // Storage fault during export
+                    assert!(e.to_string().contains("storage"));
+                }
+            }
+
+            Ok(())
+        })
+        .await;
+
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_agent_import_atomicity_with_crash() {
+    let config = SimConfig::new(444);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::CrashDuringTransaction, 0.3))
+        .run_async(|sim_env| async move {
+            let agent_env = SimAgentEnv::new(
+                sim_env.storage.clone(),
+                Arc::new(SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone())),
+                sim_env.clock.clone(),
+                sim_env.faults.clone(),
+                sim_env.fork_rng(),
+            );
+
+            let import_data = json!({
+                "version": "1.0",
+                "agent": {"name": "test", "type": "default"},
+                "blocks": [{"label": "persona", "value": "You are helpful"}],
+                "messages": [{"role": "user", "content": "Hello"}]
+            });
+
+            // Import - may crash mid-transaction
+            let import_result = agent_env.import_agent(import_data).await;
+
+            match import_result {
+                Ok(agent_id) => {
+                    // Success - verify atomicity (all data present or none)
+                    let agent = agent_env.get_agent(&agent_id).await?;
+                    assert_eq!(agent.name, "test");
+
+                    let blocks = agent_env.get_blocks(&agent_id).await?;
+                    assert_eq!(blocks.len(), 1);
+
+                    let messages = agent_env.get_messages(&agent_id).await?;
+                    assert_eq!(messages.len(), 1);
+                }
+                Err(e) => {
+                    // Crash during import - verify nothing was created (atomicity)
+                    assert!(e.to_string().contains("crash") || e.to_string().contains("transaction"));
+
+                    // Verify no partial state (critical for atomicity)
+                    // If agent was created, blocks and messages must also exist
+                }
+            }
+
+            Ok(())
+        })
+        .await;
+
+    assert!(result.is_ok());
+}
+```
+
+---
+
+### Phase 4: Summarization - TRUE DST
+
+```rust
+// crates/kelpie-server/tests/summarization_dst.rs
+
+#[tokio::test]
+async fn test_summarization_with_llm_faults() {
+    let config = SimConfig::new(333);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::LlmTimeout, 0.25))
+        .with_fault(FaultConfig::new(FaultType::LlmRateLimit, 0.15))
+        .run_async(|sim_env| async move {
+            let llm = Arc::new(SimLlmClient::new(
+                sim_env.fork_rng_raw(),
+                sim_env.faults.clone(),
+            ));
+
+            let agent_env = SimAgentEnv::new(
+                sim_env.storage.clone(),
+                llm,
+                sim_env.clock.clone(),
+                sim_env.faults.clone(),
+                sim_env.fork_rng(),
+            );
+
+            let agent_id = agent_env.create_agent(AgentTestConfig::default())?;
+
+            // Create conversation to summarize
+            for i in 0..50 {
+                agent_env.send_message(&agent_id, &format!("Message {}", i)).await?;
+            }
+
+            // Summarize - REAL LLM faults trigger
+            let summary_result = agent_env
+                .summarize_conversation(&agent_id, 50, SummaryLength::Medium)
+                .await;
+
+            match summary_result {
+                Ok(summary) => {
+                    // Success despite fault risk
+                    assert!(!summary.text.is_empty());
+                    assert_eq!(summary.message_count, 50);
+                }
+                Err(e) => {
+                    // LLM fault triggered
+                    let err_msg = e.to_string();
+                    assert!(
+                        err_msg.contains("timeout") || err_msg.contains("rate limit"),
+                        "Expected LLM fault, got: {}",
+                        err_msg
+                    );
+                }
+            }
+
+            // Test retry logic - try multiple times
+            let mut success_count = 0;
+            for _ in 0..10 {
+                match agent_env
+                    .summarize_conversation(&agent_id, 10, SummaryLength::Short)
+                    .await
+                {
+                    Ok(_) => success_count += 1,
+                    Err(_) => {
+                        // Fault triggered
+                    }
+                }
+            }
+
+            // With 25% + 15% = 40% fault rate, expect some successes and failures
+            assert!(success_count < 10, "Expected some failures");
+            assert!(success_count > 0, "Expected some successes");
+
+            Ok(())
+        })
+        .await;
+
+    assert!(result.is_ok());
+}
+```
+
+---
+
+### Phase 5: Scheduling - TRUE DST
+
+```rust
+// crates/kelpie-server/tests/scheduling_dst.rs
+
+#[tokio::test]
+async fn test_scheduling_with_clock_skew() {
+    let config = SimConfig::new(222);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::ClockSkew, 0.2))
+        .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.1))
+        .run_async(|sim_env| async move {
+            let agent_env = SimAgentEnv::new(
+                sim_env.storage.clone(),
+                Arc::new(SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone())),
+                sim_env.clock.clone(),  // Critical: use SimClock
+                sim_env.faults.clone(),
+                sim_env.fork_rng(),
+            );
+
+            let agent_id = agent_env.create_agent(AgentTestConfig::default())?;
+
+            // Schedule message for future
+            let scheduled_time = sim_env.clock.now_ms() + 3600_000; // +1 hour
+            let schedule_id = agent_env
+                .schedule_message(&agent_id, "Scheduled message", scheduled_time)
+                .await?;
+
+            // Advance simulated time
+            sim_env.clock.advance_ms(3600_000); // Advance 1 hour
+
+            // Scheduler should fire - but ClockSkew may affect timing
+            let scheduler = Scheduler::new(
+                agent_env.clone(),
+                sim_env.clock.clone(),
+                sim_env.storage.clone(),
+            );
+
+            // Run scheduler tick - REAL clock faults trigger
+            scheduler.tick().await?;
+
+            // Check if message was sent (may be affected by ClockSkew)
+            let messages = agent_env.get_messages(&agent_id).await?;
+
+            // With ClockSkew, timing may be off but message should eventually send
+            let scheduled_msg = messages.iter().find(|m| m.content.contains("Scheduled"));
+
+            // Verify robustness despite clock faults
+            assert!(
+                scheduled_msg.is_some() || sim_env.clock.now_ms() < scheduled_time,
+                "Scheduled message handling should be robust to clock skew"
+            );
+
+            Ok(())
+        })
+        .await;
+
+    assert!(result.is_ok());
+}
+```
+
+---
+
+### Phase 6: Projects - TRUE DST
+
+```rust
+// crates/kelpie-server/tests/projects_dst.rs
+
+#[tokio::test]
+async fn test_project_concurrent_updates() {
+    let config = SimConfig::new(111);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.15))
+        .run_async(|sim_env| async move {
+            let project_manager = ProjectManager::new(
+                sim_env.storage.clone(),
+                sim_env.clock.clone(),
+            );
+
+            // Create project
+            let project_id = project_manager
+                .create_project("Test Project", "Description")
+                .await?;
+
+            // Concurrent updates from multiple tasks
+            let handles: Vec<_> = (0..10)
+                .map(|i| {
+                    let pm = project_manager.clone();
+                    let pid = project_id.clone();
+                    tokio::spawn(async move {
+                        pm.update_project_description(
+                            &pid,
+                            &format!("Updated by task {}", i),
+                        )
+                        .await
+                    })
+                })
+                .collect();
+
+            // Wait for all updates
+            let results = futures::future::join_all(handles).await;
+
+            // Some may fail due to StorageWriteFail, some succeed
+            let successes = results.iter().filter(|r| r.is_ok()).count();
+            let failures = results.len() - successes;
+
+            // Verify system handles concurrent updates with faults
+            assert!(successes > 0, "Expected some updates to succeed");
+
+            // Final state should be consistent (last write wins)
+            let project = project_manager.get_project(&project_id).await?;
+            assert!(project.description.starts_with("Updated by task"));
+
+            Ok(())
+        })
+        .await;
+
+    assert!(result.is_ok());
+}
+```
+
+---
+
+### Phase 7: Batch Operations - TRUE DST
+
+```rust
+// crates/kelpie-server/tests/batch_operations_dst.rs
+
+#[tokio::test]
+async fn test_batch_messages_with_partial_failures() {
+    let config = SimConfig::new(100);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::LlmTimeout, 0.2))
+        .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.1))
+        .run_async(|sim_env| async move {
+            let agent_env = SimAgentEnv::new(
+                sim_env.storage.clone(),
+                Arc::new(SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone())),
+                sim_env.clock.clone(),
+                sim_env.faults.clone(),
+                sim_env.fork_rng(),
+            );
+
+            let agent_id = agent_env.create_agent(AgentTestConfig::default())?;
+
+            // Batch of 20 messages
+            let messages: Vec<_> = (0..20)
+                .map(|i| MessageRequest {
+                    role: "user".to_string(),
+                    content: format!("Batch message {}", i),
+                })
+                .collect();
+
+            // Send batch - REAL faults trigger for individual messages
+            let batch_result = agent_env
+                .send_batch_messages(&agent_id, messages)
+                .await?;
+
+            // Verify partial success/failure handling
+            let successes = batch_result.iter().filter(|r| r.success).count();
+            let failures = batch_result.len() - successes;
+
+            // With 20% + 10% = 30% fault rate, expect some failures
+            assert!(failures > 0, "Expected some batch items to fail with 30% fault rate");
+            assert!(successes > 0, "Expected some batch items to succeed");
+
+            // Verify system doesn't deadlock or cascade fail
+            assert_eq!(batch_result.len(), 20, "All results should be returned");
+
+            // Verify individual failures are isolated (no cascade)
+            for (i, result) in batch_result.iter().enumerate() {
+                if !result.success {
+                    assert!(
+                        result.error.as_ref().unwrap().contains("timeout")
+                            || result.error.as_ref().unwrap().contains("storage"),
+                        "Error for item {} should be timeout or storage",
+                        i
+                    );
+                }
+            }
+
+            Ok(())
+        })
+        .await;
+
+    assert!(result.is_ok());
+}
+```
+
+---
+
+### Phase 8: Agent Groups - TRUE DST
+
+```rust
+// crates/kelpie-server/tests/agent_groups_dst.rs
+
+#[tokio::test]
+async fn test_agent_group_broadcast_with_network_partition() {
+    let config = SimConfig::new(50);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::NetworkPartition, 0.3))
+        .run_async(|sim_env| async move {
+            let agent_env = SimAgentEnv::new(
+                sim_env.storage.clone(),
+                Arc::new(SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone())),
+                sim_env.clock.clone(),
+                sim_env.faults.clone(),
+                sim_env.fork_rng(),
+            );
+
+            // Create multiple agents
+            let agent_ids: Vec<_> = futures::future::join_all(
+                (0..5).map(|_| agent_env.create_agent(AgentTestConfig::default()))
+            )
+            .await
+            .into_iter()
+            .collect::<Result<_>>()?;
+
+            // Create agent group
+            let group_manager = AgentGroupManager::new(
+                sim_env.storage.clone(),
+                agent_env.clone(),
+            );
+
+            let group_id = group_manager
+                .create_group("Test Group", agent_ids.clone(), RoutingPolicy::Broadcast)
+                .await?;
+
+            // Send message to group - REAL network faults trigger
+            let broadcast_result = group_manager
+                .send_to_group(&group_id, "Broadcast message")
+                .await;
+
+            match broadcast_result {
+                Ok(responses) => {
+                    // Some agents may not respond due to NetworkPartition
+                    // With 30% partition rate, expect 2-5 responses (not all 5)
+                    assert!(
+                        responses.len() < 5,
+                        "Expected some agents unreachable due to network partition"
+                    );
+                    assert!(
+                        !responses.is_empty(),
+                        "Expected at least one agent to respond"
+                    );
+                }
+                Err(e) => {
+                    // Complete partition or majority unreachable
+                    assert!(e.to_string().contains("network") || e.to_string().contains("partition"));
+                }
+            }
+
+            Ok(())
+        })
+        .await;
+
+    assert!(result.is_ok());
+}
+```
+
+---
+
+### Phase 9: Documentation & Testing - No DST (Meta-Phase)
+**Why:** This phase runs and verifies ALL previous DST tests, doesn't add new features.
+
+---
+
+## Summary: TRUE DST-First Checklist
+
+For EACH feature implementation:
+
+✅ **DO:**
+- Use `Simulation::new(config).with_fault(...).run_async(|sim_env| { ... })`
+- Use `sim_env.storage`, `sim_env.clock`, `sim_env.faults`, `sim_env.rng`
+- Inject REAL faults (StorageWriteFail, NetworkPartition, ProcessCrash, etc.)
+- Verify feature works DESPITE faults
+- Test partial failures, retries, atomicity
+- Run with multiple seeds to verify determinism
+
+❌ **DON'T:**
+- Create MockStorage, MockLlm, or any mocks
+- Write "unit tests" that don't use Simulation harness
+- Call integration tests "DST" when they don't use sim_env
+- Test features in isolation without fault injection
+- Skip DST because "it's just a simple feature"
+
+**Every phase (1-8) MUST have TRUE DST tests as shown above.**
 
 ---
 
