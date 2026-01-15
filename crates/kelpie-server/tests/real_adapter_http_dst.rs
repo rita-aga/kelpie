@@ -226,7 +226,11 @@ async fn test_dst_real_adapter_streaming_with_faults() {
         })
         .await;
 
-    assert!(result.is_ok(), "Fault tolerance test failed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Fault tolerance test failed: {:?}",
+        result.err()
+    );
 }
 
 /// Test RealLlmAdapter error handling
@@ -249,7 +253,9 @@ async fn test_dst_real_adapter_error_handling() {
                 .mock("POST", "/test.anthropic.com/messages")
                 .with_status(429)
                 .with_header("content-type", "application/json")
-                .with_body(r#"{"error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}"#)
+                .with_body(
+                    r#"{"error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}"#,
+                )
                 .create_async()
                 .await;
 

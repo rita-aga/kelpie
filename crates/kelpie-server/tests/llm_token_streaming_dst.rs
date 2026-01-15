@@ -16,7 +16,9 @@ use futures::stream::StreamExt;
 use kelpie_core::Result;
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
-use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse, StreamChunk};
+use kelpie_server::actor::{
+    AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse, StreamChunk,
+};
 use kelpie_server::models::{AgentType, CreateAgentRequest};
 use kelpie_server::service::AgentService;
 use std::sync::Arc;
@@ -41,7 +43,7 @@ impl LlmClient for SimLlmClientAdapter {
 
 /// Create AgentService from simulation environment
 fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
-    let sim_llm = SimLlmClient::new(sim_env.rng.clone(), sim_env.faults.clone());
+    let sim_llm = SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone());
     let llm_adapter: Arc<dyn LlmClient> = Arc::new(SimLlmClientAdapter {
         client: Arc::new(sim_llm),
     });
@@ -113,7 +115,11 @@ async fn test_dst_llm_token_streaming_basic() {
             }
 
             // Verify streaming behavior
-            assert!(chunks.len() > 2, "Should have multiple chunks, got {}", chunks.len());
+            assert!(
+                chunks.len() > 2,
+                "Should have multiple chunks, got {}",
+                chunks.len()
+            );
             assert!(!content.is_empty(), "Should have content");
 
             // Verify Done chunk at end
@@ -313,7 +319,10 @@ async fn test_dst_llm_streaming_with_tool_calls() {
             }
 
             // Verify both tool call and content appeared
-            assert!(has_tool_call || has_content, "Should have either tool call or content");
+            assert!(
+                has_tool_call || has_content,
+                "Should have either tool call or content"
+            );
 
             Ok(())
         })
@@ -424,7 +433,13 @@ async fn test_dst_llm_streaming_with_comprehensive_faults() {
             },
             0.4, // 40% network delays
         ))
-        .with_fault(FaultConfig::new(FaultType::StorageLatency { min_ms: 10, max_ms: 20 }, 0.3))
+        .with_fault(FaultConfig::new(
+            FaultType::StorageLatency {
+                min_ms: 10,
+                max_ms: 20,
+            },
+            0.3,
+        ))
         .run_async(|sim_env| async move {
             let service = create_service(&sim_env)?;
 

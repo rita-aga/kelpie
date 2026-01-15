@@ -568,7 +568,7 @@ impl LlmClient for SimLlmClientAdapter {
 
 /// Create AgentService from simulation environment
 fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
-    let sim_llm = SimLlmClient::new(sim_env.rng.clone(), sim_env.faults.clone());
+    let sim_llm = SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone());
     let llm_adapter: Arc<dyn LlmClient> = Arc::new(SimLlmClientAdapter {
         client: Arc::new(sim_llm),
     });

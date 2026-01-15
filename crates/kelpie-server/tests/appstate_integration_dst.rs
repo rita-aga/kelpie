@@ -608,7 +608,7 @@ async fn test_first_invoke_after_creation() {
 /// Returns error if dispatcher initialization fails.
 async fn create_appstate_with_service(sim_env: &SimEnvironment) -> Result<AppState> {
     // Create SimLlmClient adapter
-    let sim_llm = SimLlmClient::new(sim_env.rng.clone(), sim_env.faults.clone());
+    let sim_llm = SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone());
     let llm_adapter: Arc<dyn LlmClient> = Arc::new(SimLlmClientAdapter {
         client: Arc::new(sim_llm),
     });

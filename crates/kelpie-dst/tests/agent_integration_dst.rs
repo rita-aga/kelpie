@@ -16,7 +16,7 @@ async fn test_agent_env_with_simulation_basic() {
         .run_async(|sim_env| async move {
             // Create SimAgentEnv using simulation environment
             let llm = Arc::new(SimLlmClient::new(
-                sim_env.fork_rng(),
+                sim_env.fork_rng_raw(),
                 sim_env.faults.clone(),
             ));
             let mut agent_env = SimAgentEnv::new(
@@ -51,7 +51,7 @@ async fn test_agent_env_with_llm_faults() {
         .with_fault(FaultConfig::new(FaultType::LlmFailure, 0.2))
         .run_async(|sim_env| async move {
             let llm = Arc::new(SimLlmClient::new(
-                sim_env.fork_rng(),
+                sim_env.fork_rng_raw(),
                 sim_env.faults.clone(),
             ));
             let mut agent_env = SimAgentEnv::new(
@@ -110,7 +110,7 @@ async fn test_agent_env_with_storage_faults() {
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.1))
         .run_async(|sim_env| async move {
             let llm = Arc::new(SimLlmClient::new(
-                sim_env.fork_rng(),
+                sim_env.fork_rng_raw(),
                 sim_env.faults.clone(),
             ));
             let mut agent_env = SimAgentEnv::new(
@@ -158,7 +158,7 @@ async fn test_agent_env_with_time_advancement() {
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
             let llm = Arc::new(SimLlmClient::new(
-                sim_env.fork_rng(),
+                sim_env.fork_rng_raw(),
                 sim_env.faults.clone(),
             ));
             let mut agent_env = SimAgentEnv::new(
@@ -200,7 +200,7 @@ async fn test_agent_env_determinism() {
         Simulation::new(config)
             .run_async(|sim_env| async move {
                 let llm = Arc::new(SimLlmClient::new(
-                    sim_env.fork_rng(),
+                    sim_env.fork_rng_raw(),
                     sim_env.faults.clone(),
                 ));
                 let mut agent_env = SimAgentEnv::new(
@@ -236,7 +236,7 @@ async fn test_agent_env_multiple_agents_concurrent() {
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
             let llm = Arc::new(SimLlmClient::new(
-                sim_env.fork_rng(),
+                sim_env.fork_rng_raw(),
                 sim_env.faults.clone(),
             ));
             let mut agent_env = SimAgentEnv::new(
@@ -289,7 +289,7 @@ async fn test_agent_env_with_tools() {
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
             let llm = Arc::new(
-                SimLlmClient::new(sim_env.fork_rng(), sim_env.faults.clone())
+                SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone())
                     .with_tool_call_probability(1.0),
             );
             let mut agent_env = SimAgentEnv::new(
@@ -336,7 +336,7 @@ async fn test_agent_env_stress_with_faults() {
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.05))
         .run_async(|sim_env| async move {
             let llm = Arc::new(SimLlmClient::new(
-                sim_env.fork_rng(),
+                sim_env.fork_rng_raw(),
                 sim_env.faults.clone(),
             ));
             let mut agent_env = SimAgentEnv::new(
@@ -406,7 +406,7 @@ async fn test_llm_client_direct_with_simulation() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::LlmFailure, 0.25))
         .run_async(|sim_env| async move {
-            let llm = SimLlmClient::new(sim_env.fork_rng(), sim_env.faults.clone());
+            let llm = SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone());
 
             let messages = vec![SimChatMessage {
                 role: "user".to_string(),

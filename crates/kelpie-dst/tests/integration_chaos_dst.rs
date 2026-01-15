@@ -54,7 +54,10 @@ async fn test_dst_full_teleport_workflow_under_chaos() {
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.05))
         // Network faults
         .with_fault(FaultConfig::new(
-            FaultType::NetworkDelay { min_ms: 10, max_ms: 100 },
+            FaultType::NetworkDelay {
+                min_ms: 10,
+                max_ms: 100,
+            },
             0.20,
         ))
         .run_async(|sim_env| async move {
@@ -245,7 +248,9 @@ async fn test_dst_snapshot_operations_under_chaos() {
         .with_fault(FaultConfig::new(FaultType::SnapshotCorruption, 0.10))
         .with_fault(FaultConfig::new(FaultType::SnapshotRestoreFail, 0.15))
         .with_fault(FaultConfig::new(
-            FaultType::SnapshotTooLarge { max_bytes: 1024 * 1024 },
+            FaultType::SnapshotTooLarge {
+                max_bytes: 1024 * 1024,
+            },
             0.05,
         ))
         .run_async(|sim_env| async move {
@@ -494,9 +499,8 @@ async fn stress_test_concurrent_teleports() {
                 let factory = factory.clone();
                 let storage = teleport_storage.clone();
 
-                let handle = tokio::spawn(async move {
-                    run_teleport_workflow(&factory, &storage, i).await
-                });
+                let handle =
+                    tokio::spawn(async move { run_teleport_workflow(&factory, &storage, i).await });
                 handles.push(handle);
             }
 

@@ -41,6 +41,7 @@ pub mod llm;
 pub mod network;
 pub mod rng;
 pub mod sandbox;
+pub mod sandbox_io;
 pub mod simulation;
 pub mod storage;
 pub mod teleport;
@@ -54,6 +55,7 @@ pub use llm::{
 pub use network::SimNetwork;
 pub use rng::DeterministicRng;
 pub use sandbox::{SimSandbox, SimSandboxFactory};
+pub use sandbox_io::{SimSandboxIO, SimSandboxIOFactory};
 pub use simulation::{SimConfig, SimEnvironment, Simulation};
 pub use storage::SimStorage;
 pub use teleport::{Architecture, SimTeleportStorage, SnapshotKind, TeleportPackage};

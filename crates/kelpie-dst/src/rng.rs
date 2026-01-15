@@ -1,7 +1,13 @@
 //! Deterministic RNG for simulation
 //!
 //! TigerStyle: ChaCha20-based RNG for reproducibility.
+//!
+//! DeterministicRng implements the `RngProvider` trait from kelpie-core, enabling
+//! the same business logic code to use either:
+//! - `StdRngProvider` (production)
+//! - `DeterministicRng` (DST)
 
+use kelpie_core::RngProvider;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -132,6 +138,52 @@ impl DeterministicRng {
 impl Default for DeterministicRng {
     fn default() -> Self {
         Self::new(0)
+    }
+}
+
+// ============================================================================
+// RngProvider Implementation
+// ============================================================================
+
+/// DeterministicRng implements RngProvider for DST compatibility
+///
+/// This allows the same business logic code to use either:
+/// - `StdRngProvider` (production)
+/// - `DeterministicRng` (DST)
+impl RngProvider for DeterministicRng {
+    fn next_u64(&self) -> u64 {
+        self.rng.lock().unwrap().gen()
+    }
+
+    fn next_f64(&self) -> f64 {
+        self.rng.lock().unwrap().gen()
+    }
+
+    fn gen_uuid(&self) -> String {
+        // Use ChaCha20 for better quality UUID generation
+        let mut bytes = [0u8; 16];
+        self.fill_bytes(&mut bytes);
+
+        // Set version (4) and variant (1)
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+        format!(
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5],
+            bytes[6], bytes[7],
+            bytes[8], bytes[9],
+            bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+        )
+    }
+
+    fn gen_bool(&self, probability: f64) -> bool {
+        self.next_bool(probability)
+    }
+
+    fn gen_range(&self, min: u64, max: u64) -> u64 {
+        self.next_range(min, max)
     }
 }
 

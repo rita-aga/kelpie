@@ -46,10 +46,7 @@ pub enum StreamChunk {
     },
 
     /// Tool call argument delta (streaming tool input)
-    ToolCallDelta {
-        id: String,
-        delta: String,
-    },
+    ToolCallDelta { id: String, delta: String },
 
     /// Stream complete
     Done { stop_reason: String },
@@ -194,9 +191,9 @@ impl LlmClient for RealLlmAdapter {
                     message: format!("Stream error: {}", e),
                 })
                 .and_then(|delta| match delta {
-                    crate::llm::StreamDelta::ContentDelta { text } => Ok(StreamChunk::ContentDelta {
-                        delta: text,
-                    }),
+                    crate::llm::StreamDelta::ContentDelta { text } => {
+                        Ok(StreamChunk::ContentDelta { delta: text })
+                    }
                     crate::llm::StreamDelta::ToolCallStart { id, name } => {
                         Ok(StreamChunk::ToolCallStart {
                             id,
@@ -210,9 +207,9 @@ impl LlmClient for RealLlmAdapter {
                             delta,
                         })
                     }
-                    crate::llm::StreamDelta::Done { stop_reason } => Ok(StreamChunk::Done {
-                        stop_reason,
-                    }),
+                    crate::llm::StreamDelta::Done { stop_reason } => {
+                        Ok(StreamChunk::Done { stop_reason })
+                    }
                 })
         });
 

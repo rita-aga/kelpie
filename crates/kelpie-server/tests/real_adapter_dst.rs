@@ -84,7 +84,11 @@ async fn test_dst_real_adapter_fault_resilience() {
         })
         .await;
 
-    assert!(result.is_ok(), "Should handle storage latency: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Should handle storage latency: {:?}",
+        result.err()
+    );
 }
 
 /// Test StreamDelta → StreamChunk conversion logic
@@ -102,8 +106,8 @@ async fn test_dst_stream_delta_to_chunk_conversion() {
 
     let result = Simulation::new(config)
         .run_async(|_sim_env| async move {
-            use kelpie_server::llm::StreamDelta;
             use kelpie_server::actor::StreamChunk;
+            use kelpie_server::llm::StreamDelta;
 
             // Test conversion logic that RealLlmAdapter should implement
             let test_cases = vec![

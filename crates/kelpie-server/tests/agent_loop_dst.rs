@@ -323,7 +323,7 @@ async fn test_dst_registry_mcp_tool_execution() {
             let registry = UnifiedToolRegistry::new();
 
             // Create SimMcpClient and connect
-            let mut mcp_client = SimMcpClient::new(env.faults.clone(), env.fork_rng());
+            let mut mcp_client = SimMcpClient::new(env.faults.clone(), env.fork_rng_raw());
             mcp_client.register_server(create_test_mcp_server("server1"));
             mcp_client.connect("server1").await.map_err(to_core_error)?;
 
@@ -393,7 +393,7 @@ async fn test_dst_registry_mcp_with_crash_fault() {
                 let registry = UnifiedToolRegistry::new();
 
                 // Create and configure SimMcpClient
-                let mut mcp_client = SimMcpClient::new(env.faults.clone(), env.fork_rng());
+                let mut mcp_client = SimMcpClient::new(env.faults.clone(), env.fork_rng_raw());
                 mcp_client.register_server(create_test_mcp_server("server1"));
                 mcp_client.connect("server1").await.map_err(to_core_error)?;
 
@@ -464,7 +464,7 @@ async fn test_dst_registry_mixed_tools_under_faults() {
                 let registry = create_registry_with_builtin(Some(env.faults.clone())).await;
 
                 // Add MCP tool
-                let mut mcp_client = SimMcpClient::new(env.faults.clone(), env.fork_rng());
+                let mut mcp_client = SimMcpClient::new(env.faults.clone(), env.fork_rng_raw());
                 mcp_client.register_server(create_test_mcp_server("server1"));
                 mcp_client.connect("server1").await.map_err(to_core_error)?;
 

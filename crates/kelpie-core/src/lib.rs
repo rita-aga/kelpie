@@ -21,6 +21,7 @@ pub mod actor;
 pub mod config;
 pub mod constants;
 pub mod error;
+pub mod io;
 pub mod metrics;
 pub mod telemetry;
 
@@ -31,4 +32,5 @@ pub use actor::{
 pub use config::KelpieConfig;
 pub use constants::*;
 pub use error::{Error, Result};
+pub use io::{IoContext, RngProvider, StdRngProvider, TimeProvider, WallClockTime};
 pub use telemetry::{init_telemetry, TelemetryConfig, TelemetryGuard};

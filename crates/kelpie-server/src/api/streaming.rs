@@ -497,9 +497,7 @@ async fn generate_streaming_response_events(
                     Ok(Event::default().data(format!("Error: {}", e)))
                 }
             })
-            .chain(stream::once(async {
-                Ok(Event::default().data("[DONE]"))
-            }));
+            .chain(stream::once(async { Ok(Event::default().data("[DONE]")) }));
 
             error_stream.boxed()
         }

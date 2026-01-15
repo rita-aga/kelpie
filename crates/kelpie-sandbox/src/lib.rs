@@ -37,6 +37,7 @@
 mod config;
 mod error;
 mod exec;
+pub mod io;
 mod mock;
 mod pool;
 mod process;
@@ -61,6 +62,9 @@ pub use snapshot::{
     SNAPSHOT_TELEPORT_SIZE_BYTES_MAX,
 };
 pub use traits::{Sandbox, SandboxFactory, SandboxState, SandboxStats};
+
+// I/O Abstraction for DST
+pub use io::{GenericSandbox, SandboxIO, SnapshotData};
 
 #[cfg(feature = "firecracker")]
 pub use firecracker::{

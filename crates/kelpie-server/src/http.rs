@@ -252,11 +252,14 @@ impl HttpClient for ReqwestHttpClient {
 /// Simulated HTTP client for DST (Phase 7.8 REDO - proper DST)
 ///
 /// This client wraps HTTP operations with fault injection:
-/// - NetworkDelay: Adds delays before/after requests
+/// - NetworkDelay: Adds delays before/after requests (using tokio::time::sleep)
 /// - NetworkPacketLoss: Randomly fails requests
 /// - NetworkMessageReorder: Not applicable to HTTP (request-response)
 ///
 /// Uses real HTTP (mockito) underneath but adds simulated faults.
+///
+/// Note: Uses tokio::time::sleep for delays instead of SimClock.sleep_ms() because
+/// SimClock requires manual advancement which doesn't happen in async HTTP context.
 #[cfg(feature = "dst")]
 pub struct SimHttpClient {
     /// Underlying HTTP client (usually mockito-backed reqwest)
@@ -265,8 +268,6 @@ pub struct SimHttpClient {
     fault_injector: std::sync::Arc<kelpie_dst::FaultInjector>,
     /// RNG for fault decisions
     rng: std::sync::Arc<kelpie_dst::DeterministicRng>,
-    /// Clock for delays
-    clock: std::sync::Arc<kelpie_dst::SimClock>,
 }
 
 #[cfg(feature = "dst")]
@@ -274,13 +275,11 @@ impl SimHttpClient {
     pub fn new(
         fault_injector: std::sync::Arc<kelpie_dst::FaultInjector>,
         rng: std::sync::Arc<kelpie_dst::DeterministicRng>,
-        clock: std::sync::Arc<kelpie_dst::SimClock>,
     ) -> Self {
         Self {
             inner: ReqwestHttpClient::new(),
             fault_injector,
             rng,
-            clock,
         }
     }
 
@@ -301,7 +300,11 @@ impl SimHttpClient {
                         self.rng.as_ref().gen_range(min_ms, max_ms)
                     };
                     tracing::debug!(delay_ms = delay_ms, "HTTP request delayed");
-                    self.clock.sleep_ms(delay_ms).await;
+
+                    // Use tokio::time::sleep instead of SimClock.sleep_ms()
+                    // SimClock.sleep_ms() waits for manual clock advancement which doesn't
+                    // happen in async HTTP context, causing deadlock.
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
                 }
                 _ => {}
             }
@@ -340,12 +343,10 @@ impl HttpClient for SimHttpClient {
         // Wrap stream to inject faults on each chunk
         let fault_injector = self.fault_injector.clone();
         let rng = self.rng.clone();
-        let clock = self.clock.clone();
 
         let faulty_stream = stream.then(move |chunk_result| {
             let fault_injector = fault_injector.clone();
             let rng = rng.clone();
-            let clock = clock.clone();
 
             async move {
                 // Inject faults on each chunk
@@ -362,7 +363,9 @@ impl HttpClient for SimHttpClient {
                                 rng.as_ref().gen_range(min_ms, max_ms)
                             };
                             tracing::debug!(delay_ms = delay_ms, "HTTP chunk delayed");
-                            clock.sleep_ms(delay_ms).await;
+
+                            // Use tokio::time::sleep instead of SimClock.sleep_ms()
+                            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
                         }
                         _ => {}
                     }

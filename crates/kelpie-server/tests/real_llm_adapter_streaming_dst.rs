@@ -53,11 +53,7 @@ impl LlmClient for MockStreamingLlmClient {
         // Create stream that emits tokens one by one
         let chunks: Vec<Result<StreamChunk>> = tokens
             .into_iter()
-            .map(|token| {
-                Ok(StreamChunk::ContentDelta {
-                    delta: token,
-                })
-            })
+            .map(|token| Ok(StreamChunk::ContentDelta { delta: token }))
             .chain(std::iter::once(Ok(StreamChunk::Done {
                 stop_reason: "end_turn".to_string(),
             })))
@@ -120,7 +116,10 @@ async fn test_dst_llm_client_token_streaming() {
                 tokens.len(),
                 "Should have same number of chunks as tokens"
             );
-            assert_eq!(content_chunks, tokens, "Chunks should match tokens in order");
+            assert_eq!(
+                content_chunks, tokens,
+                "Chunks should match tokens in order"
+            );
             assert!(done_received, "Should receive Done chunk");
 
             Ok(())
@@ -257,7 +256,8 @@ async fn test_dst_llm_client_concurrent() {
             let mut handles = Vec::new();
 
             for i in 1..=3 {
-                let tokens: Vec<String> = (0..10).map(|j| format!("client{}token{} ", i, j)).collect();
+                let tokens: Vec<String> =
+                    (0..10).map(|j| format!("client{}token{} ", i, j)).collect();
                 let client = MockStreamingLlmClient::new(tokens);
 
                 let handle = tokio::spawn(async move {
