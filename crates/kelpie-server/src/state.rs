@@ -455,56 +455,94 @@ impl AppState {
     /// Phase 6.11: Prefers AgentService if available, falls back to HashMap.
     pub async fn get_agent_async(&self, id: &str) -> Result<Option<AgentState>, StateError> {
         if let Some(service) = self.agent_service() {
-            service
-                .get_agent(id)
-                .await
-                .map(Some)
-                .map_err(|e| StateError::Internal {
+            match service.get_agent(id).await {
+                Ok(agent) => Ok(Some(agent)),
+                Err(kelpie_core::Error::ActorNotFound { .. }) => {
+                    // Actor not found is not an error, just means agent doesn't exist
+                    Ok(None)
+                }
+                Err(kelpie_core::Error::Internal { message })
+                    if message.contains("Agent not created") =>
+                {
+                    // Actor was activated but has no agent state (never called create)
+                    Ok(None)
+                }
+                Err(e) => Err(StateError::Internal {
                     message: format!("Service error: {}", e),
-                })
+                }),
+            }
         } else {
             // Fallback to HashMap for backward compatibility
             self.get_agent(id)
         }
     }
 
-    /// Create an agent (requires AgentService)
+    /// Create an agent (dual-mode)
     ///
-    /// Phase 6.11: Requires AgentService to be configured.
+    /// Phase 6.11: Prefers AgentService if available, falls back to HashMap.
     pub async fn create_agent_async(
         &self,
         request: crate::models::CreateAgentRequest,
     ) -> Result<AgentState, StateError> {
-        let service = self.agent_service().ok_or_else(|| StateError::Internal {
-            message: "AgentService not configured".to_string(),
-        })?;
-
-        service
-            .create_agent(request)
-            .await
-            .map_err(|e| StateError::Internal {
-                message: format!("Service error: {}", e),
-            })
+        if let Some(service) = self.agent_service() {
+            service
+                .create_agent(request)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("Service error: {}", e),
+                })
+        } else {
+            // Fallback to HashMap for backward compatibility
+            // Use from_request to convert CreateAgentRequest to AgentState
+            #[allow(deprecated)]
+            let agent = AgentState::from_request(request);
+            #[allow(deprecated)]
+            self.create_agent(agent)
+        }
     }
 
-    /// Update an agent (requires AgentService)
+    /// Update an agent (dual-mode)
     ///
-    /// Phase 6.11: Requires AgentService to be configured.
+    /// Phase 6.11: Prefers AgentService if available, falls back to HashMap.
     pub async fn update_agent_async(
         &self,
         id: &str,
         update: serde_json::Value,
     ) -> Result<AgentState, StateError> {
-        let service = self.agent_service().ok_or_else(|| StateError::Internal {
-            message: "AgentService not configured".to_string(),
-        })?;
+        if let Some(service) = self.agent_service() {
+            service
+                .update_agent(id, update)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("Service error: {}", e),
+                })
+        } else {
+            // Fallback: For HashMap mode, parse update and apply manually
+            let update_req: crate::models::UpdateAgentRequest = serde_json::from_value(update)
+                .map_err(|e| StateError::Internal {
+                    message: format!("Failed to parse update: {}", e),
+                })?;
 
-        service
-            .update_agent(id, update)
-            .await
-            .map_err(|e| StateError::Internal {
-                message: format!("Service error: {}", e),
+            // Apply update using closure-based update_agent
+            #[allow(deprecated)]
+            self.update_agent(id, |agent| {
+                if let Some(name) = update_req.name {
+                    agent.name = name;
+                }
+                if let Some(system) = update_req.system {
+                    agent.system = Some(system);
+                }
+                if let Some(description) = update_req.description {
+                    agent.description = Some(description);
+                }
+                if let Some(tags) = update_req.tags {
+                    agent.tags = tags;
+                }
+                if let Some(metadata) = update_req.metadata {
+                    agent.metadata = metadata;
+                }
             })
+        }
     }
 
     /// Delete an agent (dual-mode)

@@ -2,6 +2,13 @@
 //!
 //! TigerStyle: Service wraps dispatcher, provides clean API, handles errors.
 
+mod teleport_service;
+
+pub use teleport_service::{
+    TeleportInRequest, TeleportInResponse, TeleportOutRequest, TeleportOutResponse,
+    TeleportPackageInfo, TeleportService,
+};
+
 use crate::actor::{HandleMessageFullRequest, HandleMessageFullResponse};
 use crate::models::{AgentState, CreateAgentRequest, StreamEvent, UpdateAgentRequest};
 use bytes::Bytes;
@@ -95,7 +102,11 @@ impl AgentService {
         // Invoke handle_message_full operation
         let response = self
             .dispatcher
-            .invoke(actor_id, "handle_message_full".to_string(), Bytes::from(payload))
+            .invoke(
+                actor_id,
+                "handle_message_full".to_string(),
+                Bytes::from(payload),
+            )
             .await?;
 
         // Deserialize response
@@ -352,6 +363,42 @@ impl AgentService {
 
         // Then deactivate the actor
         self.dispatcher.deactivate(actor_id).await?;
+
+        Ok(())
+    }
+
+    /// Update a memory block by label
+    ///
+    /// # Arguments
+    /// * `agent_id` - Agent ID string
+    /// * `label` - Block label
+    /// * `value` - New block value
+    ///
+    /// # Returns
+    /// Ok(()) on success
+    pub async fn update_block_by_label(
+        &self,
+        agent_id: &str,
+        label: &str,
+        value: String,
+    ) -> Result<()> {
+        let actor_id = ActorId::new("agents", agent_id)?;
+
+        // Build update request (using internal BlockUpdate struct format)
+        let request = serde_json::json!({
+            "label": label,
+            "value": value,
+        });
+
+        // Serialize request
+        let payload = serde_json::to_vec(&request).map_err(|e| Error::Internal {
+            message: format!("Failed to serialize BlockUpdate: {}", e),
+        })?;
+
+        // Invoke update_block operation
+        self.dispatcher
+            .invoke(actor_id, "update_block".to_string(), Bytes::from(payload))
+            .await?;
 
         Ok(())
     }

@@ -19,8 +19,13 @@ pub async fn list_blocks(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<Vec<Block>>, ApiError> {
-    let blocks = state.list_blocks(&agent_id)?;
-    Ok(Json(blocks))
+    // Phase 6: Get agent from actor system (or HashMap fallback)
+    let agent = state
+        .get_agent_async(&agent_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Agent", &agent_id))?;
+
+    Ok(Json(agent.blocks))
 }
 
 /// Get a specific block
@@ -31,8 +36,18 @@ pub async fn get_block(
     State(state): State<AppState>,
     Path((agent_id, block_id)): Path<(String, String)>,
 ) -> Result<Json<Block>, ApiError> {
-    let block = state
-        .get_block(&agent_id, &block_id)?
+    // Phase 6: Get agent from actor system (or HashMap fallback)
+    let agent = state
+        .get_agent_async(&agent_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Agent", &agent_id))?;
+
+    // Find the block by ID
+    let block = agent
+        .blocks
+        .iter()
+        .find(|b| b.id == block_id)
+        .cloned()
         .ok_or_else(|| ApiError::not_found("Block", &block_id))?;
 
     Ok(Json(block))
@@ -47,9 +62,24 @@ pub async fn update_block(
     Path((agent_id, block_id)): Path<(String, String)>,
     Json(request): Json<UpdateBlockRequest>,
 ) -> Result<Json<Block>, ApiError> {
+    // Phase 6: Get agent from actor system (or HashMap fallback)
+    let agent = state
+        .get_agent_async(&agent_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Agent", &agent_id))?;
+
+    // Find the block by ID to get its label
+    let block = agent
+        .blocks
+        .iter()
+        .find(|b| b.id == block_id)
+        .ok_or_else(|| ApiError::not_found("Block", &block_id))?;
+
+    let label = block.label.clone();
+
     // Validate value size if provided
     if let Some(ref value) = request.value {
-        if let Some(limit) = request.limit {
+        if let Some(limit) = request.limit.or(block.limit) {
             if value.len() > limit {
                 return Err(ApiError::bad_request(format!(
                     "value exceeds limit ({} > {})",
@@ -60,26 +90,41 @@ pub async fn update_block(
         }
     }
 
-    let updated = state.update_block(&agent_id, &block_id, |block| {
-        // Check limit before applying
-        if let Some(ref value) = request.value {
-            if let Some(limit) = block.limit {
-                if value.len() > limit {
-                    // Truncate if necessary (could also return error)
-                    tracing::warn!(
-                        block_id = %block.id,
-                        value_len = value.len(),
-                        limit,
-                        "truncating block value to limit"
-                    );
-                }
-            }
-        }
-        block.apply_update(request);
-    })?;
+    // Update block via AgentService
+    if let Some(service) = state.agent_service() {
+        // Use value from request, or keep current value
+        let new_value = request.value.unwrap_or_else(|| block.value.clone());
 
-    tracing::info!(agent_id = %agent_id, block_id = %updated.id, "updated block");
-    Ok(Json(updated))
+        service
+            .update_block_by_label(&agent_id, &label, new_value)
+            .await
+            .map_err(|e| ApiError::internal(format!("Failed to update block: {}", e)))?;
+
+        // Get updated agent to return the updated block
+        let updated_agent = state
+            .get_agent_async(&agent_id)
+            .await?
+            .ok_or_else(|| ApiError::internal("Agent not found after update"))?;
+
+        let updated_block = updated_agent
+            .blocks
+            .iter()
+            .find(|b| b.id == block_id)
+            .cloned()
+            .ok_or_else(|| ApiError::internal("Block not found after update"))?;
+
+        tracing::info!(agent_id = %agent_id, block_id = %block_id, "updated block");
+        Ok(Json(updated_block))
+    } else {
+        // Fallback to HashMap-based update
+        #[allow(deprecated)]
+        let updated = state.update_block(&agent_id, &block_id, |block| {
+            block.apply_update(request);
+        })?;
+
+        tracing::info!(agent_id = %agent_id, block_id = %updated.id, "updated block");
+        Ok(Json(updated))
+    }
 }
 
 // =============================================================================
@@ -135,15 +180,84 @@ pub async fn update_block_by_label(
 #[cfg(test)]
 mod tests {
     use crate::api;
+    use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
+    use kelpie_dst::{DeterministicRng, FaultInjector, SimStorage};
+    use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
+    use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
     use kelpie_server::models::AgentState;
+    use kelpie_server::service;
     use kelpie_server::state::AppState;
+    use std::sync::Arc;
     use tower::ServiceExt;
 
+    /// Mock LLM client for testing
+    struct MockLlmClient;
+
+    #[async_trait]
+    impl LlmClient for MockLlmClient {
+        async fn complete(&self, _messages: Vec<LlmMessage>) -> kelpie_core::Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: "Test response".to_string(),
+                tool_calls: vec![],
+            })
+        }
+    }
+
+    /// Create a test AppState with AgentService
+    async fn test_app() -> Router {
+        let llm: Arc<dyn LlmClient> = Arc::new(MockLlmClient);
+        let actor = AgentActor::new(llm);
+        let factory = Arc::new(CloneFactory::new(actor));
+
+        let rng = DeterministicRng::new(42);
+        let faults = Arc::new(FaultInjector::new(rng.fork()));
+        let storage = SimStorage::new(rng.fork(), faults);
+        let kv = Arc::new(storage);
+
+        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState>::new(
+            factory,
+            kv,
+            DispatcherConfig::default(),
+        );
+        let handle = dispatcher.handle();
+
+        tokio::spawn(async move {
+            dispatcher.run().await;
+        });
+
+        let service = service::AgentService::new(handle.clone());
+        let state = AppState::with_agent_service(service, handle);
+
+        api::router(state)
+    }
+
     async fn test_app_with_agent() -> (Router, String, String) {
-        let state = AppState::new();
+        // Create app with AgentService
+        let llm: Arc<dyn LlmClient> = Arc::new(MockLlmClient);
+        let actor = AgentActor::new(llm);
+        let factory = Arc::new(CloneFactory::new(actor));
+
+        let rng = DeterministicRng::new(42);
+        let faults = Arc::new(FaultInjector::new(rng.fork()));
+        let storage = SimStorage::new(rng.fork(), faults);
+        let kv = Arc::new(storage);
+
+        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState>::new(
+            factory,
+            kv,
+            DispatcherConfig::default(),
+        );
+        let handle = dispatcher.handle();
+
+        tokio::spawn(async move {
+            dispatcher.run().await;
+        });
+
+        let service = service::AgentService::new(handle.clone());
+        let state = AppState::with_agent_service(service, handle);
 
         // Create agent with a block
         let body = serde_json::json!({
@@ -158,7 +272,6 @@ mod tests {
         let app = api::router(state.clone());
 
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -176,6 +289,7 @@ mod tests {
         let agent: AgentState = serde_json::from_slice(&body).unwrap();
         let block_id = agent.blocks[0].id.clone();
 
+        // Return new router with same state
         (api::router(state), agent.id, block_id)
     }
 

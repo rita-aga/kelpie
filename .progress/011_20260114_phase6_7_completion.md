@@ -1,11 +1,19 @@
 # Task: Complete Phases 6 & 7 (Plan 011)
 
 **Created:** 2026-01-14 (after Phase 7.1-7.4 partial completion)
-**State:** IN PROGRESS - Phases 6.6-6.7 Complete
+**State:** IN PROGRESS - Phase 6 COMPLETE (6.8-6.11), Phase 7 Partial
 **Parent Plans:**
 - 007_20260113_actor_based_agent_server.md (Phases 6-7)
 - 009_20260114_http_handler_migration.md (Phase 6 partial)
 - 010_20260114_message_streaming_architecture.md (Phase 7 partial)
+
+**Phase 6 Status: ✅ COMPLETE**
+- ✅ Phase 6.8: AgentActor handle_message_full implemented (5 DST tests pass)
+- ✅ Phase 6.9: Typed API send_message_full in AgentService (5 DST tests pass)
+- ✅ Phase 6.10: HTTP handler migrated to use AgentService
+- ✅ Phase 6.11: All handlers migrated, dual-mode with HashMap fallback
+- ✅ Phase 6.12 (Cleanup): Blocks API uses AgentService.update_block_by_label
+- **Result:** 130/131 tests passing (1 pre-existing DST failure unrelated to Phase 6)
 
 ---
 
@@ -941,6 +949,110 @@ impl AgentActor {
 
 **After Phase 6 Complete:** 120+ tests passing
 **After Phase 7 Complete:** 123+ tests passing
+
+---
+
+## Completion Notes
+
+### Phase 6.8 Complete (2026-01-14)
+**Commits:**
+- `3d88d8e feat: Phase 6.8 - Implement handle_message_full in AgentActor`
+- `7709438 fix: Address no-cap verification issues in handle_message_full`
+
+**What Was Done:**
+- Implemented `handle_message_full()` method in AgentActor
+- Full agent loop: LLM + tool execution (max 5 iterations) + message history
+- Added HandleMessageFullRequest/Response types with typed API
+- Fixed critical bug: AgentActorState Default was setting max_messages=0
+- All 5 DST tests passing (basic, tools, storage faults, history, concurrent)
+
+**Files Changed:**
+- `crates/kelpie-server/src/actor/agent_actor.rs` (added handle_message_full)
+- `crates/kelpie-server/src/actor/state.rs` (fixed Default impl)
+- `crates/kelpie-server/tests/agent_message_handling_dst.rs` (all tests pass)
+
+### Phase 6.9 Complete (2026-01-14)
+**Commits:**
+- `2a3fc9e feat: Phase 6.9 - Add send_message_full typed API (DST-first)`
+
+**What Was Done:**
+- Added `send_message_full()` method to AgentService with typed API
+- Created comprehensive DST test suite (5 tests, 467 lines)
+- Tests include: typed response validation, storage faults (30%), network delays, concurrent ops, invalid agent
+- All tests use full SimEnvironment with fault injection
+- Verified typed API contract: returns HandleMessageFullResponse (not JSON Value)
+
+**Files Changed:**
+- `crates/kelpie-server/src/service/mod.rs` (added send_message_full)
+- `crates/kelpie-server/tests/agent_service_send_message_full_dst.rs` (5 tests pass)
+
+### Phase 6.10 Complete (2026-01-14)
+**Commits:**
+- Included in Phase 6.11 commit (73a6cf5)
+
+**What Was Done:**
+- Updated `send_message_json` HTTP handler to use AgentService::send_message_full
+- Added fallback to HashMap-based implementation for backward compatibility
+- Typed response: MessageResponse with messages + usage stats
+- Tests verified with both AgentService and HashMap modes
+
+**Files Changed:**
+- `crates/kelpie-server/src/api/messages.rs` (updated send_message_json)
+
+### Phase 6.11 Complete (2026-01-14)
+**Commits:**
+- `73a6cf5 feat: Phase 6.11 - Dual-mode async methods with HashMap fallback`
+
+**What Was Done:**
+- Restored dual-mode behavior to `get_agent_async()` and `delete_agent_async()`
+- Methods prefer AgentService when available, fall back to HashMap otherwise
+- Added `#[deprecated]` markers to HashMap-based sync methods (create_agent, update_agent, etc.)
+- Updated documentation to clarify backward compatibility strategy
+- **Pragmatic approach:** Kept HashMap methods for 27 existing tests instead of removing them
+- All 46 tests passing (no regressions)
+
+**Files Changed:**
+- `crates/kelpie-server/src/state.rs` (dual-mode async, deprecated sync)
+
+**Decision Log:**
+- **Decision:** Keep HashMap methods with deprecation markers instead of removing them
+- **Rationale:** 27 existing tests depend on HashMap methods; removing would break all tests
+- **Trade-off:** Accepted technical debt of maintaining dual-mode for backward compatibility
+- **Future:** Tests will migrate to AgentService over time, then HashMap can be removed
+
+**Test Status:**
+- All kelpie-server tests passing: 46/46 ✅
+- DST test coverage: 10 tests (5 Phase 6.8 + 5 Phase 6.9) ✅
+- No clippy warnings
+- Code formatted with cargo fmt
+
+### Phase 6.12 Complete (2026-01-14) - Final Cleanup
+
+**What Was Done:**
+- Fixed create_agent_async and update_agent_async to have HashMap fallbacks (like get/delete)
+- Migrated Blocks API handlers to use AgentService:
+  - `list_blocks`: uses get_agent_async → agent.blocks
+  - `get_block`: uses get_agent_async → find block by ID
+  - `update_block`: uses AgentService.update_block_by_label
+- Added AgentService.update_block_by_label method
+- All 7 previously failing tests now pass
+
+**Commits:**
+- Will be committed as: "feat: Phase 6 Complete - All handlers use AgentService with HashMap fallback"
+
+**Files Changed:**
+- `crates/kelpie-server/src/state.rs` - Added HashMap fallbacks to create_agent_async, update_agent_async
+- `crates/kelpie-server/src/api/blocks.rs` - Migrated all handlers to use get_agent_async
+- `crates/kelpie-server/src/service/mod.rs` - Added update_block_by_label method
+
+**Test Results:**
+- kelpie-server: 130/131 passing (1 pre-existing DST delete_atomicity failure)
+- Messages API: 3/3 passing ✅ (was 0/3)
+- Archival API: 2/2 passing ✅ (was 0/2)
+- Blocks API: 2/2 passing ✅ (was 0/2)
+
+**Phase 6 Summary:**
+All HTTP handlers now use AgentService (with graceful HashMap fallback for backward compatibility). Agent message processing logic moved into AgentActor with full LLM + tool execution loop. Comprehensive DST coverage with fault injection.
 
 ---
 
