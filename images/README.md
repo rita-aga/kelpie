@@ -39,13 +39,22 @@ kelpie images download 1.0.0-20260115-abc1234
 
 ```
 kelpie-base:1.0.0-20260115-abc1234
-├── /etc/kelpie-version          # Version string
-├── /etc/kelpie-git-sha          # Build commit SHA
-├── /etc/kelpie-build-date       # Build timestamp
-├── /usr/local/bin/kelpie-guest  # Guest agent (Phase 5.2)
-├── /sbin/init                   # Init system (Phase 5.3)
-└── /workspace/                  # Mounted from host via virtio-fs
+├── /etc/kelpie-version          # Version string (in labels)
+├── /etc/hostname                # VM hostname (kelpie-agent)
+├── /etc/fstab                   # Filesystem mount table
+├── /sbin/init                   # Custom init system (PID 1)
+├── /usr/local/bin/kelpie-guest  # Rust guest agent
+├── /var/run/kelpie-guest.sock   # Guest agent Unix socket
+└── /workspace/                  # Agent workspace (to be mounted via virtio-fs)
 ```
+
+Installed Packages:
+- `busybox` - Core Unix utilities
+- `bash` - Shell interpreter
+- `ca-certificates` - SSL/TLS certificates
+- `coreutils` - GNU core utilities
+- `util-linux` - System utilities
+- `shadow` - User management
 
 ## Versioning
 
@@ -100,29 +109,151 @@ ARCH=arm64 VERSION=test ./build.sh
 
 ## Image Components
 
-### Phase 5.1: Base System ✓ (Current)
+### Phase 5.1: Base System ✓ COMPLETE
 - Alpine Linux 3.19
-- Essential packages (busybox, ca-certificates, coreutils)
+- Essential packages (busybox, bash, ca-certificates, coreutils, util-linux, shadow)
 - Multi-arch support (ARM64 + x86_64)
-- Version metadata
+- Version metadata with labels
+- Image size: 28.8MB
 
-### Phase 5.2: Guest Agent (Pending)
+### Phase 5.2: Guest Agent ✓ COMPLETE
 - Rust-based agent (`kelpie-guest`)
-- virtio-vsock communication
-- Command execution
-- File transfer
-- Health monitoring
+- Unix socket communication (virtio-vsock placeholder)
+- Command execution with stdin/stdout/stderr
+- File operations (read, write, list)
+- Health monitoring (ping/pong)
+- 4 unit tests passing
 
-### Phase 5.3: Init System (Pending)
-- Minimal init script
-- Mount essential filesystems
-- Start guest agent
-- Graceful shutdown
+### Phase 5.3: Init System ✓ COMPLETE
+- Custom init script (`/sbin/init`)
+- Mounts essential filesystems (proc, sys, dev, tmp, run)
+- Starts guest agent automatically
+- Graceful shutdown with signal handling
+- Logging to `/var/log/kelpie-guest.log`
 
-### Phase 5.4: Kernel (Pending)
-- Alpine linux-virt kernel (~10MB)
-- Optimized for VMs (virtio drivers only)
+### Phase 5.4: Kernel ✓ COMPLETE
+- Alpine linux-virt kernel (~8-12MB)
+- Kernel version: 6.6.117 (LTS)
+- Optimized for VMs (virtio drivers enabled)
 - Multi-arch (ARM64 + x86_64)
+- Extraction script for kernel and initramfs
+
+### Phase 5.5: Distribution ✓ COMPLETE
+- GitHub Actions CI/CD workflow
+- Multi-arch builds on native runners
+- Upload to GitHub Releases
+- Push to GitHub Container Registry (ghcr.io)
+- Multi-arch Docker manifests
+- Automated testing
+
+### Phase 5.6: Version Validation ✓ COMPLETE
+- MAJOR.MINOR compatibility checking
+- PATCH differences allowed (with warning)
+- Prerelease metadata ignored for compatibility
+- 5 comprehensive tests passing
+- Storage-layer validation
+
+### Phase 5.7: libkrun Integration (Blocked)
+- Real libkrun FFI bindings (not MockVm)
+- Docker image to rootfs conversion
+- Kernel/initramfs loading
+- virtio-vsock communication
+- **Status**: Awaiting real libkrun integration (feature flag exists)
+
+## Guest Agent Protocol
+
+The guest agent (`kelpie-guest`) currently listens on `/var/run/kelpie-guest.sock` (Unix socket). In production, this will use virtio-vsock for host-guest communication.
+
+### Wire Protocol
+
+Length-prefixed JSON messages:
+```
+[4 bytes: message length in big-endian][JSON payload]
+```
+
+### Request/Response Types
+
+**Ping/Pong** - Health check:
+```json
+Request: {"type": "ping"}
+Response: {"type": "pong"}
+```
+
+**Execute Command**:
+```json
+Request: {
+  "type": "exec",
+  "command": "/bin/ls",
+  "args": ["-la", "/workspace"],
+  "stdin": null
+}
+
+Response: {
+  "type": "exec_result",
+  "success": true,
+  "stdout": "total 4...",
+  "stderr": "",
+  "exit_code": 0
+}
+```
+
+**Read File**:
+```json
+Request: {
+  "type": "read_file",
+  "path": "/workspace/data.txt"
+}
+
+Response: {
+  "type": "file_contents",
+  "contents": [72, 101, 108, 108, 111],  // Binary data
+  "size": 5
+}
+```
+
+**Write File**:
+```json
+Request: {
+  "type": "write_file",
+  "path": "/workspace/output.txt",
+  "contents": [72, 101, 108, 108, 111]
+}
+
+Response: {
+  "type": "write_result",
+  "success": true,
+  "bytes_written": 5
+}
+```
+
+**List Directory**:
+```json
+Request: {
+  "type": "list_dir",
+  "path": "/workspace"
+}
+
+Response: {
+  "type": "dir_listing",
+  "entries": [
+    {"name": "file.txt", "is_dir": false, "size": 1024},
+    {"name": "subdir", "is_dir": true, "size": 4096}
+  ]
+}
+```
+
+### Testing the Guest Agent
+
+```bash
+# Run agent manually
+docker run -it kelpie-base:latest /usr/local/bin/kelpie-guest
+
+# Check if running
+docker run -it kelpie-base:latest ps aux | grep kelpie-guest
+
+# View logs
+docker run -it kelpie-base:latest cat /var/log/kelpie-guest.log
+```
 
 ## Development Workflow
 
