@@ -16,6 +16,9 @@ members = [
     "crates/kelpie-server",
     "crates/kelpie-cli",
 ]
+exclude = [
+    "images/guest-agent",  # Built inside Docker, not part of main workspace
+]
 
 [workspace.package]
 version = "0.1.0"
