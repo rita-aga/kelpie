@@ -408,7 +408,7 @@ async fn generate_streaming_response_events(
     match llm.stream_complete_with_tools(messages, tools).await {
         Ok(llm_stream) => {
             // Track content for storage
-            let mut content_buffer = String::new();
+            let content_buffer = String::new();
 
             // Convert LLM StreamDelta to SSE events
             let events_stream = llm_stream

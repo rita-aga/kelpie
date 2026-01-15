@@ -1,8 +1,8 @@
 {
-  "version": "1.0.0-20260115-f6a58c5",
-  "semver": "1.0.0",
-  "build_date": "2026-01-15T13:37:41Z",
-  "git_sha": "f6a58c5",
+  "version": "1.0.1-20260115-5c5dd7b",
+  "semver": "1.0.1",
+  "build_date": "2026-01-15T13:45:30Z",
+  "git_sha": "5c5dd7b",
   "alpine_version": "3.19",
   "architectures": "linux/arm64",
   "registry": "local",

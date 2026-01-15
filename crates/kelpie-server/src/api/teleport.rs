@@ -16,7 +16,7 @@ use axum::{
     Json, Router,
 };
 use kelpie_server::state::AppState;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use super::ApiError;
 

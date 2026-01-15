@@ -46,10 +46,13 @@ fn create_storage(env: &SimEnvironment) -> Arc<dyn AgentStorage> {
     }
 }
 
-/// Helper: Retry read operations with exponential backoff
+/// Helper: Retry read operations for DST verification
 ///
 /// Verification reads in DST tests can fail due to fault injection.
 /// This helper retries reads up to 10 times to handle transient faults.
+///
+/// NOTE: No backoff/sleep between retries. This is intentional for DST tests
+/// where time is simulated. Production code should use exponential backoff.
 async fn retry_read<F, Fut, T>(mut f: F) -> Result<T, kelpie_core::Error>
 where
     F: FnMut() -> Fut,
@@ -63,7 +66,7 @@ where
         match f().await {
             Ok(value) => return Ok(value),
             Err(e) if e.is_retriable() && attempts < max_attempts => {
-                // Retry on retriable errors
+                // Retry immediately (no backoff in DST - simulated time)
                 continue;
             }
             Err(e) => return Err(e.into()),
@@ -71,10 +74,13 @@ where
     }
 }
 
-/// Helper: Retry write operations with exponential backoff
+/// Helper: Retry write operations for DST test setup
 ///
 /// Setup writes in DST tests can fail due to fault injection.
 /// This helper retries writes up to 10 times to handle transient faults.
+///
+/// NOTE: No backoff/sleep between retries. This is intentional for DST tests
+/// where time is simulated. Production code should use exponential backoff.
 async fn retry_write<F, Fut>(mut f: F) -> Result<(), kelpie_core::Error>
 where
     F: FnMut() -> Fut,
@@ -88,7 +94,7 @@ where
         match f().await {
             Ok(()) => return Ok(()),
             Err(e) if e.is_retriable() && attempts < max_attempts => {
-                // Retry on retriable errors
+                // Retry immediately (no backoff in DST - simulated time)
                 continue;
             }
             Err(e) => return Err(e.into()),
@@ -309,13 +315,20 @@ async fn test_dst_fdb_session_checkpoint_with_conflicts() {
         .run_async(|env| async move {
             let storage = create_storage(&env);
 
-            // Create agent
+            // Create agent (with retries for transient faults)
             let agent = AgentMetadata::new(
                 "agent-session".to_string(),
                 "Session Test Agent".to_string(),
                 AgentType::MemgptAgent,
             );
-            storage.save_agent(&agent).await?;
+            let storage_ref = storage.clone();
+            let agent_clone = agent.clone();
+            retry_write(|| {
+                let storage = storage_ref.clone();
+                let a = agent_clone.clone();
+                async move { storage.save_agent(&a).await }
+            })
+            .await?;
 
             let mut checkpoint_success = 0;
             let mut checkpoint_conflict = 0;

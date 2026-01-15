@@ -74,17 +74,23 @@ RUN mkdir -p \
 # COPY --from=builder /build/guest-agent/target/*/release/kelpie-guest /usr/local/bin/
 # RUN chmod 755 /usr/local/bin/kelpie-guest
 
-# Copy init script (will be added in Phase 5.3)
-# COPY base/init /sbin/init
-# RUN chmod 755 /sbin/init
+# Copy init script (Phase 5.3)
+# Remove busybox symlink and install our custom init
+RUN rm -f /sbin/init
+COPY base/init /sbin/init
+COPY base/hostname /etc/hostname
+COPY base/fstab /etc/fstab
+RUN chmod 755 /sbin/init && \
+    chmod 644 /etc/hostname && \
+    chmod 644 /etc/fstab
 
 # Set up minimal environment
 ENV PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
-# Default command (will be replaced by init in Phase 5.3)
-CMD ["/bin/sh"]
+# Use init as PID 1
+CMD ["/sbin/init"]
 
 # Metadata for version tracking
 ARG VERSION
