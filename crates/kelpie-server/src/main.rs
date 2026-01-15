@@ -87,8 +87,8 @@ async fn main() -> anyhow::Result<()> {
     // Initialize storage backend (if configured)
     #[cfg(feature = "fdb")]
     let storage = if let Some(ref cluster_file) = cli.fdb_cluster_file {
-        use kelpie_storage::FdbKV;
         use kelpie_server::storage::FdbAgentRegistry;
+        use kelpie_storage::FdbKV;
 
         tracing::info!("Connecting to FoundationDB: {}", cluster_file);
         let fdb_kv = FdbKV::connect(Some(cluster_file))
@@ -134,6 +134,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Register heartbeat tools
     register_heartbeat_tools(state.tool_registry()).await;
+
+    // Register messaging tools
+    tools::register_messaging_tools(state.tool_registry()).await;
 
     // Create router
     let app = api::router(state);

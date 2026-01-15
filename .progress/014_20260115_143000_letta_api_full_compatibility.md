@@ -557,28 +557,45 @@ Layer 2 (Process): Agent ↔ Tool isolation
 
 ### Phase 1: Missing Built-in Tools (2 days)
 
-#### 1.1: `send_message` Tool (1 day)
-- [ ] Create `tools/messaging.rs` module
-- [ ] Implement dual-mode message handling:
+#### 1.1: `send_message` Tool (1 day) - 🚧 IN PROGRESS
+
+**Completed:**
+- [x] Create `tools/messaging.rs` module
+- [x] Register in UnifiedToolRegistry
+- [x] Write unit tests (4 tests):
+  - [x] Single send_message call (success case)
+  - [x] Empty message content (validation)
+  - [x] Large message content (>100KB validation)
+  - [x] Missing parameter (error handling)
+- [x] All 60 tests passing
+
+**Deferred to next session:**
+- [ ] Implement dual-mode message handling in AgentActor:
   - [ ] Detect when agent calls `send_message` tool
   - [ ] Capture tool call output
   - [ ] Support multiple `send_message` calls in one turn
   - [ ] Fall back to direct LLM response if no tool calls
-- [ ] Register in UnifiedToolRegistry
-- [ ] Update AgentActor to route messages appropriately
-- [ ] Write unit tests:
-  - [ ] Single send_message call
+- [ ] Additional unit tests:
   - [ ] Multiple send_message calls
   - [ ] Mixed tool calls + send_message
   - [ ] Direct response (no send_message)
-  - [ ] Empty message content
-  - [ ] Large message content (>10KB)
 - [ ] Write DST tests:
   - [ ] send_message with StorageWriteFail (0.2 probability)
   - [ ] Multiple sends with CrashAfterWrite
   - [ ] Concurrent send_message from multiple agents
   - [ ] send_message during NetworkPartition (message queuing)
 - [ ] Integration test with real LLM
+
+**What works now:**
+- ✅ `send_message` tool registered and available via `/v1/tools`
+- ✅ Agents can call the tool (returns success message)
+- ✅ Validation for empty/large messages
+- ⏸️  Dual-mode support (agent output routing) - needs AgentActor integration
+
+**Files Changed:**
+- `crates/kelpie-server/src/tools/messaging.rs` (new, 138 lines)
+- `crates/kelpie-server/src/tools/mod.rs` (added module export)
+- `crates/kelpie-server/src/main.rs` (registered messaging tools)
 
 #### 1.2: `conversation_search_date` Tool (1 day)
 - [ ] Extend existing conversation search in `tools/memory.rs`
