@@ -333,3 +333,13 @@ Benefits:
 **Updated timeline:** 32-38 days (6-8 weeks full-time)
 
 **Next step:** Phase 0 (path alias) → Phase 0.5 (agent sandboxing) → Phase 1 (tools)
+
+---
+
+## Related Documentation
+
+**For detailed information on Kelpie's capabilities:**
+- **`.progress/CAPABILITY_LEVELS.md`** - How Kelpie can support "omnipotent" agents (SSH, Docker, etc.) with configurable capability levels (L0-L4)
+- **`.progress/SANDBOXING_STRATEGY.md`** - Complete sandboxing strategy (double sandboxing architecture)
+- **`.progress/CODING_AGENTS_COMPARISON.md`** - Comparison with Claude Code, Letta Code, Clawdbot for coding agent use cases
+- **`.progress/014_20260115_143000_letta_api_full_compatibility.md`** - Master implementation plan for 100% Letta API compatibility
