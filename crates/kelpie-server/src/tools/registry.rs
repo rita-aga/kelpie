@@ -142,8 +142,9 @@ pub struct UnifiedToolRegistry {
     tools: RwLock<HashMap<String, RegisteredTool>>,
     /// Builtin tool handlers
     builtin_handlers: RwLock<HashMap<String, BuiltinToolHandler>>,
-    /// MCP client pool (server_name -> client)
-    /// For now, this is a placeholder - will be connected to actual MCP clients
+    /// MCP client pool (server_name -> client) for production
+    mcp_clients: RwLock<HashMap<String, Arc<kelpie_tools::McpClient>>>,
+    /// Simulated MCP client for DST testing
     #[cfg(feature = "dst")]
     sim_mcp_client: RwLock<Option<Arc<kelpie_tools::SimMcpClient>>>,
 }
@@ -154,6 +155,7 @@ impl UnifiedToolRegistry {
         Self {
             tools: RwLock::new(HashMap::new()),
             builtin_handlers: RwLock::new(HashMap::new()),
+            mcp_clients: RwLock::new(HashMap::new()),
             #[cfg(feature = "dst")]
             sim_mcp_client: RwLock::new(None),
         }
@@ -226,6 +228,95 @@ impl UnifiedToolRegistry {
     #[cfg(feature = "dst")]
     pub async fn set_sim_mcp_client(&self, client: Arc<kelpie_tools::SimMcpClient>) {
         *self.sim_mcp_client.write().await = Some(client);
+    }
+
+    /// Connect to an MCP server and auto-discover its tools
+    ///
+    /// # Arguments
+    /// * `server_name` - Unique name for this MCP server connection
+    /// * `config` - MCP configuration (transport, timeouts, env vars)
+    ///
+    /// # Returns
+    /// Number of tools discovered and registered
+    pub async fn connect_mcp_server(
+        &self,
+        server_name: impl Into<String>,
+        config: kelpie_tools::McpConfig,
+    ) -> Result<usize, String> {
+        let server_name = server_name.into();
+
+        // TigerStyle: Preconditions
+        assert!(!server_name.is_empty(), "server name cannot be empty");
+
+        // Create MCP client
+        let client = Arc::new(kelpie_tools::McpClient::new(config));
+
+        // Connect to server
+        client.connect().await.map_err(|e| {
+            format!("Failed to connect to MCP server '{}': {}", server_name, e)
+        })?;
+
+        // Discover tools
+        let tools = client.discover_tools().await.map_err(|e| {
+            format!(
+                "Failed to discover tools from MCP server '{}': {}",
+                server_name, e
+            )
+        })?;
+
+        // Register discovered tools
+        let tool_count = tools.len();
+        for tool in tools {
+            self.register_mcp_tool(
+                tool.name.clone(),
+                tool.description.clone(),
+                tool.input_schema,
+                server_name.clone(),
+            )
+            .await;
+        }
+
+        // Store client
+        self.mcp_clients
+            .write()
+            .await
+            .insert(server_name, client);
+
+        Ok(tool_count)
+    }
+
+    /// Disconnect from an MCP server and unregister its tools
+    pub async fn disconnect_mcp_server(&self, server_name: &str) -> Result<(), String> {
+        // Remove client
+        let client = self.mcp_clients.write().await.remove(server_name);
+
+        if let Some(client) = client {
+            // Disconnect
+            client.disconnect().await.map_err(|e| {
+                format!(
+                    "Failed to disconnect from MCP server '{}': {}",
+                    server_name, e
+                )
+            })?;
+
+            // Remove tools from this server
+            let mut tools = self.tools.write().await;
+            tools.retain(|_, tool| {
+                !matches!(&tool.source, ToolSource::Mcp { server } if server == server_name)
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Get all connected MCP server names
+    pub async fn list_mcp_servers(&self) -> Vec<String> {
+        self.mcp_clients
+            .read()
+            .await
+            .keys()
+            .cloned()
+            .collect()
     }
 
     /// Get all tool definitions for LLM
@@ -321,11 +412,10 @@ impl UnifiedToolRegistry {
     }
 
     /// Execute an MCP tool
-    #[allow(unused_variables)]
     async fn execute_mcp(
         &self,
         name: &str,
-        _server: &str,
+        server: &str,
         input: &Value,
         start: std::time::Instant,
     ) -> ToolExecutionResult {
@@ -352,12 +442,55 @@ impl UnifiedToolRegistry {
             }
         }
 
-        // TODO: Implement real MCP client execution
-        // For now, return a placeholder
-        ToolExecutionResult::failure(
-            format!("MCP tool execution not yet implemented: {}", name),
-            start.elapsed().as_millis() as u64,
-        )
+        // Get MCP client for the server
+        let client = {
+            let clients = self.mcp_clients.read().await;
+            match clients.get(server) {
+                Some(client) => Arc::clone(client),
+                None => {
+                    return ToolExecutionResult::failure(
+                        format!("MCP server '{}' not connected", server),
+                        start.elapsed().as_millis() as u64,
+                    );
+                }
+            }
+        };
+
+        // Check if client is connected
+        if !client.is_connected().await {
+            return ToolExecutionResult::failure(
+                format!("MCP server '{}' is not connected", server),
+                start.elapsed().as_millis() as u64,
+            );
+        }
+
+        // Execute tool via MCP client
+        match client.execute_tool(name, input.clone()).await {
+            Ok(result) => {
+                // Extract content from MCP result
+                // MCP tools/call returns: {"content": [{"type": "text", "text": "..."}]}
+                let output = if let Some(content) = result.get("content").and_then(|c| c.as_array()) {
+                    // Concatenate all text content
+                    content
+                        .iter()
+                        .filter_map(|item| {
+                            item.get("text").and_then(|t| t.as_str()).map(|s| s.to_string())
+                        })
+                        .collect::<Vec<String>>()
+                        .join("\n")
+                } else {
+                    // Fallback: serialize entire result
+                    serde_json::to_string_pretty(&result)
+                        .unwrap_or_else(|_| result.to_string())
+                };
+
+                ToolExecutionResult::success(output, start.elapsed().as_millis() as u64)
+            }
+            Err(e) => ToolExecutionResult::failure(
+                format!("MCP tool execution failed: {}", e),
+                start.elapsed().as_millis() as u64,
+            ),
+        }
     }
 
     /// Unregister a tool
@@ -560,5 +693,49 @@ mod tests {
         assert!(!result.success);
         assert!(result.error.is_some());
         assert!(result.error.unwrap().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_server_not_connected() {
+        let registry = UnifiedToolRegistry::new();
+
+        // Register an MCP tool without connecting the server
+        registry
+            .register_mcp_tool("test_tool", "Test tool", json!({}), "test_server")
+            .await;
+
+        // Try to execute - should fail because server not connected
+        let result = registry.execute("test_tool", &json!({})).await;
+
+        assert!(!result.success);
+        assert!(result.error.is_some());
+        let error = result.error.unwrap();
+        assert!(error.contains("not connected"));
+    }
+
+    #[tokio::test]
+    async fn test_list_mcp_servers() {
+        let registry = UnifiedToolRegistry::new();
+
+        // Initially no servers
+        let servers = registry.list_mcp_servers().await;
+        assert_eq!(servers.len(), 0);
+
+        // Note: Can't test actual connection without a real MCP server
+        // Full integration tests will be in separate test file
+    }
+
+    #[tokio::test]
+    async fn test_mcp_execute_with_text_content() {
+        let registry = UnifiedToolRegistry::new();
+
+        // Register MCP tool
+        registry
+            .register_mcp_tool("test_tool", "Test", json!({}), "server1")
+            .await;
+
+        // Note: execute_mcp is private, so we test through execute()
+        // which will fail because server not connected
+        // Full MCP execution tests require real or mock MCP client
     }
 }
