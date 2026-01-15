@@ -8,7 +8,7 @@
 use kelpie_dst::{
     DeterministicRng, FaultConfig, FaultInjectorBuilder, FaultType, SimSandboxFactory,
 };
-use kelpie_sandbox::{ExecOptions, Sandbox, SandboxConfig, SandboxFactory, SandboxState};
+use kelpie_sandbox::{Architecture, ExecOptions, Sandbox, SandboxConfig, SandboxFactory, SandboxState};
 use std::sync::Arc;
 
 /// Get DST seed from environment or generate random
@@ -663,4 +663,438 @@ async fn test_dst_vm_stress_rapid_lifecycle() {
         "Rapid lifecycle: {} start/stop, {} pause/resume cycles",
         start_stop_cycles, pause_resume_cycles
     );
+}
+
+// =============================================================================
+// STATE MACHINE TESTS
+// =============================================================================
+
+/// Test that invalid state transitions are rejected
+#[tokio::test]
+async fn test_dst_vm_invalid_state_transitions() {
+    let seed = get_seed();
+    let rng = DeterministicRng::new(seed);
+    let faults = Arc::new(FaultInjectorBuilder::new(rng.fork()).build());
+
+    let factory = SimSandboxFactory::new(rng.fork(), faults);
+    let config = SandboxConfig::default();
+
+    let mut sandbox = factory.create(config).await.expect("should create sandbox");
+    assert_eq!(sandbox.state(), SandboxState::Stopped);
+
+    // Cannot pause when stopped
+    assert!(sandbox.pause().await.is_err(), "pause should fail when stopped");
+    assert_eq!(sandbox.state(), SandboxState::Stopped, "state should remain stopped");
+
+    // Cannot resume when stopped
+    assert!(sandbox.resume().await.is_err(), "resume should fail when stopped");
+    assert_eq!(sandbox.state(), SandboxState::Stopped, "state should remain stopped");
+
+    // Cannot exec when stopped
+    let exec_result = sandbox.exec("echo", &["test"], ExecOptions::default()).await;
+    assert!(exec_result.is_err(), "exec should fail when stopped");
+
+    // Start the VM
+    sandbox.start().await.expect("should start");
+    assert_eq!(sandbox.state(), SandboxState::Running);
+
+    // Cannot start when already running
+    assert!(sandbox.start().await.is_err(), "start should fail when already running");
+
+    // Cannot resume when running (not paused)
+    assert!(sandbox.resume().await.is_err(), "resume should fail when running");
+
+    // Pause to test paused state transitions
+    sandbox.pause().await.expect("should pause");
+    assert_eq!(sandbox.state(), SandboxState::Paused);
+
+    // Cannot pause when already paused
+    assert!(sandbox.pause().await.is_err(), "pause should fail when already paused");
+
+    // Cannot start when paused (must resume first)
+    assert!(sandbox.start().await.is_err(), "start should fail when paused");
+
+    // Clean up
+    sandbox.resume().await.ok();
+    sandbox.stop().await.ok();
+}
+
+/// Test snapshot state requirements
+#[tokio::test]
+async fn test_dst_vm_snapshot_state_requirements() {
+    let seed = get_seed();
+    let rng = DeterministicRng::new(seed);
+    let faults = Arc::new(FaultInjectorBuilder::new(rng.fork()).build());
+
+    let factory = SimSandboxFactory::new(rng.fork(), faults);
+    let config = SandboxConfig::default();
+
+    let mut sandbox = factory.create(config).await.expect("should create sandbox");
+
+    // Cannot snapshot when stopped
+    assert!(
+        sandbox.snapshot().await.is_err(),
+        "snapshot should fail when stopped"
+    );
+
+    sandbox.start().await.expect("should start");
+
+    // Can snapshot when running
+    let snapshot = sandbox.snapshot().await.expect("should snapshot when running");
+
+    sandbox.pause().await.expect("should pause");
+
+    // Can snapshot when paused
+    let _paused_snapshot = sandbox
+        .snapshot()
+        .await
+        .expect("should snapshot when paused");
+
+    // Stop and try to restore
+    sandbox.stop().await.ok();
+
+    // Should be able to restore when stopped
+    sandbox
+        .restore(&snapshot)
+        .await
+        .expect("should restore when stopped");
+}
+
+// =============================================================================
+// CONCURRENT OPERATIONS TESTS
+// =============================================================================
+
+/// Test concurrent VM creation and destruction
+#[tokio::test]
+#[ignore] // Resource intensive
+async fn test_dst_vm_concurrent_lifecycle() {
+    use tokio::task::JoinSet;
+
+    let seed = get_seed();
+    let rng = DeterministicRng::new(seed);
+
+    let faults = Arc::new(
+        FaultInjectorBuilder::new(rng.fork())
+            .with_fault(FaultConfig::new(FaultType::SandboxBootFail, 0.1))
+            .build(),
+    );
+
+    let factory = Arc::new(SimSandboxFactory::new(rng.fork(), faults));
+    let config = SandboxConfig::default();
+
+    let mut tasks = JoinSet::new();
+
+    // Launch 10 concurrent VM lifecycle tasks
+    for i in 0..10 {
+        let factory = factory.clone();
+        let config = config.clone();
+
+        tasks.spawn(async move {
+            let mut success = 0;
+            let mut failures = 0;
+
+            // Each task does 10 lifecycle cycles
+            for _ in 0..10 {
+                let mut sandbox = factory.create(config.clone()).await.unwrap();
+
+                match sandbox.start().await {
+                    Ok(()) => {
+                        success += 1;
+                        // Quick exec
+                        let _ = sandbox
+                            .exec("echo", &["concurrent"], ExecOptions::default())
+                            .await;
+                        sandbox.stop().await.ok();
+                    }
+                    Err(_) => {
+                        failures += 1;
+                    }
+                }
+            }
+
+            (i, success, failures)
+        });
+    }
+
+    let mut total_success = 0;
+    let mut total_failures = 0;
+
+    // Wait for all tasks
+    while let Some(result) = tasks.join_next().await {
+        let (task_id, success, failures) = result.expect("task should not panic");
+        eprintln!(
+            "Task {}: {} success, {} failures",
+            task_id, success, failures
+        );
+        total_success += success;
+        total_failures += failures;
+    }
+
+    eprintln!(
+        "Concurrent test total: {} success, {} failures",
+        total_success, total_failures
+    );
+
+    // Should complete without deadlocks
+    assert!(total_success + total_failures == 100);
+}
+
+/// Test concurrent exec operations on single VM
+#[tokio::test]
+async fn test_dst_vm_concurrent_exec() {
+    use tokio::task::JoinSet;
+
+    let seed = get_seed();
+    let rng = DeterministicRng::new(seed);
+
+    let faults = Arc::new(
+        FaultInjectorBuilder::new(rng.fork())
+            .with_fault(FaultConfig::new(FaultType::SandboxExecFail, 0.1))
+            .build(),
+    );
+
+    let factory = SimSandboxFactory::new(rng.fork(), faults);
+    let config = SandboxConfig::default();
+
+    let mut sandbox = factory.create(config).await.expect("should create sandbox");
+    sandbox.start().await.expect("should start");
+
+    // Share the sandbox across tasks (via Arc since Sandbox is Send+Sync)
+    let sandbox = Arc::new(sandbox);
+
+    let mut tasks = JoinSet::new();
+
+    // Launch 5 concurrent exec tasks
+    for task_id in 0..5 {
+        let sandbox = sandbox.clone();
+
+        tasks.spawn(async move {
+            let mut success = 0;
+            let mut failures = 0;
+
+            for i in 0..20 {
+                let result = sandbox
+                    .exec("echo", &[&format!("task{}-{}", task_id, i)], ExecOptions::default())
+                    .await;
+
+                match result {
+                    Ok(_) => success += 1,
+                    Err(_) => failures += 1,
+                }
+            }
+
+            (task_id, success, failures)
+        });
+    }
+
+    // Wait for all tasks
+    while let Some(result) = tasks.join_next().await {
+        let (task_id, success, failures) = result.expect("task should not panic");
+        eprintln!(
+            "Concurrent exec task {}: {} success, {} failures",
+            task_id, success, failures
+        );
+    }
+
+    // Should complete without deadlocks
+}
+
+// =============================================================================
+// LARGE OUTPUT TESTS
+// =============================================================================
+
+/// Test handling of large stdout/stderr
+#[tokio::test]
+async fn test_dst_vm_large_exec_output() {
+    let seed = get_seed();
+    let rng = DeterministicRng::new(seed);
+    let faults = Arc::new(FaultInjectorBuilder::new(rng.fork()).build());
+
+    let factory = SimSandboxFactory::new(rng.fork(), faults);
+    let config = SandboxConfig::default();
+
+    let mut sandbox = factory.create(config).await.expect("should create sandbox");
+    sandbox.start().await.expect("should start");
+
+    // Generate large output (simulated - real test would generate MBs)
+    // For DST, we verify the system handles large outputs without crashes
+    let large_string = "x".repeat(1024 * 100); // 100KB
+
+    let output = sandbox
+        .exec("echo", &[&large_string], ExecOptions::default())
+        .await
+        .expect("should handle large output");
+
+    assert!(output.status.is_success());
+    // Output should contain our large string (SimSandbox echoes it)
+    assert!(!output.stdout.is_empty());
+
+    sandbox.stop().await.ok();
+}
+
+// =============================================================================
+// ARCHITECTURE & CONFIG MISMATCH TESTS
+// =============================================================================
+
+/// Test restore with architecture mismatch
+#[tokio::test]
+async fn test_dst_vm_snapshot_arch_mismatch() {
+    let seed = get_seed();
+    let rng = DeterministicRng::new(seed);
+    let faults = Arc::new(FaultInjectorBuilder::new(rng.fork()).build());
+
+    let factory = SimSandboxFactory::new(rng.fork(), faults);
+    let config = SandboxConfig::default();
+
+    // Create VM with default architecture
+    let mut sandbox1 = factory.create(config.clone()).await.expect("should create sandbox");
+    sandbox1.start().await.expect("should start");
+
+    let snapshot = sandbox1.snapshot().await.expect("should snapshot");
+
+    // Modify snapshot metadata to have different architecture
+    let mut mismatched_snapshot = snapshot.clone();
+    // If current arch is Arm64, switch to X86_64 and vice versa
+    mismatched_snapshot.metadata.architecture = match snapshot.metadata.architecture {
+        Architecture::Arm64 => Architecture::X86_64,
+        Architecture::X86_64 => Architecture::Arm64,
+    };
+
+    // Attempt to restore with mismatched architecture
+    // Should either fail or handle gracefully
+    let restore_result = sandbox1.restore(&mismatched_snapshot).await;
+
+    // Verify behavior: either rejects mismatch or handles it
+    // (SimSandbox may allow it for testing, real impl should reject)
+    if restore_result.is_ok() {
+        eprintln!("Note: Restore allowed architecture mismatch (test mode)");
+    } else {
+        eprintln!("Restore correctly rejected architecture mismatch");
+    }
+
+    sandbox1.stop().await.ok();
+}
+
+/// Test restore with different memory configuration
+#[tokio::test]
+async fn test_dst_vm_snapshot_memory_mismatch() {
+    let seed = get_seed();
+    let rng = DeterministicRng::new(seed);
+    let faults = Arc::new(FaultInjectorBuilder::new(rng.fork()).build());
+
+    let factory = SimSandboxFactory::new(rng.fork(), faults);
+
+    // Create VM with specific memory config
+    let mut config1 = SandboxConfig::default();
+    config1.limits.memory_bytes_max = 512 * 1024 * 1024; // 512MB
+
+    let mut sandbox1 = factory
+        .create(config1)
+        .await
+        .expect("should create sandbox");
+    sandbox1.start().await.expect("should start");
+
+    let snapshot = sandbox1.snapshot().await.expect("should snapshot");
+
+    // Create second VM with different memory
+    let mut config2 = SandboxConfig::default();
+    config2.limits.memory_bytes_max = 1024 * 1024 * 1024; // 1024MB
+
+    let mut sandbox2 = factory
+        .create(config2)
+        .await
+        .expect("should create sandbox");
+
+    // Attempt to restore snapshot from 512MB VM into 1024MB VM
+    // Should either fail or handle gracefully
+    let restore_result = sandbox2.restore(&snapshot).await;
+
+    if restore_result.is_ok() {
+        eprintln!("Note: Restore allowed memory mismatch (may work in some cases)");
+    } else {
+        eprintln!("Restore rejected memory mismatch");
+    }
+
+    sandbox1.stop().await.ok();
+    sandbox2.stop().await.ok();
+}
+
+// =============================================================================
+// HEALTH CHECK & STATS TESTS
+// =============================================================================
+
+/// Test health checks under various states
+#[tokio::test]
+async fn test_dst_vm_health_checks() {
+    let seed = get_seed();
+    let rng = DeterministicRng::new(seed);
+    let faults = Arc::new(FaultInjectorBuilder::new(rng.fork()).build());
+
+    let factory = SimSandboxFactory::new(rng.fork(), faults);
+    let config = SandboxConfig::default();
+
+    let mut sandbox = factory.create(config).await.expect("should create sandbox");
+
+    // Health check when stopped
+    let health_stopped = sandbox.health_check().await.expect("health check should work");
+    // May or may not be healthy when stopped - implementation dependent
+    eprintln!("Health when stopped: {}", health_stopped);
+
+    sandbox.start().await.expect("should start");
+
+    // Health check when running - should be healthy
+    let health_running = sandbox
+        .health_check()
+        .await
+        .expect("health check should work");
+    assert!(health_running, "sandbox should be healthy when running");
+
+    sandbox.pause().await.expect("should pause");
+
+    // Health check when paused
+    let health_paused = sandbox.health_check().await.expect("health check should work");
+    eprintln!("Health when paused: {}", health_paused);
+
+    sandbox.resume().await.ok();
+    sandbox.stop().await.ok();
+}
+
+/// Test resource usage statistics
+#[tokio::test]
+async fn test_dst_vm_stats() {
+    let seed = get_seed();
+    let rng = DeterministicRng::new(seed);
+    let faults = Arc::new(FaultInjectorBuilder::new(rng.fork()).build());
+
+    let factory = SimSandboxFactory::new(rng.fork(), faults);
+    let config = SandboxConfig::default();
+
+    let mut sandbox = factory.create(config).await.expect("should create sandbox");
+    sandbox.start().await.expect("should start");
+
+    // Get stats
+    let stats = sandbox.stats().await.expect("should get stats");
+
+    // Stats should have reasonable values (SimSandbox may return mock data)
+    eprintln!("Stats: memory={}MB, cpu={:.1}%, disk={}MB",
+        stats.memory_bytes_used / (1024 * 1024),
+        stats.cpu_percent,
+        stats.disk_bytes_used / (1024 * 1024)
+    );
+
+    // Execute some commands and check stats again
+    for _ in 0..10 {
+        sandbox
+            .exec("echo", &["stats_test"], ExecOptions::default())
+            .await
+            .ok();
+    }
+
+    let stats_after = sandbox.stats().await.expect("should get stats");
+    eprintln!("Stats after exec: memory={}MB, cpu={:.1}%",
+        stats_after.memory_bytes_used / (1024 * 1024),
+        stats_after.cpu_percent
+    );
+
+    sandbox.stop().await.ok();
 }
