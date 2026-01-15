@@ -450,92 +450,76 @@ impl AppState {
     // After Phase 6 migration completes, these will be removed and handlers
     // will call agent_service() directly.
 
-    /// Get an agent by ID (dual-mode)
+    /// Get an agent by ID (requires AgentService)
     ///
-    /// Phase 6.1: Delegates to service if available, otherwise uses HashMap.
+    /// Phase 6.11: Requires AgentService to be configured.
     pub async fn get_agent_async(&self, id: &str) -> Result<Option<AgentState>, StateError> {
-        if let Some(service) = self.agent_service() {
-            // Use actor-based service
-            service
-                .get_agent(id)
-                .await
-                .map(Some)
-                .map_err(|e| StateError::Internal {
-                    message: format!("Service error: {}", e),
-                })
-        } else {
-            // Fall back to HashMap
-            self.get_agent(id)
-        }
+        let service = self.agent_service().ok_or_else(|| StateError::Internal {
+            message: "AgentService not configured".to_string(),
+        })?;
+
+        service
+            .get_agent(id)
+            .await
+            .map(Some)
+            .map_err(|e| StateError::Internal {
+                message: format!("Service error: {}", e),
+            })
     }
 
-    /// Create an agent (dual-mode)
+    /// Create an agent (requires AgentService)
     ///
-    /// Phase 6.1: Delegates to service if available, otherwise uses HashMap.
+    /// Phase 6.11: Requires AgentService to be configured.
     pub async fn create_agent_async(
         &self,
         request: crate::models::CreateAgentRequest,
     ) -> Result<AgentState, StateError> {
-        if let Some(service) = self.agent_service() {
-            // Use actor-based service
-            service
-                .create_agent(request)
-                .await
-                .map_err(|e| StateError::Internal {
-                    message: format!("Service error: {}", e),
-                })
-        } else {
-            // Fall back to HashMap - convert request to AgentState
-            let agent = AgentState::from_request(request);
-            self.create_agent(agent)
-        }
+        let service = self.agent_service().ok_or_else(|| StateError::Internal {
+            message: "AgentService not configured".to_string(),
+        })?;
+
+        service
+            .create_agent(request)
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("Service error: {}", e),
+            })
     }
 
-    /// Update an agent (dual-mode)
+    /// Update an agent (requires AgentService)
     ///
-    /// Phase 6.1: Delegates to service if available, otherwise uses HashMap.
+    /// Phase 6.11: Requires AgentService to be configured.
     pub async fn update_agent_async(
         &self,
         id: &str,
         update: serde_json::Value,
     ) -> Result<AgentState, StateError> {
-        if let Some(service) = self.agent_service() {
-            // Use actor-based service
-            service
-                .update_agent(id, update)
-                .await
-                .map_err(|e| StateError::Internal {
-                    message: format!("Service error: {}", e),
-                })
-        } else {
-            // Fall back to HashMap - parse update into UpdateAgentRequest
-            let update_request: crate::models::UpdateAgentRequest = serde_json::from_value(update)
-                .map_err(|e| StateError::Internal {
-                    message: format!("Invalid update: {}", e),
-                })?;
+        let service = self.agent_service().ok_or_else(|| StateError::Internal {
+            message: "AgentService not configured".to_string(),
+        })?;
 
-            self.update_agent(id, |agent| {
-                agent.apply_update(update_request);
+        service
+            .update_agent(id, update)
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("Service error: {}", e),
             })
-        }
     }
 
-    /// Delete an agent (dual-mode)
+    /// Delete an agent (requires AgentService)
     ///
-    /// Phase 6.1: Delegates to service if available, otherwise uses HashMap.
+    /// Phase 6.11: Requires AgentService to be configured.
     pub async fn delete_agent_async(&self, id: &str) -> Result<(), StateError> {
-        if let Some(service) = self.agent_service() {
-            // Use actor-based service
-            service
-                .delete_agent(id)
-                .await
-                .map_err(|e| StateError::Internal {
-                    message: format!("Service error: {}", e),
-                })
-        } else {
-            // Fall back to HashMap
-            self.delete_agent(id)
-        }
+        let service = self.agent_service().ok_or_else(|| StateError::Internal {
+            message: "AgentService not configured".to_string(),
+        })?;
+
+        service
+            .delete_agent(id)
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("Service error: {}", e),
+            })
     }
 
     /// List agents (dual-mode)

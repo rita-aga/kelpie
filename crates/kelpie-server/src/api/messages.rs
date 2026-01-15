@@ -147,6 +147,32 @@ async fn send_message_json(
         .effective_content()
         .ok_or_else(|| ApiError::bad_request("message content cannot be empty"))?;
 
+    // Phase 6.10: Use AgentService if available
+    if let Some(service) = state.agent_service() {
+        tracing::debug!(agent_id = %agent_id, "Using AgentService for message handling");
+
+        let response = service
+            .send_message_full(&agent_id, content.clone())
+            .await
+            .map_err(|e| ApiError::internal(format!("Agent service call failed: {}", e)))?;
+
+        tracing::info!(
+            agent_id = %agent_id,
+            message_count = response.messages.len(),
+            "Processed message via AgentService"
+        );
+
+        return Ok(Json(MessageResponse {
+            messages: response.messages,
+            usage: Some(response.usage),
+            stop_reason: "end_turn".to_string(),
+        })
+        .into_response());
+    }
+
+    // Fallback to HashMap-based implementation (backward compatibility)
+    tracing::debug!(agent_id = %agent_id, "Using HashMap-based message handling (fallback)");
+
     // Create user message
     let user_message = Message {
         id: Uuid::new_v4().to_string(),
