@@ -133,7 +133,99 @@ See `images/README.md` for:
 - ✅ Phase 5.4: Kernel Extraction (complete)
 - ✅ Phase 5.5: Distribution (complete, GitHub Actions)
 - ✅ Phase 5.6: Version Validation (complete, 5 tests)
-- ⏸️  Phase 5.7: libkrun Integration (blocked on real FFI)
+- ✅ Phase 5.7: libkrun Integration (complete, testing/reference only)
+
+## VM Backends & Hypervisors
+
+Kelpie uses a **multi-backend architecture** for VM management, allowing different hypervisors based on platform and use case.
+
+### Backend Selection Strategy
+
+| Backend | Platform | Use Case | Snapshot Support |
+|---------|----------|----------|------------------|
+| **MockVm** | All | Testing, DST, CI/CD | ✅ Simulated |
+| **Apple Vz** | macOS | Production (Mac dev) | ✅ Native API (macOS 14+) |
+| **Firecracker** | Linux | Production (cloud) | ✅ Production-proven |
+| **libkrun** | macOS/Linux | Reference only | ❌ Not supported |
+
+### Why Multiple Backends?
+
+1. **Platform-Native Performance**: Use native hypervisors for best performance
+2. **Testing Everywhere**: MockVm works without system dependencies
+3. **Production-Ready**: Apple Vz and Firecracker have mature snapshot APIs
+4. **Cross-Platform Development**: Mac devs use Apple Vz, Linux devs use Firecracker
+
+### Quick Testing Guide
+
+```bash
+# Default: MockVm (no system dependencies, works everywhere)
+cargo test -p kelpie-libkrun
+
+# Optional: Test with real libkrun FFI (requires libkrun installed)
+cargo test -p kelpie-libkrun --features libkrun
+
+# Coming in Phase 5.9: Apple Vz backend
+cargo test -p kelpie-vz  # macOS only
+
+# Coming in Phase 5.9: Firecracker backend
+cargo test -p kelpie-firecracker  # Linux only
+```
+
+### libkrun Status: Testing & Reference Only
+
+**As of Phase 5.7 (Jan 2026)**, libkrun integration is complete but **NOT recommended for production**:
+
+**Why not production?**
+- ❌ No snapshot/restore API (verified in C header - 70+ functions, zero snapshot-related)
+- ❌ Not designed for VM lifecycle management (built for process isolation)
+- ✅ Better alternatives exist (Apple Vz, Firecracker have native snapshot APIs)
+
+**What libkrun provides:**
+- ✅ Reference FFI implementation (validates our VM abstraction)
+- ✅ Real hypervisor testing (optional, requires system dependencies)
+- ✅ Educational value (shows how to wrap C libraries safely)
+
+**For production VM management:**
+- macOS: Use Apple Virtualization.framework (Phase 5.9)
+- Linux: Use Firecracker (Phase 5.9)
+- Testing: Use MockVm (default, no changes needed)
+
+**See**: `crates/kelpie-libkrun/DEPRECATION_NOTICE.md` for full details and migration timeline.
+
+### Platform-Specific Commands
+
+```bash
+# macOS Development (Phase 5.9+)
+cargo test -p kelpie-vz
+cargo run -p kelpie-server --features vz
+
+# Linux Development (Phase 5.9+)
+cargo test -p kelpie-firecracker
+cargo run -p kelpie-server --features firecracker
+
+# Testing (all platforms)
+cargo test -p kelpie-libkrun  # Uses MockVm by default
+DST_SEED=12345 cargo test -p kelpie-dst
+
+# Reference/Validation (requires libkrun installed)
+cargo test -p kelpie-libkrun --features libkrun
+```
+
+### Architecture Compatibility
+
+**Same-Architecture Teleport** (VM Snapshot):
+- ✅ Mac ARM64 → AWS Graviton ARM64
+- ✅ Linux x86_64 → Linux x86_64
+- ✅ Full VM memory state preserved
+- ✅ Fast restore (~125-500ms)
+
+**Cross-Architecture Migration** (Checkpoint):
+- ✅ Mac ARM64 → Linux x86_64 (agent state only)
+- ✅ Linux x86_64 → Mac ARM64 (agent state only)
+- ❌ VM memory cannot be transferred (CPU incompatibility)
+- ⚠️ Slower (VM restarts fresh, agent state reloaded)
+
+**Implementation Plan**: See `.progress/016_20260115_121324_teleport-dual-backend-implementation.md`
 
 ## TigerStyle Engineering Principles
 

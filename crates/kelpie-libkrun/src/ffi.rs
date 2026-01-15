@@ -495,16 +495,16 @@ impl VmInstance for LibkrunVm {
         //    - Restore via injecting memory back
         //
         // For DST testing, MockVm provides working snapshot/restore.
-        // Real libkrun snapshot support requires either:
-        // - Upstream libkrun feature addition
-        // - Custom fork with snapshot support
-        // - Alternative approach (e.g., checkpoint entire VM process)
         //
-        // Decision: Return unsupported error until libkrun adds snapshot API
-        // or we implement QEMU monitor integration.
+        // For production use:
+        // - macOS: Use Apple Virtualization.framework (has saveMachineStateTo API)
+        // - Linux: Use Firecracker (has PUT /snapshot/create API)
+        //
+        // libkrun is not designed for VM lifecycle management and does not
+        // expose snapshot/restore functionality. See README.md for details.
 
         Err(LibkrunError::SnapshotFailed {
-            reason: "libkrun 1.x does not expose snapshot API (QEMU monitor integration needed)"
+            reason: "libkrun does not support snapshot/restore (no API exists - use Apple Virtualization.framework on macOS or Firecracker on Linux)"
                 .to_string(),
         })
     }
@@ -562,15 +562,17 @@ impl VmInstance for LibkrunVm {
         // - Synchronize with guest agent
         //
         // For DST testing, MockVm provides working restore.
-        // Real libkrun restore requires snapshot() to be implemented first.
         //
-        // Decision: Return unsupported error until snapshot/restore pipeline
-        // is implemented via QEMU monitor or upstream libkrun feature.
+        // For production use:
+        // - macOS: Use Apple Virtualization.framework (has restoreMachineStateFrom API)
+        // - Linux: Use Firecracker (has PUT /snapshot/load API)
+        //
+        // libkrun is not designed for VM lifecycle management and does not
+        // expose snapshot/restore functionality. See README.md for details.
 
         Err(LibkrunError::RestoreFailed {
-            reason:
-                "libkrun 1.x does not expose restore API (requires snapshot implementation first)"
-                    .to_string(),
+            reason: "libkrun does not support snapshot/restore (no API exists - use Apple Virtualization.framework on macOS or Firecracker on Linux)"
+                .to_string(),
         })
     }
 }

@@ -11,12 +11,18 @@ authors.workspace = true
 [features]
 default = []
 
-# libkrun feature: Core FFI implemented, requires system dependencies
+# libkrun feature: TESTING & VALIDATION ONLY ⚠️
+#
+# This feature is NOT recommended for production use.
 #
 # STATUS: Core lifecycle (create/configure/boot/stop/cleanup) is COMPLETE.
-# Deferred features: exec (Phase 5.8), snapshot/restore (upstream needed).
+# NOT SUPPORTED: exec (needs guest agent), snapshot/restore (no libkrun API).
 #
-# System requirements:
+# For production VM management with snapshot/restore:
+# - macOS: Use Apple Virtualization.framework (native snapshot API)
+# - Linux: Use Firecracker (production-proven snapshot/restore)
+#
+# System requirements (if testing libkrun FFI):
 # - macOS: Build libkrun from source + LLVM (`brew install llvm`)
 # - Linux: libkrun development packages
 #
@@ -26,7 +32,7 @@ default = []
 # 3. cargo build -p kelpie-libkrun --features libkrun
 #
 # Note: Will fail if libkrun.pc is not found by pkg-config.
-# Use MockVm (default) for testing if libkrun is not installed.
+# Use MockVm (default) for most testing - no system dependencies needed.
 libkrun = ["dep:krun-sys"]
 
 [dependencies]
