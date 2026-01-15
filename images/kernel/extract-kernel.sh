@@ -105,7 +105,7 @@ fi
 
 # Get kernel version
 echo -e "${YELLOW}Detecting kernel version...${NC}"
-KERNEL_VERSION=$(docker exec "$CONTAINER_ID" sh -c 'apk info linux-virt | grep "linux-virt-" | head -1' | sed 's/linux-virt-//' || echo "unknown")
+KERNEL_VERSION=$(docker exec "$CONTAINER_ID" sh -c 'apk info linux-virt | grep "linux-virt-" | head -1' | sed 's/linux-virt-//' | awk '{print $1}' || echo "unknown")
 echo "Kernel version: $KERNEL_VERSION"
 
 # Create metadata file

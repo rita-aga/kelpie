@@ -449,6 +449,7 @@ impl TeleportStorage for LocalTeleportStorage {
         let expected_version = &self.expected_image_version;
 
         // Parse versions (format: MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-prerelease-DATE-GITSHA)
+        // TigerStyle: unwrap_or() is safe - returns original string if no '-' found (no prerelease)
         let package_parts: Vec<&str> = package_version.split('-').next().unwrap_or(package_version).split('.').collect();
         let expected_parts: Vec<&str> = expected_version.split('-').next().unwrap_or(expected_version).split('.').collect();
 

@@ -12,25 +12,23 @@ ARG VERSION
 ARG GIT_SHA
 
 # Stage 1: Builder
-FROM alpine:${ALPINE_VERSION} AS builder
+# Use official Rust Alpine image for newer toolchain
+FROM rust:alpine AS builder
 
 # Install build dependencies
-RUN apk add --no-cache \
-    alpine-sdk \
-    rust \
-    cargo \
-    musl-dev
+RUN apk add --no-cache musl-dev
 
 # Create build directory
 WORKDIR /build
 
-# Copy guest agent source (will be added in Phase 5.2)
-# COPY guest-agent/ /build/guest-agent/
+# Copy guest agent source
+COPY guest-agent/ /build/guest-agent/
 
-# Build guest agent (will be enabled in Phase 5.2)
-# RUN cd guest-agent && \
-#     cargo build --release --target $(uname -m)-unknown-linux-musl && \
-#     strip target/*/release/kelpie-guest
+# Build guest agent
+# TigerStyle: Static binary with musl, stripped for size
+RUN cd guest-agent && \
+    cargo build --release --target $(uname -m)-unknown-linux-musl && \
+    strip target/$(uname -m)-unknown-linux-musl/release/kelpie-guest
 
 # Stage 2: Runtime Image
 FROM alpine:${ALPINE_VERSION}
@@ -70,11 +68,11 @@ RUN mkdir -p \
     && chmod 1777 /tmp \
     && chmod 755 /workspace
 
-# Copy guest agent binary (will be enabled in Phase 5.2)
-# COPY --from=builder /build/guest-agent/target/*/release/kelpie-guest /usr/local/bin/
-# RUN chmod 755 /usr/local/bin/kelpie-guest
+# Copy guest agent binary from builder stage
+COPY --from=builder /build/guest-agent/target/*/release/kelpie-guest /usr/local/bin/
+RUN chmod 755 /usr/local/bin/kelpie-guest
 
-# Copy init script (Phase 5.3)
+# Copy init script
 # Remove busybox symlink and install our custom init
 RUN rm -f /sbin/init
 COPY base/init /sbin/init

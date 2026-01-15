@@ -18,7 +18,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::{ActorId, Result as CoreResult};
-use kelpie_storage::FdbKV;
+use kelpie_storage::{ActorKV, FdbKV};
 use std::sync::Arc;
 
 use crate::models::{Block, Message};
@@ -287,16 +287,22 @@ impl AgentStorage for FdbAgentRegistry {
         let mut blocks = self.load_blocks(agent_id).await?;
 
         // Find and update block
+        let mut found = false;
+        let mut result_block = None;
         for block in &mut blocks {
             if block.label == label {
                 block.value = value.to_string();
                 block.updated_at = chrono::Utc::now();
-
-                // Save updated blocks
-                self.save_blocks(agent_id, &blocks).await?;
-
-                return Ok(block.clone());
+                result_block = Some(block.clone());
+                found = true;
+                break;
             }
+        }
+
+        if found {
+            // Save updated blocks (after mutable borrow ends)
+            self.save_blocks(agent_id, &blocks).await?;
+            return Ok(result_block.unwrap());
         }
 
         Err(StorageError::NotFound {
@@ -319,16 +325,22 @@ impl AgentStorage for FdbAgentRegistry {
         let mut blocks = self.load_blocks(agent_id).await?;
 
         // Find existing block or create new
+        let mut found = false;
+        let mut result_block = None;
         for block in &mut blocks {
             if block.label == label {
                 block.value.push_str(content);
                 block.updated_at = chrono::Utc::now();
-
-                // Save updated blocks
-                self.save_blocks(agent_id, &blocks).await?;
-
-                return Ok(block.clone());
+                result_block = Some(block.clone());
+                found = true;
+                break;
             }
+        }
+
+        if found {
+            // Save updated blocks (after mutable borrow ends)
+            self.save_blocks(agent_id, &blocks).await?;
+            return Ok(result_block.unwrap());
         }
 
         // Create new block

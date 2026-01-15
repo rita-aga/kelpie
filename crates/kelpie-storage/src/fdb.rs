@@ -170,10 +170,7 @@ impl FdbKV {
             self.subspace
                 .subspace(&(actor_id.namespace(), actor_id.id(), KEY_PREFIX_DATA));
 
-        actor_subspace
-            .unpack::<Vec<u8>>(fdb_key)
-            .ok()
-            .map(|(key, _)| key)
+        actor_subspace.unpack::<Vec<u8>>(fdb_key).ok()
     }
 
     /// Execute a transaction with automatic retry on conflicts
@@ -416,7 +413,7 @@ impl ActorTransaction for FdbActorTransaction {
                 }
             }
 
-            // Commit
+            // Commit (consumes txn in FDB 0.10)
             match txn.commit().await {
                 Ok(_) => {
                     debug!(
@@ -433,12 +430,15 @@ impl ActorTransaction for FdbActorTransaction {
                         "Transaction conflict (attempt {}/{}), retrying",
                         attempts, TRANSACTION_RETRY_COUNT_MAX
                     );
-                    // Wait before retry using on_error
-                    txn.on_error(e)
+                    // FDB 0.10: TransactionCommitError contains the transaction.
+                    // Call on_error() to wait with exponential backoff before retrying.
+                    let _txn = e
+                        .on_error()
                         .await
                         .map_err(|e| Error::TransactionFailed {
                             reason: format!("retry wait failed: {}", e),
                         })?;
+                    // Loop back to create a new transaction and retry
                     continue;
                 }
                 Err(e) if e.is_retryable() => {
@@ -659,6 +659,33 @@ impl ActorKV for FdbKV {
             actor_id.clone(),
             self.clone(),
         )))
+    }
+}
+
+// Implement ActorKV for Arc<FdbKV> to allow using it through Arc
+//
+// This is a common pattern in Rust - implement traits for smart pointers
+// by delegating to the inner type.
+#[async_trait]
+impl ActorKV for Arc<FdbKV> {
+    async fn get(&self, actor_id: &ActorId, key: &[u8]) -> Result<Option<Bytes>> {
+        (**self).get(actor_id, key).await
+    }
+
+    async fn set(&self, actor_id: &ActorId, key: &[u8], value: &[u8]) -> Result<()> {
+        (**self).set(actor_id, key, value).await
+    }
+
+    async fn delete(&self, actor_id: &ActorId, key: &[u8]) -> Result<()> {
+        (**self).delete(actor_id, key).await
+    }
+
+    async fn list_keys(&self, actor_id: &ActorId, prefix: &[u8]) -> Result<Vec<Vec<u8>>> {
+        (**self).list_keys(actor_id, prefix).await
+    }
+
+    async fn begin_transaction(&self, actor_id: &ActorId) -> Result<Box<dyn ActorTransaction>> {
+        (**self).begin_transaction(actor_id).await
     }
 }
 

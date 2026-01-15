@@ -96,7 +96,7 @@ wasmtime = "16"
 wasmtime-wasi = "16"
 
 # FoundationDB (optional, feature-gated)
-foundationdb = "0.9"
+foundationdb = { version = "0.10", features = ["fdb-7_3"] }
 
 # Formal verification
 stateright = "0.30"
