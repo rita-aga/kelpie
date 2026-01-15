@@ -138,6 +138,9 @@ async fn main() -> anyhow::Result<()> {
     // Register messaging tools
     tools::register_messaging_tools(state.tool_registry()).await;
 
+    // Register web search tool
+    tools::register_web_search_tool(state.tool_registry()).await;
+
     // Create router
     let app = api::router(state);
 

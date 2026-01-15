@@ -11,6 +11,7 @@ mod heartbeat;
 mod memory;
 mod messaging;
 mod registry;
+mod web_search;
 
 pub use heartbeat::{
     parse_pause_signal, register_heartbeat_tools, register_pause_heartbeats_with_clock, ClockSource,
@@ -22,3 +23,4 @@ pub use registry::{
     UnifiedToolRegistry, AGENT_LOOP_ITERATIONS_MAX, HEARTBEAT_PAUSE_MINUTES_DEFAULT,
     HEARTBEAT_PAUSE_MINUTES_MAX, HEARTBEAT_PAUSE_MINUTES_MIN, MS_PER_MINUTE,
 };
+pub use web_search::register_web_search_tool;
