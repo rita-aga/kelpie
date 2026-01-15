@@ -393,10 +393,31 @@ Layer 2 (Process): Agent ↔ Tool isolation
 
 ## Implementation Plan
 
-### Phase 0: Path Alias (Quick Win - 15 min)
-- [ ] Add `/v1/agents/{id}/blocks/{label}` route alias
-- [ ] Point to existing `update_block_by_label` handler
-- [ ] Add integration test for both paths
+### Phase 0: Path Alias (Quick Win - 15 min) ✅ COMPLETED
+
+**Completion Date:** 2026-01-15
+
+**What was implemented:**
+- [x] Added smart handlers `get_block_or_label()` and `update_block_or_label()` that auto-detect UUID vs label
+- [x] Updated route to use smart handlers: `/v1/agents/:agent_id/blocks/:id_or_label`
+- [x] Fixed `get_block_by_label()` and `update_block_by_label()` to work with AgentService
+- [x] Added 2 integration tests for Letta compatibility paths
+- [x] All 22 binary tests pass + 56 library tests pass
+
+**Implementation Details:**
+- Smart detection: Try parsing as UUID first, if fails treat as label
+- Supports both UUID-based access (`/blocks/{uuid}`) and label-based access (`/blocks/{persona}`)
+- Kept `/core-memory/blocks/{label}` as explicit alias for clarity
+- Both paths work seamlessly for Letta clients
+
+**Files Changed:**
+- `crates/kelpie-server/src/api/blocks.rs` - Added smart handlers, fixed AgentService support
+- `crates/kelpie-server/src/api/agents.rs` - Updated route to use smart handlers
+
+**Tests Added:**
+- `test_get_block_by_label_letta_compat` - GET /v1/agents/{id}/blocks/{label}
+- `test_update_block_by_label_letta_compat` - PATCH /v1/agents/{id}/blocks/{label}
+
 - [ ] Update LETTA_REPLACEMENT_GUIDE.md (mark as ✅)
 - [ ] Commit: "feat: Add Letta-compatible route alias for memory blocks"
 

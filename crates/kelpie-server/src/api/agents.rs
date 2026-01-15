@@ -40,11 +40,14 @@ pub fn router() -> Router<AppState> {
         )
         // Nested block routes
         .route("/:agent_id/blocks", get(super::blocks::list_blocks))
+        // Smart route: supports both UUID (block_id) and label access
+        // This provides Letta compatibility for /blocks/{label} paths
         .route(
-            "/:agent_id/blocks/:block_id",
-            get(super::blocks::get_block).patch(super::blocks::update_block),
+            "/:agent_id/blocks/:id_or_label",
+            get(super::blocks::get_block_or_label).patch(super::blocks::update_block_or_label),
         )
-        // Core memory routes (letta-code compatibility - uses label instead of ID)
+        // Core memory routes (explicit label-based access)
+        // Kept as alias for clarity - both paths work
         .route(
             "/:agent_id/core-memory/blocks/:label",
             get(super::blocks::get_block_by_label).patch(super::blocks::update_block_by_label),
