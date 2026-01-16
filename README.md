@@ -51,7 +51,8 @@ curl -X POST http://localhost:8283/v1/agents/{id}/messages \
 | Level | Implementation | Boot Time |
 |-------|----------------|-----------|
 | Process | OS process isolation | <10ms |
-| VM | Firecracker microVM | ~125ms |
+| VM (macOS) | Apple Virtualization.framework | ~200-500ms |
+| VM (Linux) | Firecracker microVM | ~125ms |
 
 ### Tool Integration (MCP)
 
@@ -116,7 +117,8 @@ The agent framework is **~80% complete**. Core functionality works today:
 | `kelpie-runtime` | Actor dispatcher | Complete |
 | `kelpie-memory` | Memory hierarchy | Complete |
 | `kelpie-storage` | KV storage (FDB backend) | Complete (not wired) |
-| `kelpie-sandbox` | Process/VM isolation | Complete |
+| `kelpie-vm` | VM backends (Vz/Firecracker) | Complete |
+| `kelpie-sandbox` | Process isolation wrapper | Complete |
 | `kelpie-tools` | MCP client, tool registry | Complete |
 | `kelpie-cluster` | Node coordination | Complete |
 | `kelpie-server` | REST API + agent loop | Complete |
