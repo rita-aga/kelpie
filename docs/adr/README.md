@@ -19,6 +19,11 @@ An ADR is a document that captures an important architectural decision made alon
 | [006](./006-letta-code-compatibility.md) | Letta-Code Compatibility | Accepted | ✅ Complete |
 | [007](./007-fdb-backend-implementation.md) | FDB Backend Implementation | Accepted | ✅ Complete |
 | [008](./008-transaction-api.md) | Transaction API for Actor Storage | Accepted | ✅ Complete |
+| [016](./016-vz-objc-bridge.md) | Apple VZ Backend via Objective-C Bridge | Accepted | 🚧 Partial |
+| [017](./017-firecracker-backend-wrapper.md) | Firecracker Backend via Sandbox Wrapper | Superseded | ✅ Complete |
+| [018](./018-vmconfig-kernel-initrd-fields.md) | Add Kernel/Initrd Paths to VmConfig | Accepted | ✅ Complete |
+| [019](./019-vm-backends-crate.md) | Separate VM Backend Factory Crate | Superseded | ✅ Complete |
+| [020](./020-consolidated-vm-crate.md) | Consolidate VM Core + Backends into kelpie-vm | Accepted | ✅ Complete |
 
 ## Creating a New ADR
 

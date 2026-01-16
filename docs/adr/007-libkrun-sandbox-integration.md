@@ -1,11 +1,11 @@
 # ADR-007: LibkrunSandbox Integration with DST
 
 ## Status
-Accepted
+Deprecated (libkrun sandbox removed; see ADR-020 for consolidation)
 
 ## Context
 
-We're implementing `LibkrunSandbox` in kelpie-sandbox that wraps `kelpie-libkrun::VmInstance`. We need to decide how this integrates with DST (Deterministic Simulation Testing).
+This ADR documented the original `LibkrunSandbox` approach. The libkrun sandbox has since been removed in favor of consolidating VM backends into `kelpie-vm` (see ADR-020).
 
 The DST framework uses simulation types (`SimSandbox`, `SimLlmClient`, etc.) that implement the same traits as production code but with fault injection capabilities.
 
@@ -44,7 +44,7 @@ Inject a `FaultInjector` into LibkrunSandbox to enable DST testing of actual pro
 **Rejected because:**
 - Adds complexity to production code
 - FaultInjector in production path is a code smell
-- MockVm in kelpie-libkrun already has basic failure simulation
+- MockVm in `kelpie-vm` already has basic failure simulation
 
 ### Alternative B: Generic Sandbox<V: VmInstance>
 
