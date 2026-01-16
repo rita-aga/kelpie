@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::models::{Block, Message};
 
-use super::types::{AgentMetadata, SessionState};
+use super::types::{AgentMetadata, CustomToolRecord, SessionState};
 
 // =============================================================================
 // Storage Error
@@ -218,6 +218,22 @@ pub trait AgentStorage: Send + Sync {
 
     /// List active sessions for an agent
     async fn list_sessions(&self, agent_id: &str) -> Result<Vec<SessionState>, StorageError>;
+
+    // =========================================================================
+    // Custom Tool Operations
+    // =========================================================================
+
+    /// Save a custom tool definition
+    async fn save_custom_tool(&self, tool: &CustomToolRecord) -> Result<(), StorageError>;
+
+    /// Load a custom tool definition by name
+    async fn load_custom_tool(&self, name: &str) -> Result<Option<CustomToolRecord>, StorageError>;
+
+    /// Delete a custom tool definition
+    async fn delete_custom_tool(&self, name: &str) -> Result<(), StorageError>;
+
+    /// List all custom tool definitions
+    async fn list_custom_tools(&self) -> Result<Vec<CustomToolRecord>, StorageError>;
 
     /// Get the latest session for an agent (for resume)
     async fn load_latest_session(

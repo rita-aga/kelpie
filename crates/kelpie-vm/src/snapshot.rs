@@ -5,7 +5,7 @@
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{LibkrunError, LibkrunResult};
+use crate::error::{VmError, VmResult};
 use crate::VM_SNAPSHOT_SIZE_BYTES_MAX;
 
 /// Metadata about a VM snapshot
@@ -95,14 +95,14 @@ pub struct VmSnapshot {
 
 impl VmSnapshot {
     /// Create a new snapshot
-    pub fn new(metadata: VmSnapshotMetadata, data: Bytes) -> LibkrunResult<Self> {
+    pub fn new(metadata: VmSnapshotMetadata, data: Bytes) -> VmResult<Self> {
         // Preconditions
         assert!(VM_SNAPSHOT_SIZE_BYTES_MAX > 0);
 
         let size_bytes = data.len() as u64;
 
         if size_bytes > VM_SNAPSHOT_SIZE_BYTES_MAX {
-            return Err(LibkrunError::SnapshotTooLarge {
+            return Err(VmError::SnapshotTooLarge {
                 size_bytes,
                 max_bytes: VM_SNAPSHOT_SIZE_BYTES_MAX,
             });

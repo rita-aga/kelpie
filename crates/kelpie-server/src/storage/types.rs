@@ -32,6 +32,7 @@ pub const MESSAGES_LOAD_LIMIT_DEFAULT: usize = 50;
 #[allow(dead_code)]
 pub const MESSAGES_LOAD_LIMIT_MAX: usize = 1000;
 
+/// Maximum custom tool name length in bytes
 // =============================================================================
 // Agent Metadata
 // =============================================================================
@@ -72,6 +73,31 @@ pub struct AgentMetadata {
     /// Creation timestamp
     pub created_at: DateTime<Utc>,
 
+    /// Last update timestamp
+    pub updated_at: DateTime<Utc>,
+}
+
+// =============================================================================
+// Custom Tool Metadata
+// =============================================================================
+
+/// Custom tool definition stored in durable storage
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CustomToolRecord {
+    /// Tool name (unique)
+    pub name: String,
+    /// Description for LLM and user display
+    pub description: String,
+    /// JSON schema for inputs
+    pub input_schema: Value,
+    /// Source code (runtime-specific)
+    pub source_code: String,
+    /// Runtime identifier (python, javascript, etc.)
+    pub runtime: String,
+    /// Optional runtime requirements
+    pub requirements: Vec<String>,
+    /// Creation timestamp
+    pub created_at: DateTime<Utc>,
     /// Last update timestamp
     pub updated_at: DateTime<Utc>,
 }

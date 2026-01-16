@@ -12,12 +12,9 @@ description = "Sandbox execution environment for Kelpie agents"
 default = []
 # Enable Firecracker VM support (Linux only)
 firecracker = []
-# Enable libkrun VM support (macOS HVF + Linux KVM)
-libkrun = ["dep:kelpie-libkrun"]
 
 [dependencies]
 kelpie-core = { workspace = true }
-kelpie-libkrun = { workspace = true, optional = true }
 
 # Async
 async-trait = { workspace = true }

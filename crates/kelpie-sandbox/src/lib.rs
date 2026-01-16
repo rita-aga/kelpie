@@ -47,9 +47,6 @@ mod traits;
 #[cfg(feature = "firecracker")]
 mod firecracker;
 
-#[cfg(feature = "libkrun")]
-mod libkrun;
-
 pub use config::{ResourceLimits, SandboxConfig};
 pub use error::{SandboxError, SandboxResult};
 pub use exec::{ExecOptions, ExecOutput, ExitStatus};
@@ -72,11 +69,6 @@ pub use firecracker::{
     FIRECRACKER_API_TIMEOUT_MS_DEFAULT, FIRECRACKER_BINARY_PATH_DEFAULT,
     FIRECRACKER_BOOT_TIMEOUT_MS_DEFAULT, FIRECRACKER_VSOCK_CID_DEFAULT,
     FIRECRACKER_VSOCK_PORT_DEFAULT,
-};
-
-#[cfg(feature = "libkrun")]
-pub use libkrun::{
-    LibkrunSandbox, LibkrunSandboxConfig, LibkrunSandboxFactory, LIBKRUN_ROOT_DISK_PATH_DEFAULT,
 };
 
 #[cfg(test)]

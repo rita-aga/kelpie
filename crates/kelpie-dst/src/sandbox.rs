@@ -259,8 +259,12 @@ impl Sandbox for SimSandbox {
         }
 
         *state = SandboxState::Running;
+        let start_time = {
+            let rng = self.rng.read().await;
+            1000 + rng.next_range(0, 1000)
+        };
         // Use a deterministic start time (could be from SimClock)
-        self.start_time_ms.store(1000, Ordering::SeqCst);
+        self.start_time_ms.store(start_time, Ordering::SeqCst);
 
         tracing::debug!(sandbox_id = %self.id, "SimSandbox started");
         Ok(())

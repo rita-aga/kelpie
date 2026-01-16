@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 
 use crate::config::VmConfig;
-use crate::error::LibkrunResult;
+use crate::error::VmResult;
 use crate::snapshot::VmSnapshot;
 
 /// State of a VM instance
@@ -104,7 +104,7 @@ impl ExecOptions {
 /// This trait defines the lifecycle and operations for a VM instance.
 /// Implementations can be:
 /// - MockVm: For testing without libkrun
-/// - LibkrunVm: For actual libkrun integration
+/// - FirecrackerVm: For production microVMs (Linux)
 #[async_trait]
 pub trait VmInstance: Send + Sync {
     /// Get the VM's unique identifier
@@ -119,27 +119,27 @@ pub trait VmInstance: Send + Sync {
     /// Start the VM
     ///
     /// Transitions from Created -> Starting -> Running
-    async fn start(&mut self) -> LibkrunResult<()>;
+    async fn start(&mut self) -> VmResult<()>;
 
     /// Stop the VM
     ///
     /// Transitions from Running/Paused -> Stopped
-    async fn stop(&mut self) -> LibkrunResult<()>;
+    async fn stop(&mut self) -> VmResult<()>;
 
     /// Pause the VM
     ///
     /// Transitions from Running -> Paused
-    async fn pause(&mut self) -> LibkrunResult<()>;
+    async fn pause(&mut self) -> VmResult<()>;
 
     /// Resume the VM from paused state
     ///
     /// Transitions from Paused -> Running
-    async fn resume(&mut self) -> LibkrunResult<()>;
+    async fn resume(&mut self) -> VmResult<()>;
 
     /// Execute a command in the VM
     ///
     /// Requires VM to be in Running state
-    async fn exec(&self, cmd: &str, args: &[&str]) -> LibkrunResult<ExecOutput>;
+    async fn exec(&self, cmd: &str, args: &[&str]) -> VmResult<ExecOutput>;
 
     /// Execute a command with options
     ///
@@ -149,17 +149,37 @@ pub trait VmInstance: Send + Sync {
         cmd: &str,
         args: &[&str],
         options: ExecOptions,
-    ) -> LibkrunResult<ExecOutput>;
+    ) -> VmResult<ExecOutput>;
 
     /// Create a snapshot of the VM state
     ///
     /// Can be called from Running or Paused state
-    async fn snapshot(&self) -> LibkrunResult<VmSnapshot>;
+    async fn snapshot(&self) -> VmResult<VmSnapshot>;
 
     /// Restore VM from a snapshot
     ///
     /// Requires VM to be in Stopped or Created state
-    async fn restore(&mut self, snapshot: &VmSnapshot) -> LibkrunResult<()>;
+    async fn restore(&mut self, snapshot: &VmSnapshot) -> VmResult<()>;
+}
+
+/// Factory for creating VM instances
+///
+/// TigerStyle: Async factory for deterministic and production backends.
+#[async_trait]
+pub trait VmFactory: Send + Sync {
+    /// Create a new VM instance with the given config
+    async fn create(&self, config: VmConfig) -> VmResult<Box<dyn VmInstance>>;
+
+    /// Create a VM instance and restore from snapshot
+    async fn create_from_snapshot(
+        &self,
+        config: VmConfig,
+        snapshot: &VmSnapshot,
+    ) -> VmResult<Box<dyn VmInstance>> {
+        let mut vm = self.create(config).await?;
+        vm.restore(snapshot).await?;
+        Ok(vm)
+    }
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 //!
 //! TigerStyle: Builder pattern with validation assertions.
 
-use crate::error::{LibkrunError, LibkrunResult};
+use crate::error::{VmError, VmResult};
 use crate::virtio_fs::VirtioFsMount;
 use crate::{
     VIRTIO_FS_MOUNT_COUNT_MAX, VM_MEMORY_MIB_DEFAULT, VM_MEMORY_MIB_MAX, VM_MEMORY_MIB_MIN,
@@ -27,6 +27,12 @@ pub struct VmConfig {
     /// Kernel command line arguments
     pub kernel_args: Option<String>,
 
+    /// Path to kernel image (required for Firecracker/Apple VZ)
+    pub kernel_image_path: Option<String>,
+
+    /// Path to initrd image (optional for Firecracker/Apple VZ)
+    pub initrd_path: Option<String>,
+
     /// VirtioFs mounts for filesystem sharing
     pub virtio_fs_mounts: Vec<VirtioFsMount>,
 
@@ -48,6 +54,8 @@ impl Default for VmConfig {
             root_disk_path: String::new(),
             root_disk_readonly: false,
             kernel_args: None,
+            kernel_image_path: None,
+            initrd_path: None,
             virtio_fs_mounts: Vec::new(),
             networking_enabled: true,
             workdir: None,
@@ -63,19 +71,19 @@ impl VmConfig {
     }
 
     /// Validate the configuration
-    pub fn validate(&self) -> LibkrunResult<()> {
+    pub fn validate(&self) -> VmResult<()> {
         // Preconditions
         assert!(VM_VCPU_COUNT_MAX >= 1);
         assert!(VM_MEMORY_MIB_MAX >= VM_MEMORY_MIB_MIN);
 
         // vCPU validation
         if self.vcpu_count == 0 {
-            return Err(LibkrunError::ConfigInvalid {
+            return Err(VmError::ConfigInvalid {
                 reason: "vcpu_count must be at least 1".into(),
             });
         }
         if self.vcpu_count > VM_VCPU_COUNT_MAX {
-            return Err(LibkrunError::ConfigInvalid {
+            return Err(VmError::ConfigInvalid {
                 reason: format!(
                     "vcpu_count {} exceeds max {}",
                     self.vcpu_count, VM_VCPU_COUNT_MAX
@@ -85,7 +93,7 @@ impl VmConfig {
 
         // Memory validation
         if self.memory_mib < VM_MEMORY_MIB_MIN {
-            return Err(LibkrunError::ConfigInvalid {
+            return Err(VmError::ConfigInvalid {
                 reason: format!(
                     "memory_mib {} below minimum {}",
                     self.memory_mib, VM_MEMORY_MIB_MIN
@@ -93,7 +101,7 @@ impl VmConfig {
             });
         }
         if self.memory_mib > VM_MEMORY_MIB_MAX {
-            return Err(LibkrunError::ConfigInvalid {
+            return Err(VmError::ConfigInvalid {
                 reason: format!(
                     "memory_mib {} exceeds max {}",
                     self.memory_mib, VM_MEMORY_MIB_MAX
@@ -103,12 +111,12 @@ impl VmConfig {
 
         // Root disk validation
         if self.root_disk_path.is_empty() {
-            return Err(LibkrunError::ConfigInvalid {
+            return Err(VmError::ConfigInvalid {
                 reason: "root_disk_path cannot be empty".into(),
             });
         }
         if self.root_disk_path.len() > VM_ROOT_DISK_PATH_LENGTH_MAX {
-            return Err(LibkrunError::ConfigInvalid {
+            return Err(VmError::ConfigInvalid {
                 reason: format!(
                     "root_disk_path length {} exceeds max {}",
                     self.root_disk_path.len(),
@@ -117,9 +125,43 @@ impl VmConfig {
             });
         }
 
+        if let Some(kernel_path) = &self.kernel_image_path {
+            if kernel_path.is_empty() {
+                return Err(VmError::ConfigInvalid {
+                    reason: "kernel_image_path cannot be empty".into(),
+                });
+            }
+            if kernel_path.len() > VM_ROOT_DISK_PATH_LENGTH_MAX {
+                return Err(VmError::ConfigInvalid {
+                    reason: format!(
+                        "kernel_image_path length {} exceeds max {}",
+                        kernel_path.len(),
+                        VM_ROOT_DISK_PATH_LENGTH_MAX
+                    ),
+                });
+            }
+        }
+
+        if let Some(initrd_path) = &self.initrd_path {
+            if initrd_path.is_empty() {
+                return Err(VmError::ConfigInvalid {
+                    reason: "initrd_path cannot be empty".into(),
+                });
+            }
+            if initrd_path.len() > VM_ROOT_DISK_PATH_LENGTH_MAX {
+                return Err(VmError::ConfigInvalid {
+                    reason: format!(
+                        "initrd_path length {} exceeds max {}",
+                        initrd_path.len(),
+                        VM_ROOT_DISK_PATH_LENGTH_MAX
+                    ),
+                });
+            }
+        }
+
         // VirtioFs mounts validation
         if self.virtio_fs_mounts.len() > VIRTIO_FS_MOUNT_COUNT_MAX {
-            return Err(LibkrunError::VirtioFsTooManyMounts {
+            return Err(VmError::VirtioFsTooManyMounts {
                 count: self.virtio_fs_mounts.len(),
                 max: VIRTIO_FS_MOUNT_COUNT_MAX,
             });
@@ -141,6 +183,8 @@ pub struct VmConfigBuilder {
     root_disk_path: Option<String>,
     root_disk_readonly: bool,
     kernel_args: Option<String>,
+    kernel_image_path: Option<String>,
+    initrd_path: Option<String>,
     virtio_fs_mounts: Vec<VirtioFsMount>,
     networking_enabled: bool,
     workdir: Option<String>,
@@ -191,6 +235,18 @@ impl VmConfigBuilder {
         self
     }
 
+    /// Set the kernel image path
+    pub fn kernel_image(mut self, path: impl Into<String>) -> Self {
+        self.kernel_image_path = Some(path.into());
+        self
+    }
+
+    /// Set the initrd path
+    pub fn initrd(mut self, path: impl Into<String>) -> Self {
+        self.initrd_path = Some(path.into());
+        self
+    }
+
     /// Add a VirtioFs mount
     pub fn add_virtio_fs(mut self, mount: VirtioFsMount) -> Self {
         self.virtio_fs_mounts.push(mount);
@@ -216,13 +272,15 @@ impl VmConfigBuilder {
     }
 
     /// Build the configuration, validating all values
-    pub fn build(self) -> LibkrunResult<VmConfig> {
+    pub fn build(self) -> VmResult<VmConfig> {
         let config = VmConfig {
             vcpu_count: self.vcpu_count.unwrap_or(VM_VCPU_COUNT_DEFAULT),
             memory_mib: self.memory_mib.unwrap_or(VM_MEMORY_MIB_DEFAULT),
             root_disk_path: self.root_disk_path.unwrap_or_default(),
             root_disk_readonly: self.root_disk_readonly,
             kernel_args: self.kernel_args,
+            kernel_image_path: self.kernel_image_path,
+            initrd_path: self.initrd_path,
             virtio_fs_mounts: self.virtio_fs_mounts,
             networking_enabled: self.networking_enabled,
             workdir: self.workdir,
@@ -277,7 +335,7 @@ mod tests {
         let result = VmConfig::builder().build();
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, LibkrunError::ConfigInvalid { .. }));
+        assert!(matches!(err, VmError::ConfigInvalid { .. }));
     }
 
     #[test]

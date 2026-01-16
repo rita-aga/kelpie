@@ -2,7 +2,7 @@
 //!
 //! TigerStyle: Validated mount configuration with explicit permissions.
 
-use crate::error::{LibkrunError, LibkrunResult};
+use crate::error::{VmError, VmResult};
 use crate::VIRTIO_FS_TAG_LENGTH_MAX;
 
 /// Configuration for VirtioFs
@@ -87,15 +87,15 @@ impl VirtioFsMount {
     }
 
     /// Validate the mount configuration
-    pub fn validate(&self) -> LibkrunResult<()> {
+    pub fn validate(&self) -> VmResult<()> {
         // Tag validation
         if self.tag.is_empty() {
-            return Err(LibkrunError::ConfigInvalid {
+            return Err(VmError::ConfigInvalid {
                 reason: "virtio-fs tag cannot be empty".into(),
             });
         }
         if self.tag.len() > VIRTIO_FS_TAG_LENGTH_MAX {
-            return Err(LibkrunError::ConfigInvalid {
+            return Err(VmError::ConfigInvalid {
                 reason: format!(
                     "virtio-fs tag length {} exceeds max {}",
                     self.tag.len(),
@@ -106,19 +106,19 @@ impl VirtioFsMount {
 
         // Host path validation
         if self.host_path.is_empty() {
-            return Err(LibkrunError::ConfigInvalid {
+            return Err(VmError::ConfigInvalid {
                 reason: "virtio-fs host_path cannot be empty".into(),
             });
         }
 
         // Guest mount point validation
         if self.guest_mount_point.is_empty() {
-            return Err(LibkrunError::ConfigInvalid {
+            return Err(VmError::ConfigInvalid {
                 reason: "virtio-fs guest_mount_point cannot be empty".into(),
             });
         }
         if !self.guest_mount_point.starts_with('/') {
-            return Err(LibkrunError::ConfigInvalid {
+            return Err(VmError::ConfigInvalid {
                 reason: "virtio-fs guest_mount_point must be absolute path".into(),
             });
         }

@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 
 use crate::config::VmConfig;
-use crate::error::{LibkrunError, LibkrunResult};
+use crate::error::{VmError, VmResult};
 use crate::snapshot::{VmSnapshot, VmSnapshotMetadata};
 use crate::traits::{ExecOptions, ExecOutput, VmInstance, VmState};
 use crate::VM_EXEC_TIMEOUT_MS_DEFAULT;
@@ -16,7 +16,7 @@ use crate::VM_EXEC_TIMEOUT_MS_DEFAULT;
 /// Counter for generating unique VM IDs
 static VM_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-/// Mock VM implementation for testing without libkrun
+/// Mock VM implementation for testing without a hypervisor
 #[derive(Debug)]
 pub struct MockVm {
     /// Unique VM identifier
@@ -43,7 +43,7 @@ pub struct MockVm {
 
 impl MockVm {
     /// Create a new mock VM
-    pub fn new(config: VmConfig) -> LibkrunResult<Self> {
+    pub fn new(config: VmConfig) -> VmResult<Self> {
         config.validate()?;
 
         let id = format!("mock-vm-{}", VM_ID_COUNTER.fetch_add(1, Ordering::SeqCst));
@@ -89,16 +89,16 @@ impl MockVm {
     }
 
     /// Helper to check if VM is in a valid state for operation
-    fn check_state(&self, required: VmState) -> LibkrunResult<()> {
+    fn check_state(&self, required: VmState) -> VmResult<()> {
         if self.state != required {
             match required {
                 VmState::Running => {
-                    return Err(LibkrunError::NotRunning {
+                    return Err(VmError::NotRunning {
                         state: self.state.to_string(),
                     });
                 }
                 _ => {
-                    return Err(LibkrunError::Internal {
+                    return Err(VmError::Internal {
                         reason: format!("expected state {:?}, got {:?}", required, self.state),
                     });
                 }
@@ -122,13 +122,13 @@ impl VmInstance for MockVm {
         &self.config
     }
 
-    async fn start(&mut self) -> LibkrunResult<()> {
+    async fn start(&mut self) -> VmResult<()> {
         // Precondition: must be in Created or Stopped state
         if self.state != VmState::Created && self.state != VmState::Stopped {
             if self.state == VmState::Running {
-                return Err(LibkrunError::AlreadyRunning);
+                return Err(VmError::AlreadyRunning);
             }
-            return Err(LibkrunError::Internal {
+            return Err(VmError::Internal {
                 reason: format!("cannot start from state {:?}", self.state),
             });
         }
@@ -143,7 +143,7 @@ impl VmInstance for MockVm {
         // Simulate boot failure
         if self.simulate_boot_failure {
             self.state = VmState::Crashed;
-            return Err(LibkrunError::BootFailed {
+            return Err(VmError::BootFailed {
                 reason: "simulated boot failure".into(),
             });
         }
@@ -156,10 +156,10 @@ impl VmInstance for MockVm {
         Ok(())
     }
 
-    async fn stop(&mut self) -> LibkrunResult<()> {
+    async fn stop(&mut self) -> VmResult<()> {
         // Can stop from Running or Paused state
         if self.state != VmState::Running && self.state != VmState::Paused {
-            return Err(LibkrunError::Internal {
+            return Err(VmError::Internal {
                 reason: format!("cannot stop from state {:?}", self.state),
             });
         }
@@ -172,7 +172,7 @@ impl VmInstance for MockVm {
         Ok(())
     }
 
-    async fn pause(&mut self) -> LibkrunResult<()> {
+    async fn pause(&mut self) -> VmResult<()> {
         self.check_state(VmState::Running)?;
 
         self.state = VmState::Paused;
@@ -183,7 +183,7 @@ impl VmInstance for MockVm {
         Ok(())
     }
 
-    async fn resume(&mut self) -> LibkrunResult<()> {
+    async fn resume(&mut self) -> VmResult<()> {
         self.check_state(VmState::Paused)?;
 
         self.state = VmState::Running;
@@ -194,7 +194,7 @@ impl VmInstance for MockVm {
         Ok(())
     }
 
-    async fn exec(&self, cmd: &str, args: &[&str]) -> LibkrunResult<ExecOutput> {
+    async fn exec(&self, cmd: &str, args: &[&str]) -> VmResult<ExecOutput> {
         self.exec_with_options(cmd, args, ExecOptions::default())
             .await
     }
@@ -204,14 +204,14 @@ impl VmInstance for MockVm {
         cmd: &str,
         args: &[&str],
         options: ExecOptions,
-    ) -> LibkrunResult<ExecOutput> {
+    ) -> VmResult<ExecOutput> {
         // Preconditions
         self.check_state(VmState::Running)?;
         assert!(!cmd.is_empty(), "command cannot be empty");
 
         // Simulate exec failure
         if self.simulate_exec_failure {
-            return Err(LibkrunError::ExecFailed {
+            return Err(VmError::ExecFailed {
                 reason: "simulated exec failure".into(),
             });
         }
@@ -237,7 +237,7 @@ impl VmInstance for MockVm {
                         let timeout_ms = options.timeout_ms.unwrap_or(VM_EXEC_TIMEOUT_MS_DEFAULT);
 
                         if sleep_ms > timeout_ms {
-                            return Err(LibkrunError::ExecTimeout { timeout_ms });
+                            return Err(VmError::ExecTimeout { timeout_ms });
                         }
 
                         tokio::time::sleep(tokio::time::Duration::from_millis(sleep_ms)).await;
@@ -274,10 +274,10 @@ impl VmInstance for MockVm {
         Ok(ExecOutput::new(exit_code, stdout, stderr))
     }
 
-    async fn snapshot(&self) -> LibkrunResult<VmSnapshot> {
+    async fn snapshot(&self) -> VmResult<VmSnapshot> {
         // Can snapshot from Running or Paused state
         if self.state != VmState::Running && self.state != VmState::Paused {
-            return Err(LibkrunError::SnapshotFailed {
+            return Err(VmError::SnapshotFailed {
                 reason: format!("cannot snapshot from state {:?}", self.state),
             });
         }
@@ -308,22 +308,22 @@ impl VmInstance for MockVm {
         VmSnapshot::new(metadata, data)
     }
 
-    async fn restore(&mut self, snapshot: &VmSnapshot) -> LibkrunResult<()> {
+    async fn restore(&mut self, snapshot: &VmSnapshot) -> VmResult<()> {
         // Can restore to Created or Stopped state
         if self.state != VmState::Created && self.state != VmState::Stopped {
-            return Err(LibkrunError::RestoreFailed {
+            return Err(VmError::RestoreFailed {
                 reason: format!("cannot restore to state {:?}", self.state),
             });
         }
 
         // Verify checksum
         if !snapshot.verify_checksum() {
-            return Err(LibkrunError::SnapshotCorrupted);
+            return Err(VmError::SnapshotCorrupted);
         }
 
         // Check architecture compatibility
         if !snapshot.metadata.is_compatible_with(&self.architecture) {
-            return Err(LibkrunError::RestoreFailed {
+            return Err(VmError::RestoreFailed {
                 reason: format!(
                     "architecture mismatch: snapshot is {} but VM is {}",
                     snapshot.metadata.architecture, self.architecture
@@ -358,9 +358,17 @@ impl MockVmFactory {
     }
 
     /// Create a new mock VM
-    pub fn create(&self, config: VmConfig) -> LibkrunResult<MockVm> {
+    pub fn create_vm(&self, config: VmConfig) -> VmResult<MockVm> {
         let vm = MockVm::new(config)?.with_boot_delay(self.boot_delay_ms);
         Ok(vm)
+    }
+}
+
+#[async_trait]
+impl crate::traits::VmFactory for MockVmFactory {
+    async fn create(&self, config: VmConfig) -> VmResult<Box<dyn VmInstance>> {
+        let vm = self.create_vm(config)?;
+        Ok(Box::new(vm))
     }
 }
 
@@ -415,10 +423,7 @@ mod tests {
 
         let result = vm.exec("echo", &["test"]).await;
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            LibkrunError::NotRunning { .. }
-        ));
+        assert!(matches!(result.unwrap_err(), VmError::NotRunning { .. }));
     }
 
     #[tokio::test]
@@ -439,10 +444,7 @@ mod tests {
 
         let result = vm.exec("echo", &["test"]).await;
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            LibkrunError::ExecFailed { .. }
-        ));
+        assert!(matches!(result.unwrap_err(), VmError::ExecFailed { .. }));
     }
 
     #[tokio::test]
@@ -476,7 +478,7 @@ mod tests {
 
         let result = vm.start().await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), LibkrunError::AlreadyRunning));
+        assert!(matches!(result.unwrap_err(), VmError::AlreadyRunning));
     }
 
     #[tokio::test]
@@ -484,7 +486,7 @@ mod tests {
         let factory = MockVmFactory::new().with_boot_delay(10);
         let config = test_config();
 
-        let mut vm = factory.create(config).unwrap();
+        let mut vm = factory.create_vm(config).unwrap();
         vm.start().await.unwrap();
         assert_eq!(vm.state(), VmState::Running);
     }

@@ -11,7 +11,7 @@
 use crate::storage::{Architecture, SnapshotKind, TeleportPackage, TeleportStorage};
 use bytes::Bytes;
 use kelpie_core::{Error, Result};
-use kelpie_sandbox::{Sandbox, SandboxConfig, SandboxFactory, Snapshot};
+use kelpie_vm::{VmConfig, VmFactory, VmInstance, VmSnapshot, VmSnapshotMetadata};
 use std::sync::Arc;
 
 /// Teleport service for agent migration
@@ -21,13 +21,12 @@ use std::sync::Arc;
 pub struct TeleportService<S, F>
 where
     S: TeleportStorage,
-    F: SandboxFactory,
-    F::Sandbox: 'static,
+    F: VmFactory,
 {
     /// Teleport storage backend
     storage: Arc<S>,
-    /// Sandbox factory for creating sandboxes
-    sandbox_factory: Arc<F>,
+    /// VM factory for creating VM instances
+    vm_factory: Arc<F>,
     /// Expected base image version
     base_image_version: String,
 }
@@ -35,14 +34,13 @@ where
 impl<S, F> TeleportService<S, F>
 where
     S: TeleportStorage,
-    F: SandboxFactory,
-    F::Sandbox: 'static,
+    F: VmFactory,
 {
     /// Create a new TeleportService
-    pub fn new(storage: Arc<S>, sandbox_factory: Arc<F>) -> Self {
+    pub fn new(storage: Arc<S>, vm_factory: Arc<F>) -> Self {
         Self {
             storage,
-            sandbox_factory,
+            vm_factory,
             base_image_version: "1.0.0".to_string(),
         }
     }
@@ -57,7 +55,7 @@ where
     ///
     /// # Arguments
     /// * `agent_id` - Agent ID to teleport
-    /// * `sandbox` - Running sandbox to snapshot
+    /// * `vm` - Running VM to snapshot
     /// * `agent_state` - Serialized agent state (memory blocks, conversation, etc.)
     /// * `kind` - Type of snapshot (Suspend, Teleport, or Checkpoint)
     ///
@@ -70,11 +68,11 @@ where
     ///
     /// # TigerStyle
     /// - Returns package ID for tracking
-    /// - Sandbox state is preserved on failure (no partial mutations)
+    /// - VM state is preserved on failure (no partial mutations)
     pub async fn teleport_out(
         &self,
         agent_id: &str,
-        sandbox: &mut dyn Sandbox,
+        vm: &mut dyn VmInstance,
         agent_state: Bytes,
         kind: SnapshotKind,
     ) -> Result<String> {
@@ -83,10 +81,14 @@ where
 
         tracing::info!(agent_id = %agent_id, kind = ?kind, "Teleporting agent OUT");
 
-        // Step 1: Create snapshot of sandbox
-        let snapshot = sandbox.snapshot().await.map_err(|e| Error::Internal {
-            message: format!("Failed to create snapshot: {}", e),
-        })?;
+        // Step 1: Create snapshot of VM
+        let snapshot = if kind == SnapshotKind::Checkpoint {
+            None
+        } else {
+            Some(vm.snapshot().await.map_err(|e| Error::Internal {
+                message: format!("Failed to create snapshot: {}", e),
+            })?)
+        };
 
         // Step 2: Build teleport package
         let package_id = format!("teleport-{}-{}", agent_id, uuid::Uuid::new_v4());
@@ -102,21 +104,17 @@ where
                 .with_base_image_version(&self.base_image_version);
 
         // Add VM state for full teleport
-        match kind {
-            SnapshotKind::Suspend | SnapshotKind::Teleport => {
-                // For full VM teleport, include memory and CPU state
-                // In real implementation, this would be the actual VM state
-                // For now, we serialize the snapshot metadata
-                let snapshot_data = serde_json::to_vec(&snapshot).map_err(|e| Error::Internal {
-                    message: format!("Failed to serialize snapshot: {}", e),
+        if let Some(snapshot) = snapshot {
+            let metadata_bytes =
+                serde_json::to_vec(&snapshot.metadata).map_err(|e| Error::Internal {
+                    message: format!("Failed to serialize snapshot metadata: {}", e),
                 })?;
-                package = package
-                    .with_vm_memory(Bytes::from(snapshot_data.clone()))
-                    .with_vm_cpu_state(Bytes::from(snapshot_data));
-            }
-            SnapshotKind::Checkpoint => {
-                // Checkpoint only includes agent state, no VM state
-            }
+            let vm_snapshot = kelpie_core::teleport::VmSnapshotBlob::encode(
+                Bytes::from(metadata_bytes),
+                snapshot.data.clone(),
+                Bytes::new(),
+            );
+            package = package.with_vm_snapshot(vm_snapshot);
         }
 
         // Step 3: Upload to storage
@@ -141,28 +139,29 @@ where
     ///
     /// # Arguments
     /// * `package_id` - Teleport package ID to restore from
-    /// * `sandbox_config` - Configuration for creating new sandbox
+    /// * `vm_config` - Configuration for creating new VM
     ///
     /// # Returns
-    /// Tuple of (created sandbox, agent state bytes)
+    /// Tuple of (created VM, agent state bytes)
     ///
     /// # Errors
     /// - NotFound: Package not found in storage
     /// - ArchMismatch: Package architecture doesn't match host
     /// - ImageMismatch: Base image version mismatch (validated by storage)
     /// - DownloadFailed: Failed to download package
-    /// - Sandbox creation/restore failed
+    /// - VM creation/restore failed
     ///
     /// # TigerStyle
-    /// - Creates new sandbox (caller owns it)
+    /// - Creates new VM (caller owns it)
     /// - Returns agent state for caller to deserialize
     /// - Clean failure (no partial state on error)
     /// - Version validation happens in storage layer (MAJOR.MINOR must match)
+    /// - VM is started before returning
     pub async fn teleport_in(
         &self,
         package_id: &str,
-        sandbox_config: SandboxConfig,
-    ) -> Result<(Box<dyn Sandbox>, Bytes)> {
+        vm_config: VmConfig,
+    ) -> Result<(Box<dyn VmInstance>, Bytes)> {
         // Preconditions
         assert!(!package_id.is_empty(), "package_id must not be empty");
 
@@ -185,49 +184,44 @@ where
             "Package downloaded successfully (version validated by storage)"
         );
 
-        // Step 2: Create new sandbox
-        let mut sandbox = self
-            .sandbox_factory
-            .create(sandbox_config)
+        // Step 2: Create new VM
+        let mut vm = self
+            .vm_factory
+            .create(vm_config)
             .await
             .map_err(|e| Error::Internal {
-                message: format!("Failed to create sandbox: {}", e),
+                message: format!("Failed to create VM: {}", e),
             })?;
-
-        // Step 3: Start sandbox if not already running
-        // Note: Some factories (like MockSandboxFactory) start the sandbox automatically
-        use kelpie_sandbox::SandboxState;
-        if sandbox.state() != SandboxState::Running {
-            sandbox.start().await.map_err(|e| Error::Internal {
-                message: format!("Failed to start sandbox: {}", e),
-            })?;
-        }
 
         // Step 4: Restore from snapshot (for full teleport/suspend)
-        match package.kind {
-            SnapshotKind::Suspend | SnapshotKind::Teleport => {
-                // Restore VM state from snapshot
-                if let Some(ref vm_memory) = package.vm_memory {
-                    // Deserialize snapshot metadata
-                    let snapshot: Snapshot =
-                        serde_json::from_slice(vm_memory).map_err(|e| Error::Internal {
-                            message: format!("Failed to deserialize snapshot: {}", e),
-                        })?;
+        if matches!(package.kind, SnapshotKind::Suspend | SnapshotKind::Teleport) {
+            if let Some(ref vm_snapshot) = package.vm_snapshot {
+                let decoded =
+                    kelpie_core::teleport::VmSnapshotBlob::decode(vm_snapshot).map_err(|e| {
+                        Error::Internal {
+                            message: format!("Failed to decode snapshot blob: {}", e),
+                        }
+                    })?;
+                let metadata: VmSnapshotMetadata = serde_json::from_slice(&decoded.metadata_bytes)
+                    .map_err(|e| Error::Internal {
+                        message: format!("Failed to deserialize snapshot metadata: {}", e),
+                    })?;
+                let snapshot = VmSnapshot::new(metadata, decoded.snapshot_bytes).map_err(|e| {
+                    Error::Internal {
+                        message: format!("Failed to rebuild snapshot: {}", e),
+                    }
+                })?;
 
-                    // Restore sandbox state
-                    sandbox
-                        .restore(&snapshot)
-                        .await
-                        .map_err(|e| Error::Internal {
-                            message: format!("Failed to restore sandbox: {}", e),
-                        })?;
-                }
-            }
-            SnapshotKind::Checkpoint => {
-                // Checkpoint doesn't restore VM state, just starts fresh
-                // Agent state will be restored by caller
+                vm.restore(&snapshot).await.map_err(|e| Error::Internal {
+                    message: format!("Failed to restore VM: {}", e),
+                })?;
             }
         }
+
+        // Step 5: Start VM after restore/creation
+        vm.start().await.map_err(|e| Error::Internal {
+            message: format!("Failed to start VM: {}", e),
+        })?;
 
         // Extract agent state
         let agent_state = package.agent_state.unwrap_or_default();
@@ -238,7 +232,7 @@ where
             "Agent teleported IN successfully"
         );
 
-        Ok((Box::new(sandbox), agent_state))
+        Ok((vm, agent_state))
     }
 
     /// List available teleport packages
@@ -342,33 +336,32 @@ impl From<TeleportPackage> for TeleportPackageInfo {
 mod tests {
     use super::*;
     use crate::storage::LocalTeleportStorage;
-    use kelpie_sandbox::{MockSandbox, MockSandboxFactory, ResourceLimits};
+    use kelpie_vm::{MockVmFactory, VmConfig, VmState};
 
-    fn test_config() -> SandboxConfig {
-        SandboxConfig::new()
-            .with_limits(
-                ResourceLimits::new()
-                    .with_memory(512 * 1024 * 1024)
-                    .with_vcpus(2),
-            )
-            .with_workdir("/workspace")
+    fn test_config() -> VmConfig {
+        VmConfig::builder()
+            .vcpu_count(2)
+            .memory_mib(512)
+            .root_disk("/tmp/rootfs.ext4")
+            .build()
+            .unwrap()
     }
 
     #[tokio::test]
     async fn test_teleport_service_roundtrip() {
         let storage = Arc::new(LocalTeleportStorage::new());
-        let factory = Arc::new(MockSandboxFactory::new());
+        let factory = Arc::new(MockVmFactory::new());
         let service = TeleportService::new(storage, factory.clone());
 
-        // Create a sandbox for teleport_out (factory.create() starts it automatically)
-        let mut sandbox = factory.create(test_config()).await.unwrap();
+        let mut vm = factory.create_vm(test_config()).unwrap();
+        vm.start().await.unwrap();
 
         // Teleport out
         let agent_state = Bytes::from("test agent state");
         let package_id = service
             .teleport_out(
                 "agent-1",
-                &mut sandbox,
+                &mut vm,
                 agent_state.clone(),
                 SnapshotKind::Teleport,
             )
@@ -383,12 +376,12 @@ mod tests {
         assert_eq!(packages[0], package_id);
 
         // Teleport in
-        let (new_sandbox, restored_state) = service
+        let (new_vm, restored_state) = service
             .teleport_in(&package_id, test_config())
             .await
             .unwrap();
         assert_eq!(restored_state, agent_state);
-        assert_eq!(new_sandbox.state(), kelpie_sandbox::SandboxState::Running);
+        assert_eq!(new_vm.state(), VmState::Running);
 
         // Cleanup
         service.delete_package(&package_id).await.unwrap();
@@ -399,18 +392,18 @@ mod tests {
     #[tokio::test]
     async fn test_teleport_service_checkpoint() {
         let storage = Arc::new(LocalTeleportStorage::new());
-        let factory = Arc::new(MockSandboxFactory::new());
+        let factory = Arc::new(MockVmFactory::new());
         let service = TeleportService::new(storage, factory.clone());
 
-        // Create a sandbox for teleport_out (factory.create() starts it automatically)
-        let mut sandbox = factory.create(test_config()).await.unwrap();
+        let mut vm = factory.create_vm(test_config()).unwrap();
+        vm.start().await.unwrap();
 
         // Teleport out as checkpoint
         let agent_state = Bytes::from("checkpoint state");
         let package_id = service
             .teleport_out(
                 "agent-2",
-                &mut sandbox,
+                &mut vm,
                 agent_state.clone(),
                 SnapshotKind::Checkpoint,
             )
@@ -424,10 +417,11 @@ mod tests {
         assert!(!package.is_full_teleport()); // Checkpoint has no VM state
 
         // Teleport in
-        let (_new_sandbox, restored_state) = service
+        let (new_vm, restored_state) = service
             .teleport_in(&package_id, test_config())
             .await
             .unwrap();
         assert_eq!(restored_state, agent_state);
+        assert_eq!(new_vm.state(), VmState::Running);
     }
 }

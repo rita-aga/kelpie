@@ -421,7 +421,7 @@ mod tests {
     #[tokio::test]
     async fn test_sim_mcp_client_basic() {
         let rng = DeterministicRng::new(42);
-        let mut injector = FaultInjector::new(DeterministicRng::new(42));
+        let injector = FaultInjector::new(DeterministicRng::new(42));
         // No faults registered
 
         let mut client = SimMcpClient::new(Arc::new(injector), rng);

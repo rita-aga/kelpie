@@ -24,7 +24,7 @@ use std::sync::Arc;
 use crate::models::{Block, Message};
 
 use super::traits::{AgentStorage, StorageError};
-use super::types::{AgentMetadata, SessionState};
+use super::types::{AgentMetadata, CustomToolRecord, SessionState};
 
 // =============================================================================
 // Constants (TigerStyle)
@@ -33,12 +33,14 @@ use super::types::{AgentMetadata, SessionState};
 /// Registry actor ID for global agent metadata
 const REGISTRY_NAMESPACE: &str = "system";
 const REGISTRY_ID: &str = "agent_registry";
+const TOOL_REGISTRY_ID: &str = "tool_registry";
 
 /// Key prefixes for per-agent data
 const KEY_PREFIX_BLOCKS: &[u8] = b"blocks";
 const KEY_PREFIX_SESSION: &[u8] = b"session:";
 const KEY_PREFIX_MESSAGE: &[u8] = b"message:";
 const KEY_PREFIX_MESSAGE_COUNT: &[u8] = b"message_count";
+const KEY_PREFIX_TOOL: &[u8] = b"tool:";
 
 // =============================================================================
 // FdbAgentRegistry Implementation
@@ -66,6 +68,11 @@ impl FdbAgentRegistry {
     /// Get registry actor ID (for storing agent metadata)
     fn registry_actor_id() -> CoreResult<ActorId> {
         ActorId::new(REGISTRY_NAMESPACE, REGISTRY_ID)
+    }
+
+    /// Get registry actor ID for tools
+    fn tool_registry_actor_id() -> CoreResult<ActorId> {
+        ActorId::new(REGISTRY_NAMESPACE, TOOL_REGISTRY_ID)
     }
 
     /// Get actor ID for an agent
@@ -132,6 +139,22 @@ impl FdbAgentRegistry {
 
     /// Deserialize message from bytes
     fn deserialize_message(bytes: &Bytes) -> Result<Message, StorageError> {
+        serde_json::from_slice(bytes).map_err(|e| StorageError::DeserializationFailed {
+            reason: e.to_string(),
+        })
+    }
+
+    /// Serialize custom tool to bytes
+    fn serialize_custom_tool(tool: &CustomToolRecord) -> Result<Bytes, StorageError> {
+        serde_json::to_vec(tool)
+            .map(Bytes::from)
+            .map_err(|e| StorageError::SerializationFailed {
+                reason: e.to_string(),
+            })
+    }
+
+    /// Deserialize custom tool from bytes
+    fn deserialize_custom_tool(bytes: &Bytes) -> Result<CustomToolRecord, StorageError> {
         serde_json::from_slice(bytes).map_err(|e| StorageError::DeserializationFailed {
             reason: e.to_string(),
         })
@@ -624,6 +647,75 @@ impl AgentStorage for FdbAgentRegistry {
             .map_err(Self::map_core_error)?;
 
         Ok(())
+    }
+
+    // =========================================================================
+    // Custom Tool Operations
+    // =========================================================================
+
+    async fn save_custom_tool(&self, tool: &CustomToolRecord) -> Result<(), StorageError> {
+        assert!(!tool.name.is_empty(), "tool name cannot be empty");
+
+        let registry_id = Self::tool_registry_actor_id().map_err(Self::map_core_error)?;
+        let key = [KEY_PREFIX_TOOL, tool.name.as_bytes()].concat();
+        let value = Self::serialize_custom_tool(tool)?;
+
+        self.fdb
+            .set(&registry_id, &key, &value)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
+    }
+
+    async fn load_custom_tool(&self, name: &str) -> Result<Option<CustomToolRecord>, StorageError> {
+        assert!(!name.is_empty(), "tool name cannot be empty");
+
+        let registry_id = Self::tool_registry_actor_id().map_err(Self::map_core_error)?;
+        let key = [KEY_PREFIX_TOOL, name.as_bytes()].concat();
+
+        match self.fdb.get(&registry_id, &key).await {
+            Ok(Some(bytes)) => {
+                let tool = Self::deserialize_custom_tool(&bytes)?;
+                Ok(Some(tool))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(Self::map_core_error(e)),
+        }
+    }
+
+    async fn delete_custom_tool(&self, name: &str) -> Result<(), StorageError> {
+        assert!(!name.is_empty(), "tool name cannot be empty");
+
+        let registry_id = Self::tool_registry_actor_id().map_err(Self::map_core_error)?;
+        let key = [KEY_PREFIX_TOOL, name.as_bytes()].concat();
+
+        self.fdb
+            .delete(&registry_id, &key)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
+    }
+
+    async fn list_custom_tools(&self) -> Result<Vec<CustomToolRecord>, StorageError> {
+        let registry_id = Self::tool_registry_actor_id().map_err(Self::map_core_error)?;
+        let keys = self
+            .fdb
+            .list_keys(&registry_id, KEY_PREFIX_TOOL)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        let mut tools = Vec::new();
+        for key in keys {
+            if let Ok(Some(bytes)) = self.fdb.get(&registry_id, &key).await {
+                if let Ok(tool) = Self::deserialize_custom_tool(&bytes) {
+                    tools.push(tool);
+                }
+            }
+        }
+
+        Ok(tools)
     }
 
     // =========================================================================

@@ -32,7 +32,7 @@
 //!           │                         │
 //!     ┌─────▼─────┐            ┌─────▼─────┐
 //!     │ Production│            │    DST    │
-//!     │ LibkrunIO │            │  SimIO    │
+//!     │   VmIO    │            │  SimIO    │
 //!     │ ProcessIO │            │  (faults) │
 //!     └───────────┘            └───────────┘
 //! ```
@@ -59,7 +59,7 @@ use std::sync::Arc;
 ///
 /// # Implementations
 ///
-/// - `LibkrunSandboxIO`: Real libkrun microVM operations
+/// - `VmSandboxIO`: Real VM-backed sandbox operations
 /// - `ProcessSandboxIO`: Real OS process operations
 /// - `SimSandboxIO` (in kelpie-dst): Simulated with fault injection
 #[async_trait]
@@ -165,7 +165,7 @@ impl Default for SnapshotData {
 ///
 /// ```ignore
 /// // Production
-/// let io = LibkrunSandboxIO::new(config);
+/// let io = VmSandboxIO::new(config);
 /// let sandbox = GenericSandbox::new("agent-1", config, io, time);
 ///
 /// // DST

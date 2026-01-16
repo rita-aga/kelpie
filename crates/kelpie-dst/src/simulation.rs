@@ -10,6 +10,7 @@ use crate::sandbox::SimSandboxFactory;
 use crate::sandbox_io::SimSandboxIOFactory;
 use crate::storage::SimStorage;
 use crate::teleport::SimTeleportStorage;
+use crate::vm::SimVmFactory;
 use kelpie_core::{IoContext, RngProvider, TimeProvider, DST_STEPS_COUNT_MAX, DST_TIME_MS_MAX};
 use std::future::Future;
 use std::sync::Arc;
@@ -110,6 +111,8 @@ pub struct SimEnvironment {
     pub sandbox_io_factory: SimSandboxIOFactory,
     /// Simulated teleport storage (for teleport package upload/download)
     pub teleport_storage: SimTeleportStorage,
+    /// Simulated VM factory (for VmInstance-based teleport testing)
+    pub vm_factory: SimVmFactory,
 }
 
 impl SimEnvironment {
@@ -215,6 +218,7 @@ impl Simulation {
 
         // Build teleport storage
         let teleport_storage = SimTeleportStorage::new(rng.fork(), faults.clone());
+        let vm_factory = SimVmFactory::new(rng.clone(), faults.clone(), clock.clone());
 
         let env = SimEnvironment {
             clock,
@@ -226,6 +230,7 @@ impl Simulation {
             sandbox_factory,
             sandbox_io_factory,
             teleport_storage,
+            vm_factory,
         };
 
         // Run the test
@@ -277,6 +282,7 @@ impl Simulation {
 
         // Build teleport storage
         let teleport_storage = SimTeleportStorage::new(rng.fork(), faults.clone());
+        let vm_factory = SimVmFactory::new(rng.clone(), faults.clone(), clock.clone());
 
         let env = SimEnvironment {
             clock,
@@ -288,6 +294,7 @@ impl Simulation {
             sandbox_factory,
             sandbox_io_factory,
             teleport_storage,
+            vm_factory,
         };
 
         test(env).await.map_err(SimulationError::TestFailed)

@@ -15,7 +15,7 @@ use kelpie_dst::fault::FaultInjector;
 use crate::models::{Block, Message};
 
 use super::traits::{AgentStorage, StorageError};
-use super::types::{AgentMetadata, SessionState};
+use super::types::{AgentMetadata, CustomToolRecord, SessionState};
 
 /// Shared storage state for crash recovery simulation
 ///
@@ -27,6 +27,7 @@ struct SharedState {
     blocks: Arc<RwLock<HashMap<String, Vec<Block>>>>,
     sessions: Arc<RwLock<HashMap<(String, String), SessionState>>>,
     messages: Arc<RwLock<HashMap<String, Vec<Message>>>>,
+    custom_tools: Arc<RwLock<HashMap<String, CustomToolRecord>>>,
 }
 
 impl SharedState {
@@ -36,6 +37,7 @@ impl SharedState {
             blocks: Arc::new(RwLock::new(HashMap::new())),
             sessions: Arc::new(RwLock::new(HashMap::new())),
             messages: Arc::new(RwLock::new(HashMap::new())),
+            custom_tools: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -533,6 +535,74 @@ impl AgentStorage for SimStorage {
         }
 
         Ok(())
+    }
+
+    // =========================================================================
+    // Custom Tool Operations
+    // =========================================================================
+
+    async fn save_custom_tool(&self, tool: &CustomToolRecord) -> Result<(), StorageError> {
+        self.maybe_fail("tool_write")?;
+
+        let mut tools = self
+            .state
+            .custom_tools
+            .write()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
+
+        tools.insert(tool.name.clone(), tool.clone());
+        Ok(())
+    }
+
+    async fn load_custom_tool(&self, name: &str) -> Result<Option<CustomToolRecord>, StorageError> {
+        self.maybe_fail("tool_read")?;
+
+        let tools = self
+            .state
+            .custom_tools
+            .read()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
+
+        Ok(tools.get(name).cloned())
+    }
+
+    async fn delete_custom_tool(&self, name: &str) -> Result<(), StorageError> {
+        self.maybe_fail("tool_write")?;
+
+        let mut tools = self
+            .state
+            .custom_tools
+            .write()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
+
+        if tools.remove(name).is_none() {
+            return Err(StorageError::NotFound {
+                resource: "tool",
+                id: name.to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn list_custom_tools(&self) -> Result<Vec<CustomToolRecord>, StorageError> {
+        self.maybe_fail("tool_read")?;
+
+        let tools = self
+            .state
+            .custom_tools
+            .read()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
+
+        Ok(tools.values().cloned().collect())
     }
 
     // =========================================================================

@@ -14,7 +14,7 @@
 //! # Example
 //!
 //! ```ignore
-//! // Production uses GenericSandbox<LibkrunSandboxIO>
+//! // Production uses GenericSandbox<VmSandboxIO>
 //! // DST uses GenericSandbox<SimSandboxIO>
 //! // SAME state machine code runs in both!
 //!
@@ -292,7 +292,8 @@ impl SandboxIO for SimSandboxIO {
         let env = self.env.read().await;
 
         let fs_bytes = serde_json::to_vec(&*fs).unwrap_or_default();
-        let env_vars: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let env_vars: Vec<(String, String)> =
+            env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
         Ok(SnapshotData {
             memory: Some(Bytes::from(fs_bytes)),
@@ -415,7 +416,10 @@ impl SimSandboxIOFactory {
         &self,
         config: SandboxConfig,
     ) -> SandboxResult<GenericSandbox<SimSandboxIO>> {
-        let id = format!("sim-sandbox-{}", self.id_counter.fetch_add(1, Ordering::SeqCst));
+        let id = format!(
+            "sim-sandbox-{}",
+            self.id_counter.fetch_add(1, Ordering::SeqCst)
+        );
         let io = SimSandboxIO::new(self.rng.clone(), self.faults.clone(), self.clock.clone());
         let time: Arc<dyn TimeProvider> = self.clock.clone();
         Ok(GenericSandbox::new(id, config, io, time))
@@ -505,7 +509,10 @@ mod tests {
         sandbox.start().await.unwrap();
 
         // Write file
-        sandbox.write_file("/test.txt", b"hello world").await.unwrap();
+        sandbox
+            .write_file("/test.txt", b"hello world")
+            .await
+            .unwrap();
 
         // Read file
         let content = sandbox.read_file("/test.txt").await.unwrap();
@@ -521,7 +528,10 @@ mod tests {
         // Create first sandbox, write file, snapshot
         let mut sandbox1 = factory.create(SandboxConfig::default()).await.unwrap();
         sandbox1.start().await.unwrap();
-        sandbox1.write_file("/data.txt", b"important").await.unwrap();
+        sandbox1
+            .write_file("/data.txt", b"important")
+            .await
+            .unwrap();
         let snapshot = sandbox1.snapshot().await.unwrap();
 
         // Create second sandbox, restore, verify file

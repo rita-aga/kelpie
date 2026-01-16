@@ -12,7 +12,7 @@ members = [
     "crates/kelpie-cluster",
     "crates/kelpie-agent",
     "crates/kelpie-dst",
-    "crates/kelpie-libkrun",
+    "crates/kelpie-vm",
     "crates/kelpie-server",
     "crates/kelpie-cli",
 ]
@@ -120,7 +120,7 @@ kelpie-dst = { path = "crates/kelpie-dst" }
 kelpie-memory = { path = "crates/kelpie-memory" }
 kelpie-sandbox = { path = "crates/kelpie-sandbox" }
 kelpie-tools = { path = "crates/kelpie-tools" }
-kelpie-libkrun = { path = "crates/kelpie-libkrun" }
+kelpie-vm = { path = "crates/kelpie-vm" }
 
 # External memory library
 umi-memory = { git = "https://github.com/rita-aga/umi", package = "umi-memory" }

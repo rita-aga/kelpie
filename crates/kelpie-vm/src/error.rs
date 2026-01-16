@@ -1,15 +1,15 @@
-//! Error types for libkrun operations
+//! Error types for VM operations
 //!
 //! TigerStyle: Explicit error variants with context for debugging.
 
 use thiserror::Error;
 
 /// Result type for libkrun operations
-pub type LibkrunResult<T> = Result<T, LibkrunError>;
+pub type VmResult<T> = Result<T, VmError>;
 
 /// Errors that can occur during VM operations
 #[derive(Error, Debug)]
-pub enum LibkrunError {
+pub enum VmError {
     // ========================================================================
     // Configuration Errors
     // ========================================================================
@@ -119,10 +119,6 @@ pub enum LibkrunError {
     #[error("VM configuration failed: {reason}")]
     ConfigurationFailed { reason: String },
 
-    /// libkrun not available
-    #[error("libkrun not available: compiled without libkrun feature")]
-    LibkrunNotAvailable,
-
     // ========================================================================
     // Internal Errors
     // ========================================================================
@@ -131,14 +127,12 @@ pub enum LibkrunError {
     Internal { reason: String },
 }
 
-impl LibkrunError {
+impl VmError {
     /// Check if this error is retriable
     pub fn is_retriable(&self) -> bool {
         matches!(
             self,
-            LibkrunError::BootTimeout { .. }
-                | LibkrunError::ExecTimeout { .. }
-                | LibkrunError::Crashed { .. }
+            VmError::BootTimeout { .. } | VmError::ExecTimeout { .. } | VmError::Crashed { .. }
         )
     }
 
@@ -146,9 +140,7 @@ impl LibkrunError {
     pub fn requires_recreate(&self) -> bool {
         matches!(
             self,
-            LibkrunError::Crashed { .. }
-                | LibkrunError::SnapshotCorrupted
-                | LibkrunError::Internal { .. }
+            VmError::Crashed { .. } | VmError::SnapshotCorrupted | VmError::Internal { .. }
         )
     }
 }
@@ -159,15 +151,15 @@ mod tests {
 
     #[test]
     fn test_error_display() {
-        let err = LibkrunError::BootTimeout { timeout_ms: 5000 };
+        let err = VmError::BootTimeout { timeout_ms: 5000 };
         assert!(err.to_string().contains("5000ms"));
     }
 
     #[test]
     fn test_error_retriable() {
-        assert!(LibkrunError::BootTimeout { timeout_ms: 5000 }.is_retriable());
-        assert!(LibkrunError::ExecTimeout { timeout_ms: 1000 }.is_retriable());
-        assert!(!LibkrunError::ConfigInvalid {
+        assert!(VmError::BootTimeout { timeout_ms: 5000 }.is_retriable());
+        assert!(VmError::ExecTimeout { timeout_ms: 1000 }.is_retriable());
+        assert!(!VmError::ConfigInvalid {
             reason: "test".into()
         }
         .is_retriable());
@@ -175,11 +167,11 @@ mod tests {
 
     #[test]
     fn test_error_requires_recreate() {
-        assert!(LibkrunError::Crashed {
+        assert!(VmError::Crashed {
             reason: "test".into()
         }
         .requires_recreate());
-        assert!(LibkrunError::SnapshotCorrupted.requires_recreate());
-        assert!(!LibkrunError::BootTimeout { timeout_ms: 5000 }.requires_recreate());
+        assert!(VmError::SnapshotCorrupted.requires_recreate());
+        assert!(!VmError::BootTimeout { timeout_ms: 5000 }.requires_recreate());
     }
 }
