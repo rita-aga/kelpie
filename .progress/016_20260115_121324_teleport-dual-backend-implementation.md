@@ -1,7 +1,7 @@
 # Task: Phase 5.9 - Teleport Implementation with Dual Backend Architecture
 
 **Created:** 2026-01-15 12:13:24
-**State:** PLANNING
+**State:** IN_PROGRESS
 
 ---
 
@@ -34,9 +34,9 @@ Implement true VM teleportation (snapshot/restore) using platform-native hypervi
 
 **VM Backends (⚠️ Mixed Status):**
 - ✅ MockVm with working snapshot/restore (DST testing)
-- ⚙️ LibkrunVm with core FFI but **NO snapshot API** (libkrun 1.x limitation)
-- ❌ No Apple Virtualization.framework backend
-- ❌ No Firecracker backend
+- ✅ Apple VZ backend implemented with ObjC bridge (builds; real VM validation pending)
+- ✅ Firecracker backend implemented (Linux-only; validation pending)
+- ✅ libkrun removed (consolidated into kelpie-vm)
 
 **Key Discovery (Phase 5.7 Research):**
 After extensive research, we discovered:
@@ -958,14 +958,15 @@ Implement true VM teleportation with dual backend architecture:
 
 ## What to Try
 
-### Works Now (After Phase 1)
-None yet - Phase 1 is documentation only.
+### Works Now
+- ✅ `kelpie-vm` builds with `vz` feature on macOS
+- ✅ Deterministic simulation coverage for VM exec/teleport (DST)
+- ✅ Firecracker snapshot metadata blob guards in DST
 
-### Doesn't Work Yet (Phase 2+)
-- Snapshot/restore on Mac (Phase 2)
-- Snapshot/restore on Linux (Phase 3)
-- Mac → AWS teleport (Phase 4)
-- Linux → AWS teleport (Phase 4)
+### Doesn't Work Yet
+- Real VZ snapshot/restore validation on macOS (needs VM boot + exec + snapshot cycle)
+- Firecracker boot/exec/snapshot validation on Linux
+- Cross-host teleport (Mac ↔ AWS, Linux ↔ AWS)
 
 ### Known Limitations
 - **libkrun has no snapshot support** - This is a library limitation, not fixable without forking
@@ -973,6 +974,34 @@ None yet - Phase 1 is documentation only.
 - **Apple Vz doesn't support GUI Linux snapshots** - VirtIO GPU limitation, headless works fine
 - **Firecracker requires Linux** - Cannot run on macOS natively (nested VM is slow)
 - **Snapshot format is hypervisor-specific** - Cannot restore Apple Vz snapshot with Firecracker
+
+---
+
+## Progress Update (2026-01-15)
+
+- Unified VM backends into `crates/kelpie-vm` with `firecracker`/`vz` features; removed libkrun and legacy backend crates.
+- Added deterministic simulation tests in `crates/kelpie-dst/tests` and verified `vm_exec_dst` and `vm_teleport_dst` pass.
+- Implemented initial Apple VZ Objective-C bridge and Rust backend; fixing build errors from type naming and VZ boot loader init.
+- Confirmed `cargo test -p kelpie-vm --features vz` passes after VZ bridge fixes.
+- Added `VmBackendFactory::for_host` to select VZ on macOS, Firecracker on Linux, or Mock as fallback.
+- Removed unused RNG warning in SimSandbox by using deterministic start-time jitter.
+- Added DST coverage for Firecracker snapshot metadata roundtrip and teleport blob version guard.
+- Converted VZ bridge record to ADR (`docs/adr/016-vz-objc-bridge.md`).
+- Migrated remaining EDRs into ADRs (017-020) and removed the `docs/edr` directory.
+
+---
+
+## Plan Audit (2026-01-15)
+
+**Completed**
+- Consolidated VM crates into `kelpie-vm` and removed libkrun/firecracker/vm-backends legacy crates.
+- Apple VZ backend implemented with ObjC bridge (build/test on macOS).
+- DST deterministic simulations for VM exec/teleport + Firecracker snapshot metadata/versioning.
+
+**Pending**
+- Validate VZ backend on a real VM (boot, exec, snapshot/restore) on macOS.
+- Validate Firecracker backend on Linux (boot, exec, snapshot/restore).
+- End-to-end teleport tests across hosts once Linux/AWS are available.
 
 ---
 
