@@ -432,12 +432,9 @@ impl ActorTransaction for FdbActorTransaction {
                     );
                     // FDB 0.10: TransactionCommitError contains the transaction.
                     // Call on_error() to wait with exponential backoff before retrying.
-                    let _txn = e
-                        .on_error()
-                        .await
-                        .map_err(|e| Error::TransactionFailed {
-                            reason: format!("retry wait failed: {}", e),
-                        })?;
+                    let _txn = e.on_error().await.map_err(|e| Error::TransactionFailed {
+                        reason: format!("retry wait failed: {}", e),
+                    })?;
                     // Loop back to create a new transaction and retry
                     continue;
                 }
@@ -698,7 +695,9 @@ impl ActorKV for FdbKV {
 
         // Postcondition
         assert!(
-            results.iter().all(|(k, _)| k.len() <= ACTOR_KV_KEY_SIZE_BYTES_MAX),
+            results
+                .iter()
+                .all(|(k, _)| k.len() <= ACTOR_KV_KEY_SIZE_BYTES_MAX),
             "returned keys must be within size limit"
         );
 
