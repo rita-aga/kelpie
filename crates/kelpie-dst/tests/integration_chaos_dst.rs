@@ -7,7 +7,7 @@ use bytes::Bytes;
 use kelpie_core::Result;
 use kelpie_dst::{
     Architecture, FaultConfig, FaultType, SimConfig, SimSandboxFactory, SimTeleportStorage,
-    Simulation, SnapshotKind,
+    Simulation, SnapshotKind, TeleportPackage, VmSnapshotBlob,
 };
 use kelpie_sandbox::{Sandbox, SandboxConfig, SandboxFactory, SandboxState, Snapshot};
 
@@ -124,20 +124,21 @@ async fn run_teleport_workflow(
     let snapshot = sandbox.snapshot().await?;
 
     // 5. Upload to teleport storage
-    let package = kelpie_dst::TeleportPackage {
-        id: format!("pkg-{}", iteration),
-        agent_id: format!("agent-{}", iteration),
-        source_arch: Architecture::Arm64,
-        kind: SnapshotKind::Teleport,
-        base_image_version: "v1.0.0".to_string(),
-        created_at_ms: 0,
-        size_bytes: 1024,
-        vm_memory: snapshot.memory.clone(),
-        vm_cpu_state: Some(Bytes::from("cpu-state")),
-        workspace_ref: Some(format!("workspace-{}", iteration)),
-        agent_state: Some(Bytes::from(format!("agent-state-{}", iteration))),
-        env_vars: vec![],
-    };
+    let snapshot_bytes = snapshot.cpu_state.clone().unwrap_or_default();
+    let memory_bytes = snapshot.memory.clone().unwrap_or_default();
+    let vm_snapshot = VmSnapshotBlob::encode(Bytes::new(), snapshot_bytes, memory_bytes);
+
+    let package = TeleportPackage::new(
+        format!("pkg-{}", iteration),
+        format!("agent-{}", iteration),
+        Architecture::Arm64,
+        SnapshotKind::Teleport,
+    )
+    .with_vm_snapshot(vm_snapshot)
+    .with_workspace_ref(format!("workspace-{}", iteration))
+    .with_agent_state(Bytes::from(format!("agent-state-{}", iteration)))
+    .with_base_image_version("v1.0.0")
+    .with_created_at(0);
     let package_id = teleport_storage.upload(package).await?;
 
     // 6. Download from teleport storage
@@ -261,7 +262,7 @@ async fn test_dst_snapshot_operations_under_chaos() {
             let mut restore_success = 0;
             let mut restore_failure = 0;
 
-            for i in 0..30 {
+            for _i in 0..30 {
                 // Create and start sandbox
                 let create_result = factory.create(SandboxConfig::default()).await;
                 let mut sandbox = match create_result {
@@ -346,20 +347,22 @@ async fn test_dst_teleport_storage_under_chaos() {
             let mut roundtrip_success = 0;
 
             for i in 0..40 {
-                let package = kelpie_dst::TeleportPackage {
-                    id: format!("chaos-pkg-{}", i),
-                    agent_id: format!("chaos-agent-{}", i),
-                    source_arch: Architecture::Arm64,
-                    kind: SnapshotKind::Teleport,
-                    base_image_version: "v1.0.0".to_string(),
-                    created_at_ms: i as u64,
-                    size_bytes: 1024,
-                    vm_memory: Some(Bytes::from(vec![0u8; 1024])),
-                    vm_cpu_state: Some(Bytes::from("cpu")),
-                    workspace_ref: Some(format!("ws-{}", i)),
-                    agent_state: Some(Bytes::from(format!("state-{}", i))),
-                    env_vars: vec![],
-                };
+                let vm_snapshot = VmSnapshotBlob::encode(
+                    Bytes::new(),
+                    Bytes::from("cpu"),
+                    Bytes::from(vec![0u8; 1024]),
+                );
+                let package = TeleportPackage::new(
+                    format!("chaos-pkg-{}", i),
+                    format!("chaos-agent-{}", i),
+                    Architecture::Arm64,
+                    SnapshotKind::Teleport,
+                )
+                .with_vm_snapshot(vm_snapshot)
+                .with_workspace_ref(format!("ws-{}", i))
+                .with_agent_state(Bytes::from(format!("state-{}", i)))
+                .with_base_image_version("v1.0.0")
+                .with_created_at(i as u64);
 
                 // Upload
                 let upload_result = teleport_storage.upload(package.clone()).await;
@@ -438,20 +441,16 @@ async fn test_dst_chaos_determinism() {
                     let sandbox_ok = sandbox_result.is_ok();
 
                     let upload_result = teleport_storage
-                        .upload(kelpie_dst::TeleportPackage {
-                            id: format!("det-{}", i),
-                            agent_id: format!("agent-{}", i),
-                            source_arch: Architecture::Arm64,
-                            kind: SnapshotKind::Checkpoint,
-                            base_image_version: "v1".to_string(),
-                            created_at_ms: 0,
-                            size_bytes: 0,
-                            vm_memory: None,
-                            vm_cpu_state: None,
-                            workspace_ref: None,
-                            agent_state: None,
-                            env_vars: vec![],
-                        })
+                        .upload(
+                            TeleportPackage::new(
+                                format!("det-{}", i),
+                                format!("agent-{}", i),
+                                Architecture::Arm64,
+                                SnapshotKind::Checkpoint,
+                            )
+                            .with_base_image_version("v1")
+                            .with_created_at(0),
+                        )
                         .await;
                     let upload_ok = upload_result.is_ok();
 

@@ -9,6 +9,7 @@ use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
 use kelpie_server::models::{AgentType, CreateAgentRequest};
 use kelpie_server::service::AgentService;
+use kelpie_server::tools::UnifiedToolRegistry;
 use std::sync::Arc;
 
 /// Test delete_agent with crash between state clear and deactivate
@@ -51,7 +52,7 @@ async fn test_delete_crash_between_clear_and_deactivate() {
                     tool_ids: vec![],
                     tags: vec![],
                     metadata: serde_json::json!({}),
-                project_id: None,
+                    project_id: None,
                 };
 
                 // Create agent
@@ -149,7 +150,8 @@ async fn test_delete_then_recreate() {
                     tool_ids: vec![],
                     tags: vec!["v1".to_string()],
                     metadata: serde_json::json!({"version": 1}),
-                project_id: None,                };
+                    project_id: None,
+                };
 
                 // Create agent v1
                 let agent_v1 = match service.create_agent(request).await {
@@ -195,7 +197,8 @@ async fn test_delete_then_recreate() {
                     tool_ids: vec![],
                     tags: vec!["v2".to_string()],
                     metadata: serde_json::json!({"version": 2}),
-                project_id: None,                };
+                    project_id: None,
+                };
 
                 let agent_v2 = match service.create_agent(request_v2).await {
                     Ok(a) => a,
@@ -242,7 +245,11 @@ struct SimLlmClientAdapter {
 
 #[async_trait]
 impl LlmClient for SimLlmClientAdapter {
-    async fn complete(&self, messages: Vec<LlmMessage>) -> Result<LlmResponse> {
+    async fn complete_with_tools(
+        &self,
+        messages: Vec<LlmMessage>,
+        tools: Vec<kelpie_server::llm::ToolDefinition>,
+    ) -> Result<LlmResponse> {
         let sim_messages: Vec<kelpie_dst::SimChatMessage> = messages
             .into_iter()
             .map(|m| kelpie_dst::SimChatMessage {
@@ -250,10 +257,17 @@ impl LlmClient for SimLlmClientAdapter {
                 content: m.content,
             })
             .collect();
+        let sim_tools: Vec<kelpie_dst::SimToolDefinition> = tools
+            .into_iter()
+            .map(|t| kelpie_dst::SimToolDefinition {
+                name: t.name,
+                description: t.description,
+            })
+            .collect();
 
         let response = self
             .client
-            .complete_with_tools(sim_messages, vec![])
+            .complete_with_tools(sim_messages, sim_tools)
             .await
             .map_err(|e| kelpie_core::Error::Internal {
                 message: format!("LLM error: {}", e),
@@ -261,7 +275,65 @@ impl LlmClient for SimLlmClientAdapter {
 
         Ok(LlmResponse {
             content: response.content,
-            tool_calls: vec![],
+            tool_calls: response
+                .tool_calls
+                .into_iter()
+                .map(|tc| kelpie_server::actor::LlmToolCall {
+                    id: tc.id,
+                    name: tc.name,
+                    input: tc.input,
+                })
+                .collect(),
+            prompt_tokens: response.prompt_tokens,
+            completion_tokens: response.completion_tokens,
+            stop_reason: response.stop_reason,
+        })
+    }
+
+    async fn continue_with_tool_result(
+        &self,
+        messages: Vec<LlmMessage>,
+        tools: Vec<kelpie_server::llm::ToolDefinition>,
+        _assistant_blocks: Vec<kelpie_server::llm::ContentBlock>,
+        tool_results: Vec<(String, String)>,
+    ) -> Result<LlmResponse> {
+        let sim_messages: Vec<kelpie_dst::SimChatMessage> = messages
+            .into_iter()
+            .map(|m| kelpie_dst::SimChatMessage {
+                role: m.role,
+                content: m.content,
+            })
+            .collect();
+        let sim_tools: Vec<kelpie_dst::SimToolDefinition> = tools
+            .into_iter()
+            .map(|t| kelpie_dst::SimToolDefinition {
+                name: t.name,
+                description: t.description,
+            })
+            .collect();
+
+        let response = self
+            .client
+            .continue_with_tool_result(sim_messages, sim_tools, tool_results)
+            .await
+            .map_err(|e| kelpie_core::Error::Internal {
+                message: format!("LLM error: {}", e),
+            })?;
+
+        Ok(LlmResponse {
+            content: response.content,
+            tool_calls: response
+                .tool_calls
+                .into_iter()
+                .map(|tc| kelpie_server::actor::LlmToolCall {
+                    id: tc.id,
+                    name: tc.name,
+                    input: tc.input,
+                })
+                .collect(),
+            prompt_tokens: response.prompt_tokens,
+            completion_tokens: response.completion_tokens,
+            stop_reason: response.stop_reason,
         })
     }
 }
@@ -271,7 +343,7 @@ fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
     let llm_adapter: Arc<dyn LlmClient> = Arc::new(SimLlmClientAdapter {
         client: Arc::new(sim_llm),
     });
-    let actor = AgentActor::new(llm_adapter);
+    let actor = AgentActor::new(llm_adapter, Arc::new(UnifiedToolRegistry::new()));
     let factory = Arc::new(CloneFactory::new(actor));
     let kv = Arc::new(sim_env.storage.clone());
     let mut dispatcher =

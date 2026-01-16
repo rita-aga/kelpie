@@ -6,8 +6,8 @@
 //! for agents. Jobs are stored but execution is deferred to background workers.
 
 use crate::api::ApiError;
-use axum::{extract::State, Json};
 use axum::{extract::Path, extract::Query, routing::get, Router};
+use axum::{extract::State, Json};
 use kelpie_server::models::{CreateJobRequest, Job, UpdateJobRequest};
 use kelpie_server::state::AppState;
 use serde::Deserialize;
@@ -21,7 +21,10 @@ const SCHEDULE_PATTERN_LENGTH_MAX: usize = 256;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/jobs", get(list_jobs).post(create_job))
-        .route("/jobs/:job_id", get(get_job).patch(update_job).delete(delete_job))
+        .route(
+            "/jobs/:job_id",
+            get(get_job).patch(update_job).delete(delete_job),
+        )
 }
 
 /// Create a scheduled job

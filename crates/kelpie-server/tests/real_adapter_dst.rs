@@ -4,11 +4,9 @@
 //!
 //! These tests verify RealLlmAdapter implements real streaming correctly.
 //! Tests WILL FAIL initially because RealLlmAdapter doesn't override stream_complete().
+#![cfg(feature = "dst")]
 
-use futures::stream::StreamExt;
-use kelpie_core::Result;
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
-use kelpie_server::actor::{LlmClient, LlmMessage, RealLlmAdapter};
 
 /// Test that RealLlmAdapter.stream_complete() produces incremental chunks
 ///
@@ -106,7 +104,6 @@ async fn test_dst_stream_delta_to_chunk_conversion() {
 
     let result = Simulation::new(config)
         .run_async(|_sim_env| async move {
-            use kelpie_server::actor::StreamChunk;
             use kelpie_server::llm::StreamDelta;
 
             // Test conversion logic that RealLlmAdapter should implement

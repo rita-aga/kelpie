@@ -20,6 +20,9 @@ pub struct LlmMessage {
 pub struct LlmResponse {
     pub content: String,
     pub tool_calls: Vec<LlmToolCall>,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub stop_reason: String,
 }
 
 /// Tool call from LLM
@@ -57,8 +60,26 @@ pub enum StreamChunk {
 /// Phase 7.7: Extended with streaming support via stream_complete()
 #[async_trait]
 pub trait LlmClient: Send + Sync {
-    /// Complete a chat conversation (batch mode)
-    async fn complete(&self, messages: Vec<LlmMessage>) -> Result<LlmResponse>;
+    /// Complete a chat conversation (batch mode) with tool support
+    async fn complete_with_tools(
+        &self,
+        messages: Vec<LlmMessage>,
+        tools: Vec<crate::llm::ToolDefinition>,
+    ) -> Result<LlmResponse>;
+
+    /// Continue a conversation after tool execution
+    async fn continue_with_tool_result(
+        &self,
+        messages: Vec<LlmMessage>,
+        tools: Vec<crate::llm::ToolDefinition>,
+        assistant_blocks: Vec<crate::llm::ContentBlock>,
+        tool_results: Vec<(String, String)>,
+    ) -> Result<LlmResponse>;
+
+    /// Complete a chat conversation (batch mode) without tools
+    async fn complete(&self, messages: Vec<LlmMessage>) -> Result<LlmResponse> {
+        self.complete_with_tools(messages, vec![]).await
+    }
 
     /// Complete with streaming (Phase 7.7)
     ///
@@ -101,7 +122,7 @@ pub trait LlmClient: Send + Sync {
 
         // Add done chunk
         chunks.push(Ok(StreamChunk::Done {
-            stop_reason: "end_turn".to_string(),
+            stop_reason: response.stop_reason,
         }));
 
         Ok(Box::pin(stream::iter(chunks)))
@@ -124,7 +145,11 @@ impl RealLlmAdapter {
 
 #[async_trait]
 impl LlmClient for RealLlmAdapter {
-    async fn complete(&self, messages: Vec<LlmMessage>) -> Result<LlmResponse> {
+    async fn complete_with_tools(
+        &self,
+        messages: Vec<LlmMessage>,
+        tools: Vec<crate::llm::ToolDefinition>,
+    ) -> Result<LlmResponse> {
         // Convert actor LlmMessage to llm::ChatMessage
         let chat_messages: Vec<crate::llm::ChatMessage> = messages
             .into_iter()
@@ -134,10 +159,9 @@ impl LlmClient for RealLlmAdapter {
             })
             .collect();
 
-        // Call real LLM without tools (simplified for actor invocation)
         let response = self
             .client
-            .complete_with_tools(chat_messages, vec![])
+            .complete_with_tools(chat_messages, tools)
             .await
             .map_err(|e| kelpie_core::Error::Internal {
                 message: format!("LLM completion failed: {}", e),
@@ -155,6 +179,49 @@ impl LlmClient for RealLlmAdapter {
                     input: tc.input,
                 })
                 .collect(),
+            prompt_tokens: response.prompt_tokens,
+            completion_tokens: response.completion_tokens,
+            stop_reason: response.stop_reason,
+        })
+    }
+
+    async fn continue_with_tool_result(
+        &self,
+        messages: Vec<LlmMessage>,
+        tools: Vec<crate::llm::ToolDefinition>,
+        assistant_blocks: Vec<crate::llm::ContentBlock>,
+        tool_results: Vec<(String, String)>,
+    ) -> Result<LlmResponse> {
+        let chat_messages: Vec<crate::llm::ChatMessage> = messages
+            .into_iter()
+            .map(|m| crate::llm::ChatMessage {
+                role: m.role,
+                content: m.content,
+            })
+            .collect();
+
+        let response = self
+            .client
+            .continue_with_tool_result(chat_messages, tools, assistant_blocks, tool_results)
+            .await
+            .map_err(|e| kelpie_core::Error::Internal {
+                message: format!("LLM tool continuation failed: {}", e),
+            })?;
+
+        Ok(LlmResponse {
+            content: response.content,
+            tool_calls: response
+                .tool_calls
+                .into_iter()
+                .map(|tc| LlmToolCall {
+                    id: tc.id,
+                    name: tc.name,
+                    input: tc.input,
+                })
+                .collect(),
+            prompt_tokens: response.prompt_tokens,
+            completion_tokens: response.completion_tokens,
+            stop_reason: response.stop_reason,
         })
     }
 

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use kelpie_dst::{
     Architecture, DeterministicRng, FaultConfig, FaultInjector, FaultInjectorBuilder, FaultType,
-    SimSandboxFactory, SimTeleportStorage, SnapshotKind, TeleportPackage,
+    SimSandboxFactory, SimTeleportStorage, SnapshotKind, TeleportPackage, VmSnapshotBlob,
 };
 use kelpie_sandbox::{ExecOptions, ResourceLimits, Sandbox, SandboxConfig, SandboxFactory};
 
@@ -83,7 +83,11 @@ async fn test_dst_suspend_snapshot_no_faults() {
         Architecture::Arm64,
         SnapshotKind::Suspend,
     )
-    .with_vm_memory(Bytes::from("simulated memory state"))
+    .with_vm_snapshot(VmSnapshotBlob::encode(
+        Bytes::new(),
+        Bytes::new(),
+        Bytes::from("simulated memory state"),
+    ))
     .with_base_image_version("1.0.0")
     .with_created_at(1000);
 
@@ -206,8 +210,11 @@ async fn test_dst_teleport_snapshot_no_faults() {
         Architecture::Arm64,
         SnapshotKind::Teleport,
     )
-    .with_vm_memory(Bytes::from("full memory state"))
-    .with_vm_cpu_state(Bytes::from("cpu registers"))
+    .with_vm_snapshot(VmSnapshotBlob::encode(
+        Bytes::new(),
+        Bytes::from("cpu registers"),
+        Bytes::from("full memory state"),
+    ))
     .with_workspace_ref("s3://bucket/workspace-123")
     .with_agent_state(Bytes::from("agent state"))
     .with_base_image_version("1.0.0")
@@ -219,8 +226,7 @@ async fn test_dst_teleport_snapshot_no_faults() {
         "Teleport should be full snapshot"
     );
     assert_eq!(package.kind, SnapshotKind::Teleport);
-    assert!(package.vm_memory.is_some());
-    assert!(package.vm_cpu_state.is_some());
+    assert!(package.vm_snapshot.is_some());
     assert!(package.workspace_ref.is_some());
 
     // Teleport works on same architecture only
@@ -273,8 +279,11 @@ async fn test_dst_teleport_snapshot_storage_faults() {
             Architecture::Arm64,
             SnapshotKind::Teleport,
         )
-        .with_vm_memory(Bytes::from("memory"))
-        .with_vm_cpu_state(Bytes::from("cpu"))
+        .with_vm_snapshot(VmSnapshotBlob::encode(
+            Bytes::new(),
+            Bytes::from("cpu"),
+            Bytes::from("memory"),
+        ))
         .with_base_image_version("1.0.0");
 
         match storage.upload(package).await {
@@ -387,8 +396,7 @@ async fn test_dst_checkpoint_snapshot_no_faults() {
         "Checkpoint should NOT be full teleport"
     );
     assert!(package.is_checkpoint());
-    assert!(package.vm_memory.is_none());
-    assert!(package.vm_cpu_state.is_none());
+    assert!(package.vm_snapshot.is_none());
     assert!(package.agent_state.is_some());
 
     // Checkpoint works ACROSS architectures
@@ -483,8 +491,11 @@ async fn test_dst_architecture_validation() {
         Architecture::Arm64,
         SnapshotKind::Teleport,
     )
-    .with_vm_memory(Bytes::from("arm64 memory"))
-    .with_vm_cpu_state(Bytes::from("arm64 cpu"))
+    .with_vm_snapshot(VmSnapshotBlob::encode(
+        Bytes::new(),
+        Bytes::from("arm64 cpu"),
+        Bytes::from("arm64 memory"),
+    ))
     .with_base_image_version("1.0.0");
 
     storage
@@ -555,8 +566,11 @@ async fn test_dst_architecture_mismatch_faults() {
         Architecture::Arm64, // Same as host
         SnapshotKind::Teleport,
     )
-    .with_vm_memory(Bytes::from("memory"))
-    .with_vm_cpu_state(Bytes::from("cpu"))
+    .with_vm_snapshot(VmSnapshotBlob::encode(
+        Bytes::new(),
+        Bytes::from("cpu"),
+        Bytes::from("memory"),
+    ))
     .with_base_image_version("1.0.0");
 
     storage.upload(package).await.expect("should upload");
@@ -614,8 +628,11 @@ async fn test_dst_base_image_version_validation() {
         Architecture::Arm64,
         SnapshotKind::Teleport,
     )
-    .with_vm_memory(Bytes::from("memory"))
-    .with_vm_cpu_state(Bytes::from("cpu"))
+    .with_vm_snapshot(VmSnapshotBlob::encode(
+        Bytes::new(),
+        Bytes::from("cpu"),
+        Bytes::from("memory"),
+    ))
     .with_base_image_version("1.0.0"); // Old version
 
     storage.upload(package).await.expect("should upload");
@@ -643,8 +660,11 @@ async fn test_dst_base_image_version_validation() {
         Architecture::Arm64,
         SnapshotKind::Teleport,
     )
-    .with_vm_memory(Bytes::from("memory"))
-    .with_vm_cpu_state(Bytes::from("cpu"))
+    .with_vm_snapshot(VmSnapshotBlob::encode(
+        Bytes::new(),
+        Bytes::from("cpu"),
+        Bytes::from("memory"),
+    ))
     .with_base_image_version("2.0.0"); // Matching version
 
     storage.upload(package_new).await.expect("should upload");
@@ -681,8 +701,11 @@ async fn test_dst_base_image_mismatch_faults() {
         Architecture::Arm64,
         SnapshotKind::Teleport,
     )
-    .with_vm_memory(Bytes::from("memory"))
-    .with_vm_cpu_state(Bytes::from("cpu"))
+    .with_vm_snapshot(VmSnapshotBlob::encode(
+        Bytes::new(),
+        Bytes::from("cpu"),
+        Bytes::from("memory"),
+    ))
     .with_base_image_version("1.0.0"); // Matching
 
     storage.upload(package).await.expect("should upload");
@@ -758,8 +781,11 @@ async fn test_dst_snapshot_types_determinism() {
                     Architecture::Arm64,
                     SnapshotKind::Teleport,
                 )
-                .with_vm_memory(Bytes::from("memory"))
-                .with_vm_cpu_state(Bytes::from("cpu"))
+                .with_vm_snapshot(VmSnapshotBlob::encode(
+                    Bytes::new(),
+                    Bytes::from("cpu"),
+                    Bytes::from("memory"),
+                ))
                 .with_base_image_version("1.0.0");
 
                 let upload_ok = storage.upload(package).await.is_ok();
@@ -835,7 +861,11 @@ async fn test_dst_snapshot_types_chaos() {
                 Architecture::Arm64,
                 SnapshotKind::Suspend,
             )
-            .with_vm_memory(Bytes::from("memory"))
+            .with_vm_snapshot(VmSnapshotBlob::encode(
+                Bytes::new(),
+                Bytes::new(),
+                Bytes::from("memory"),
+            ))
             .with_base_image_version("1.0.0"),
 
             SnapshotKind::Teleport => TeleportPackage::new(
@@ -844,8 +874,11 @@ async fn test_dst_snapshot_types_chaos() {
                 Architecture::Arm64,
                 SnapshotKind::Teleport,
             )
-            .with_vm_memory(Bytes::from("memory"))
-            .with_vm_cpu_state(Bytes::from("cpu"))
+            .with_vm_snapshot(VmSnapshotBlob::encode(
+                Bytes::new(),
+                Bytes::from("cpu"),
+                Bytes::from("memory"),
+            ))
             .with_workspace_ref("s3://bucket/workspace")
             .with_base_image_version("1.0.0"),
 
@@ -926,8 +959,11 @@ async fn stress_test_snapshot_types() {
                 Architecture::Arm64,
                 SnapshotKind::Teleport,
             )
-            .with_vm_memory(Bytes::from("memory"))
-            .with_vm_cpu_state(Bytes::from("cpu"))
+            .with_vm_snapshot(VmSnapshotBlob::encode(
+                Bytes::new(),
+                Bytes::from("cpu"),
+                Bytes::from("memory"),
+            ))
             .with_base_image_version("1.0.0");
 
             if storage.upload(package).await.is_ok() {

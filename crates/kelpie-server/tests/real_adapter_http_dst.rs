@@ -4,13 +4,18 @@
 //!
 //! These tests use mockito to simulate Anthropic's SSE API.
 //! Tests WILL FAIL until RealLlmAdapter.stream_complete() is implemented.
+#![cfg(feature = "dst")]
 
-use futures::stream::StreamExt;
-use kelpie_core::Result;
+use async_trait::async_trait;
+use bytes::Bytes;
+use futures::stream::{self, StreamExt};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
 use kelpie_server::actor::{LlmClient, LlmMessage, RealLlmAdapter, StreamChunk};
+use kelpie_server::http::{HttpClient, HttpRequest, HttpResponse};
 use kelpie_server::llm::{LlmClient as RealLlmClient, LlmConfig};
-use mockito::{Server, ServerGuard};
+use std::collections::HashMap;
+use std::pin::Pin;
+use std::sync::Arc;
 
 /// Build mock Anthropic SSE response
 ///
@@ -47,6 +52,36 @@ fn mock_anthropic_sse_response() -> String {
     events.join("")
 }
 
+struct StubHttpClient {
+    stream_body: Option<String>,
+    stream_error: Option<String>,
+}
+
+#[async_trait]
+impl HttpClient for StubHttpClient {
+    async fn send(&self, _request: HttpRequest) -> Result<HttpResponse, String> {
+        Ok(HttpResponse {
+            status: 200,
+            headers: HashMap::new(),
+            body: Vec::new(),
+        })
+    }
+
+    async fn send_streaming(
+        &self,
+        _request: HttpRequest,
+    ) -> Result<Pin<Box<dyn futures::stream::Stream<Item = Result<Bytes, String>> + Send>>, String>
+    {
+        if let Some(error) = &self.stream_error {
+            return Err(error.clone());
+        }
+
+        let body = self.stream_body.clone().unwrap_or_default();
+        let stream = stream::iter(vec![Ok(Bytes::from(body))]);
+        Ok(Box::pin(stream))
+    }
+}
+
 /// Test that RealLlmAdapter.stream_complete() produces incremental chunks
 ///
 /// Contract:
@@ -63,28 +98,20 @@ async fn test_dst_real_adapter_uses_real_streaming() {
 
     let result = Simulation::new(config)
         .run_async(|_sim_env| async move {
-            // Start mock HTTP server
-            let mut server = Server::new_async().await;
+            let http_client = Arc::new(StubHttpClient {
+                stream_body: Some(mock_anthropic_sse_response()),
+                stream_error: None,
+            });
 
-            // Configure mock to return SSE stream
-            let mock = server
-                .mock("POST", "/test.anthropic.com/messages")
-                .match_header("x-api-key", "test-key")
-                .with_status(200)
-                .with_header("content-type", "text/event-stream")
-                .with_body(mock_anthropic_sse_response())
-                .create_async()
-                .await;
-
-            // Create LlmClient pointing to mock server
-            // Add "anthropic.com" to path so is_anthropic() returns true
+            // Create LlmClient pointing to stub client
+            // Add "anthropic.com" to base_url so is_anthropic() returns true
             let llm_config = LlmConfig {
-                base_url: format!("{}/test.anthropic.com", server.url()),
+                base_url: "http://example.com/test.anthropic.com".to_string(),
                 api_key: "test-key".to_string(),
                 model: "claude-test".to_string(),
                 max_tokens: 100,
             };
-            let llm_client = RealLlmClient::new(llm_config);
+            let llm_client = RealLlmClient::with_http_client(llm_config, http_client);
 
             // Create RealLlmAdapter
             let adapter = RealLlmAdapter::new(llm_client);
@@ -143,9 +170,6 @@ async fn test_dst_real_adapter_uses_real_streaming() {
                 _ => panic!("Last chunk should be Done"),
             }
 
-            // Verify mock was called
-            mock.assert_async().await;
-
             Ok(())
         })
         .await;
@@ -176,26 +200,20 @@ async fn test_dst_real_adapter_streaming_with_faults() {
             0.5, // 50% of operations delayed
         ))
         .run_async(|_sim_env| async move {
-            // Start mock HTTP server
-            let mut server = Server::new_async().await;
-
-            // Configure mock
-            let _mock = server
-                .mock("POST", "/test.anthropic.com/messages")
-                .with_status(200)
-                .with_header("content-type", "text/event-stream")
-                .with_body(mock_anthropic_sse_response())
-                .create_async()
-                .await;
+            let http_client = Arc::new(StubHttpClient {
+                stream_body: Some(mock_anthropic_sse_response()),
+                stream_error: None,
+            });
 
             // Create adapter
             let llm_config = LlmConfig {
-                base_url: format!("{}/test.anthropic.com", server.url()),
+                base_url: "http://example.com/test.anthropic.com".to_string(),
                 api_key: "test-key".to_string(),
                 model: "claude-test".to_string(),
                 max_tokens: 100,
             };
-            let adapter = RealLlmAdapter::new(RealLlmClient::new(llm_config));
+            let adapter =
+                RealLlmAdapter::new(RealLlmClient::with_http_client(llm_config, http_client));
 
             // Stream with faults active
             let mut stream = adapter
@@ -245,28 +263,20 @@ async fn test_dst_real_adapter_error_handling() {
 
     let result = Simulation::new(config)
         .run_async(|_sim_env| async move {
-            // Start mock HTTP server
-            let mut server = Server::new_async().await;
-
-            // Configure mock to return error
-            let _mock = server
-                .mock("POST", "/test.anthropic.com/messages")
-                .with_status(429)
-                .with_header("content-type", "application/json")
-                .with_body(
-                    r#"{"error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}"#,
-                )
-                .create_async()
-                .await;
+            let http_client = Arc::new(StubHttpClient {
+                stream_body: None,
+                stream_error: Some("API error 429: Rate limit exceeded".to_string()),
+            });
 
             // Create adapter
             let llm_config = LlmConfig {
-                base_url: format!("{}/test.anthropic.com", server.url()),
+                base_url: "http://example.com/test.anthropic.com".to_string(),
                 api_key: "test-key".to_string(),
                 model: "claude-test".to_string(),
                 max_tokens: 100,
             };
-            let adapter = RealLlmAdapter::new(RealLlmClient::new(llm_config));
+            let adapter =
+                RealLlmAdapter::new(RealLlmClient::with_http_client(llm_config, http_client));
 
             // Call stream_complete (should error)
             let stream_result = adapter

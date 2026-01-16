@@ -10,7 +10,7 @@ use axum::{
 use chrono::Utc;
 use futures::stream::{self, Stream, StreamExt};
 use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
-use kelpie_server::llm::{ChatMessage, ContentBlock, ToolDefinition};
+use kelpie_server::llm::{ChatMessage, ContentBlock};
 use kelpie_server::models::{CreateMessageRequest, Message, MessageRole};
 use kelpie_server::state::AppState;
 use serde::{Deserialize, Serialize};
@@ -52,6 +52,12 @@ enum SseMessage {
         id: String,
         tool_return: String,
         status: String,
+    },
+    #[serde(rename = "approval_request_message")]
+    ApprovalRequestMessage {
+        id: String,
+        tool_call_id: String,
+        tool_call: ToolCallInfo,
     },
     #[serde(rename = "usage_statistics")]
     UsageStatistics {
@@ -187,12 +193,16 @@ async fn generate_response_events(
     // Get recent message history
     let history = state.list_messages(agent_id, 20, None).unwrap_or_default();
     for msg in history.iter() {
+        // Skip tool and system messages - Claude API doesn't support role "tool"
+        if msg.role == MessageRole::Tool || msg.role == MessageRole::System {
+            continue;
+        }
         messages.push(ChatMessage {
             role: match msg.role {
                 MessageRole::User => "user",
                 MessageRole::Assistant => "assistant",
-                MessageRole::System => "system",
-                MessageRole::Tool => "tool",
+                MessageRole::System => "system", // Won't reach
+                MessageRole::Tool => "user",     // Won't reach
             }
             .to_string(),
             content: msg.content.clone(),
@@ -205,8 +215,13 @@ async fn generate_response_events(
         content: content.clone(),
     });
 
-    // Define available tools
-    let tools = vec![ToolDefinition::shell()];
+    // Define available tools from registry
+    let capabilities = agent.agent_type.capabilities();
+    let all_tools = state.tool_registry().get_tool_definitions().await;
+    let tools: Vec<_> = all_tools
+        .into_iter()
+        .filter(|t| capabilities.allowed_tools.contains(&t.name))
+        .collect();
 
     // Call LLM
     match llm
@@ -379,12 +394,16 @@ async fn generate_streaming_response_events(
     // Get recent message history
     let history = state.list_messages(agent_id, 20, None).unwrap_or_default();
     for msg in history.iter() {
+        // Skip tool and system messages - Claude API doesn't support role "tool"
+        if msg.role == MessageRole::Tool || msg.role == MessageRole::System {
+            continue;
+        }
         messages.push(ChatMessage {
             role: match msg.role {
                 MessageRole::User => "user",
                 MessageRole::Assistant => "assistant",
-                MessageRole::System => "system",
-                MessageRole::Tool => "tool",
+                MessageRole::System => "system", // Won't reach
+                MessageRole::Tool => "user",     // Won't reach
             }
             .to_string(),
             content: msg.content.clone(),

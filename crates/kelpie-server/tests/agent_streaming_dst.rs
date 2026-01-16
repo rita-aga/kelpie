@@ -2,6 +2,7 @@
 //!
 //! TigerStyle: DST-first development - these tests define the streaming contract
 //! and will initially FAIL until streaming is implemented.
+#![cfg(feature = "dst")]
 
 use async_trait::async_trait;
 use kelpie_core::Result;
@@ -10,6 +11,7 @@ use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
 use kelpie_server::models::{AgentType, CreateAgentRequest, CreateBlockRequest, StreamEvent};
 use kelpie_server::service::AgentService;
+use kelpie_server::tools::UnifiedToolRegistry;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -21,11 +23,35 @@ struct SimLlmClientAdapter {
 
 #[async_trait]
 impl LlmClient for SimLlmClientAdapter {
-    async fn complete(&self, _messages: Vec<LlmMessage>) -> Result<LlmResponse> {
-        // For streaming tests, we'll override this in the streaming implementation
+    async fn complete_with_tools(
+        &self,
+        _messages: Vec<LlmMessage>,
+        _tools: Vec<kelpie_server::llm::ToolDefinition>,
+    ) -> Result<LlmResponse> {
+        let _ = &self.client;
         Ok(LlmResponse {
             content: "Test response".to_string(),
             tool_calls: vec![],
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            stop_reason: "end_turn".to_string(),
+        })
+    }
+
+    async fn continue_with_tool_result(
+        &self,
+        _messages: Vec<LlmMessage>,
+        _tools: Vec<kelpie_server::llm::ToolDefinition>,
+        _assistant_blocks: Vec<kelpie_server::llm::ContentBlock>,
+        _tool_results: Vec<(String, String)>,
+    ) -> Result<LlmResponse> {
+        let _ = &self.client;
+        Ok(LlmResponse {
+            content: "Test response".to_string(),
+            tool_calls: vec![],
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            stop_reason: "end_turn".to_string(),
         })
     }
 }
@@ -37,7 +63,7 @@ fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
         client: Arc::new(sim_llm),
     });
 
-    let actor = AgentActor::new(llm_adapter);
+    let actor = AgentActor::new(llm_adapter, Arc::new(UnifiedToolRegistry::new()));
     let factory = Arc::new(CloneFactory::new(actor));
     let kv = Arc::new(sim_env.storage.clone());
 

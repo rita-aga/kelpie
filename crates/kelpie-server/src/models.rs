@@ -143,6 +143,8 @@ pub struct UpdateAgentRequest {
     pub tags: Option<Vec<String>>,
     /// New metadata
     pub metadata: Option<serde_json::Value>,
+    /// New tool IDs (replaces existing)
+    pub tool_ids: Option<Vec<String>>,
 }
 
 /// Agent state response
@@ -221,6 +223,9 @@ impl AgentState {
         }
         if let Some(metadata) = update.metadata {
             self.metadata = metadata;
+        }
+        if let Some(tool_ids) = update.tool_ids {
+            self.tool_ids = tool_ids;
         }
         self.updated_at = Utc::now();
     }
@@ -349,6 +354,44 @@ pub struct CreateMessageRequest {
     /// Optional message field (another letta-code format)
     #[serde(alias = "message")]
     pub msg: Option<String>,
+    /// Enable streaming response
+    #[serde(default)]
+    pub streaming: bool,
+    /// Stream individual tokens (not just message chunks)
+    #[serde(default)]
+    pub stream_tokens: bool,
+    /// Client-side tools that require approval before execution
+    #[serde(default)]
+    pub client_tools: Vec<ClientTool>,
+}
+
+/// Client-side tool definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientTool {
+    /// Tool name
+    pub name: String,
+    /// Whether tool requires approval
+    #[serde(default)]
+    pub requires_approval: bool,
+}
+
+/// Approval response for client-side tools
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolApproval {
+    /// Tool call ID being approved/rejected
+    pub tool_call_id: String,
+    /// Tool return value (result of client-side execution)
+    pub tool_return: String,
+    /// Status: "success" or "error"
+    pub status: String,
+}
+
+/// Approval message type
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ApprovalMessage {
+    #[serde(rename = "approval")]
+    Approval { approvals: Vec<ToolApproval> },
 }
 
 fn default_role() -> MessageRole {
@@ -366,6 +409,12 @@ pub struct LettaMessage {
     pub content: Option<String>,
     /// Alternative text field
     pub text: Option<String>,
+    /// Message type for special messages (e.g., "approval")
+    #[serde(rename = "type")]
+    pub message_type: Option<String>,
+    /// Approvals for client-side tool execution results
+    #[serde(default)]
+    pub approvals: Vec<ToolApproval>,
 }
 
 /// Deserialize content that can be either a string or an array of content blocks
@@ -538,6 +587,38 @@ pub struct UsageStats {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
+}
+
+// =============================================================================
+// Batch Message Models
+// =============================================================================
+
+/// Request to send a batch of messages
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchMessagesRequest {
+    pub messages: Vec<CreateMessageRequest>,
+}
+
+/// Result for a single message in a batch
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchMessageResult {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response: Option<MessageResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Batch execution status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchStatus {
+    pub id: String,
+    pub agent_id: String,
+    pub total: usize,
+    pub completed: usize,
+    pub results: Vec<BatchMessageResult>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 // =============================================================================
@@ -1026,6 +1107,110 @@ impl Project {
         }
         if let Some(tags) = update.tags {
             self.tags = tags;
+        }
+        if let Some(metadata) = update.metadata {
+            self.metadata = metadata;
+        }
+        self.updated_at = Utc::now();
+    }
+}
+
+// =========================================================================
+// Agent Group models (Phase 8)
+// =========================================================================
+
+/// Routing policy for agent groups
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutingPolicy {
+    RoundRobin,
+    Broadcast,
+    Intelligent,
+}
+
+impl Default for RoutingPolicy {
+    fn default() -> Self {
+        Self::RoundRobin
+    }
+}
+
+/// Request to create an agent group
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateAgentGroupRequest {
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub agent_ids: Vec<String>,
+    #[serde(default)]
+    pub routing_policy: RoutingPolicy,
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+}
+
+/// Request to update an agent group
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpdateAgentGroupRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub routing_policy: Option<RoutingPolicy>,
+    #[serde(default)]
+    pub add_agent_ids: Vec<String>,
+    #[serde(default)]
+    pub remove_agent_ids: Vec<String>,
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Agent group response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentGroup {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub agent_ids: Vec<String>,
+    pub routing_policy: RoutingPolicy,
+    pub shared_state: serde_json::Value,
+    pub metadata: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(skip)]
+    pub last_routed_index: usize,
+}
+
+impl AgentGroup {
+    pub fn from_request(request: CreateAgentGroupRequest) -> Self {
+        let now = Utc::now();
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: request.name,
+            description: request.description,
+            agent_ids: request.agent_ids,
+            routing_policy: request.routing_policy,
+            shared_state: serde_json::json!([]),
+            metadata: request.metadata,
+            created_at: now,
+            updated_at: now,
+            last_routed_index: 0,
+        }
+    }
+
+    pub fn apply_update(&mut self, update: UpdateAgentGroupRequest) {
+        if let Some(name) = update.name {
+            self.name = name;
+        }
+        if let Some(description) = update.description {
+            self.description = Some(description);
+        }
+        if let Some(routing_policy) = update.routing_policy {
+            self.routing_policy = routing_policy;
+        }
+        for agent_id in update.add_agent_ids {
+            if !self.agent_ids.contains(&agent_id) {
+                self.agent_ids.push(agent_id);
+            }
+        }
+        if !update.remove_agent_ids.is_empty() {
+            self.agent_ids
+                .retain(|id| !update.remove_agent_ids.contains(id));
         }
         if let Some(metadata) = update.metadata {
             self.metadata = metadata;

@@ -3,6 +3,7 @@
 //! TigerStyle: DST-first development - write tests before implementation.
 //!
 //! These tests verify that MCP tools work correctly under fault conditions.
+#![cfg(feature = "dst")]
 
 use kelpie_core::error::Error as CoreError;
 use kelpie_dst::fault::{FaultConfig, FaultType};

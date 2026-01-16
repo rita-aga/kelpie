@@ -3,10 +3,9 @@
 //! Aggressive chaos tests designed to find bugs in the shared state machine code.
 
 use kelpie_dst::{
-    DeterministicRng, FaultConfig, FaultInjectorBuilder, FaultType, SimClock,
-    SimSandboxIOFactory,
+    DeterministicRng, FaultConfig, FaultInjectorBuilder, FaultType, SimClock, SimSandboxIOFactory,
 };
-use kelpie_sandbox::{GenericSandbox, SandboxConfig, SandboxState};
+use kelpie_sandbox::{SandboxConfig, SandboxState};
 use std::sync::Arc;
 
 /// Test rapid state transitions under faults
@@ -40,7 +39,9 @@ async fn test_rapid_state_transitions() {
 
                 // Try some execs
                 for j in 0..10 {
-                    let _ = sandbox.exec_simple("test", &[&format!("{}_{}", iteration, j)]).await;
+                    let _ = sandbox
+                        .exec_simple("test", &[&format!("{}_{}", iteration, j)])
+                        .await;
                 }
 
                 sandbox.stop().await.unwrap();
@@ -48,8 +49,11 @@ async fn test_rapid_state_transitions() {
             }
             Err(_) => {
                 // Boot failed - state should still be Stopped
-                assert_eq!(sandbox.state(), SandboxState::Stopped,
-                    "State should remain Stopped after failed boot");
+                assert_eq!(
+                    sandbox.state(),
+                    SandboxState::Stopped,
+                    "State should remain Stopped after failed boot"
+                );
             }
         }
     }
@@ -163,7 +167,10 @@ async fn test_stress_many_sandboxes_high_faults() {
     fault_builder = fault_builder
         .with_fault(FaultConfig::new(FaultType::SandboxBootFail, 0.3))
         .with_fault(FaultConfig::new(FaultType::SandboxExecFail, 0.4).with_filter("sandbox_exec"))
-        .with_fault(FaultConfig::new(FaultType::SandboxExecTimeout { timeout_ms: 100 }, 0.1).with_filter("sandbox_exec"));
+        .with_fault(
+            FaultConfig::new(FaultType::SandboxExecTimeout { timeout_ms: 100 }, 0.1)
+                .with_filter("sandbox_exec"),
+        );
     let faults = Arc::new(fault_builder.build());
     let clock = Arc::new(SimClock::default());
 
@@ -236,8 +243,12 @@ async fn test_file_operations_consistency() {
 
         // Read back immediately
         let data = sandbox.read_file(&path).await.unwrap();
-        assert_eq!(data.as_ref(), content.as_bytes(),
-            "Read data should match written data for file {}", i);
+        assert_eq!(
+            data.as_ref(),
+            content.as_bytes(),
+            "Read data should match written data for file {}",
+            i
+        );
     }
 
     // Verify all files still exist
@@ -268,13 +279,19 @@ async fn test_recovery_after_failures() {
     sandbox.start().await.unwrap();
 
     // Write some data
-    sandbox.write_file("/important.txt", b"critical").await.unwrap();
+    sandbox
+        .write_file("/important.txt", b"critical")
+        .await
+        .unwrap();
 
     // Take snapshot
     let snapshot = sandbox.snapshot().await.unwrap();
 
     // Make more changes
-    sandbox.write_file("/important.txt", b"modified").await.unwrap();
+    sandbox
+        .write_file("/important.txt", b"modified")
+        .await
+        .unwrap();
     sandbox.write_file("/new.txt", b"new file").await.unwrap();
 
     // Restore to snapshot
@@ -282,7 +299,11 @@ async fn test_recovery_after_failures() {
 
     // Verify old state restored
     let content = sandbox.read_file("/important.txt").await.unwrap();
-    assert_eq!(content.as_ref(), b"critical", "Should restore to snapshot state");
+    assert_eq!(
+        content.as_ref(),
+        b"critical",
+        "Should restore to snapshot state"
+    );
 
     // New file should not exist
     let result = sandbox.read_file("/new.txt").await;

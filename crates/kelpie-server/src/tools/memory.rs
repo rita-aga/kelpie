@@ -552,9 +552,9 @@ fn parse_date_param(val: &Value) -> Result<chrono::DateTime<chrono::Utc>, String
         // Number: treat as Unix timestamp (seconds)
         Value::Number(n) => {
             if let Some(ts) = n.as_i64() {
-                Utc.timestamp_opt(ts, 0).single().ok_or_else(|| {
-                    format!("Invalid Unix timestamp: {} (out of range)", ts)
-                })
+                Utc.timestamp_opt(ts, 0)
+                    .single()
+                    .ok_or_else(|| format!("Invalid Unix timestamp: {} (out of range)", ts))
             } else {
                 Err(format!("Invalid timestamp: {}", n))
             }
@@ -567,6 +567,7 @@ fn parse_date_param(val: &Value) -> Result<chrono::DateTime<chrono::Utc>, String
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::models::{AgentState, AgentType, CreateAgentRequest, CreateBlockRequest};
@@ -863,7 +864,9 @@ mod tests {
             .await;
 
         // Should fail with error message
-        assert!(result.output.contains("Error: start_date must be before end_date"));
+        assert!(result
+            .output
+            .contains("Error: start_date must be before end_date"));
     }
 
     #[tokio::test]
@@ -911,7 +914,9 @@ mod tests {
             )
             .await;
 
-        assert!(result.output.contains("Error: missing required parameter 'agent_id'"));
+        assert!(result
+            .output
+            .contains("Error: missing required parameter 'agent_id'"));
 
         // Missing query
         let result = registry
@@ -923,6 +928,8 @@ mod tests {
             )
             .await;
 
-        assert!(result.output.contains("Error: missing required parameter 'query'"));
+        assert!(result
+            .output
+            .contains("Error: missing required parameter 'query'"));
     }
 }

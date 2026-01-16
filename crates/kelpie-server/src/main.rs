@@ -144,6 +144,11 @@ async fn main() -> anyhow::Result<()> {
     // Register code execution tool
     tools::register_run_code_tool(state.tool_registry()).await;
 
+    // Load custom tools from storage (if configured)
+    if let Err(err) = state.load_custom_tools().await {
+        tracing::warn!(error = %err, "Failed to load custom tools from storage");
+    }
+
     // Create router
     let app = api::router(state);
 

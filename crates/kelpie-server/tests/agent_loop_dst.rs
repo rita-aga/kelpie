@@ -5,6 +5,7 @@
 //!
 //! Unlike mcp_integration_dst.rs which tests SimMcpClient in isolation,
 //! these tests verify the complete integration works under fault conditions.
+#![cfg(feature = "dst")]
 
 use kelpie_core::error::Error as CoreError;
 use kelpie_dst::fault::{FaultConfig, FaultInjector, FaultType};

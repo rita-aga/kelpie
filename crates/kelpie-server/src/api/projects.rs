@@ -6,9 +6,9 @@
 //! Projects help organize agents by use case, team, or environment.
 
 use crate::api::ApiError;
-use axum::{extract::State, Json};
 use axum::{extract::Path, extract::Query, routing::get, Router};
-use kelpie_server::models::{CreateProjectRequest, Project, UpdateProjectRequest};
+use axum::{extract::State, Json};
+use kelpie_server::models::{CreateProjectRequest, ListResponse, Project, UpdateProjectRequest};
 use kelpie_server::state::AppState;
 use serde::Deserialize;
 use tracing::instrument;
@@ -23,8 +23,11 @@ pub fn router() -> Router<AppState> {
         .route("/projects", get(list_projects).post(create_project))
         .route(
             "/projects/:project_id",
-            get(get_project).patch(update_project).delete(delete_project),
+            get(get_project)
+                .patch(update_project)
+                .delete(delete_project),
         )
+        .route("/projects/:project_id/agents", get(list_project_agents))
 }
 
 /// Create a project
@@ -118,6 +121,15 @@ struct ListProjectsQuery {
     limit: Option<usize>,
 }
 
+/// Query parameters for listing agents in a project
+#[derive(Debug, Deserialize)]
+struct ListProjectAgentsQuery {
+    /// Pagination cursor
+    cursor: Option<String>,
+    /// Number of items to return (max 100)
+    limit: Option<usize>,
+}
+
 /// Response for listing projects
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct ListProjectsResponse {
@@ -186,6 +198,48 @@ async fn delete_project(
     tracing::info!(project_id = %project_id, "deleted project");
 
     Ok(())
+}
+
+/// List agents in a project
+///
+/// GET /v1/projects/{project_id}/agents
+#[instrument(skip(state, query), fields(project_id = %project_id), level = "info")]
+async fn list_project_agents(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+    Query(query): Query<ListProjectAgentsQuery>,
+) -> Result<Json<ListResponse<kelpie_server::models::AgentState>>, ApiError> {
+    let mut agents = state.list_agents_by_project(&project_id)?;
+    agents.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+    let total = agents.len();
+    let limit = query.limit.unwrap_or(50).min(100);
+
+    let start_idx = if let Some(cursor_id) = query.cursor.as_deref() {
+        agents
+            .iter()
+            .position(|a| a.id == cursor_id)
+            .map(|i| i + 1)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    let page: Vec<_> = agents.into_iter().skip(start_idx).take(limit + 1).collect();
+
+    let (items, next_cursor) = if page.len() > limit {
+        let items: Vec<_> = page.into_iter().take(limit).collect();
+        let next_cursor = items.last().map(|a| a.id.clone());
+        (items, next_cursor)
+    } else {
+        (page, None)
+    };
+
+    Ok(Json(ListResponse {
+        items,
+        total,
+        cursor: next_cursor,
+    }))
 }
 
 #[cfg(test)]

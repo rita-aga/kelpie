@@ -3,7 +3,7 @@
 //! These tests probe the actual isolation capabilities of ProcessSandbox
 //! to understand exactly what is and isn't sandboxed.
 
-use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
+use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig, SandboxError};
 use std::env;
 use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,6 +25,13 @@ fn test_config() -> SandboxConfig {
 
 fn cleanup_test_dir(config: &SandboxConfig) {
     let _ = fs::remove_dir_all(&config.workdir);
+}
+
+fn is_op_not_permitted(err: &SandboxError) -> bool {
+    matches!(
+        err,
+        SandboxError::ExecFailed { reason, .. } if reason.contains("Operation not permitted")
+    )
 }
 
 // =============================================================================
@@ -286,7 +293,17 @@ async fn test_isolation_can_see_host_processes() {
     sandbox.start().await.unwrap();
 
     // Can we see host processes?
-    let output = sandbox.exec_simple("/bin/ps", &["aux"]).await.unwrap();
+    let output = match sandbox.exec_simple("/bin/ps", &["aux"]).await {
+        Ok(output) => output,
+        Err(err) => {
+            if is_op_not_permitted(&err) {
+                println!("[PROCESS] /bin/ps blocked by sandbox/host policy; skipping");
+                cleanup_test_dir(&config);
+                return;
+            }
+            panic!("unexpected /bin/ps failure: {}", err);
+        }
+    };
     let process_count = output.stdout_string().lines().count();
     println!("[PROCESS] Can see {} processes on host", process_count);
 
@@ -559,12 +576,22 @@ async fn test_isolation_summary() {
     println!("│ ✗ Can read /etc/passwd: {}", can_read_passwd);
 
     // 3. Can see processes
-    let output = sandbox.exec_simple("/bin/ps", &["aux"]).await.unwrap();
-    let proc_count = output.stdout_string().lines().count();
-    println!(
-        "│ ✗ Process visibility: can see {} host processes",
-        proc_count
-    );
+    match sandbox.exec_simple("/bin/ps", &["aux"]).await {
+        Ok(output) => {
+            let proc_count = output.stdout_string().lines().count();
+            println!(
+                "│ ✗ Process visibility: can see {} host processes",
+                proc_count
+            );
+        }
+        Err(err) => {
+            if is_op_not_permitted(&err) {
+                println!("│ ✗ Process visibility: blocked by sandbox/host policy");
+            } else {
+                panic!("unexpected /bin/ps failure: {}", err);
+            }
+        }
+    }
 
     // 4. Network access (check if we can reach DNS config)
     let output = sandbox

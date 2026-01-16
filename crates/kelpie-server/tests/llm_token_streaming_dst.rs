@@ -10,6 +10,7 @@
 //! - Concurrent streams
 //!
 //! These tests will FAIL initially (no stream_complete implementation yet).
+#![cfg(feature = "dst")]
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
@@ -21,6 +22,7 @@ use kelpie_server::actor::{
 };
 use kelpie_server::models::{AgentType, CreateAgentRequest};
 use kelpie_server::service::AgentService;
+use kelpie_server::tools::UnifiedToolRegistry;
 use std::sync::Arc;
 
 /// Adapter to use SimLlmClient with actor LlmClient trait
@@ -30,10 +32,35 @@ struct SimLlmClientAdapter {
 
 #[async_trait]
 impl LlmClient for SimLlmClientAdapter {
-    async fn complete(&self, _messages: Vec<LlmMessage>) -> Result<LlmResponse> {
+    async fn complete_with_tools(
+        &self,
+        _messages: Vec<LlmMessage>,
+        _tools: Vec<kelpie_server::llm::ToolDefinition>,
+    ) -> Result<LlmResponse> {
+        let _ = &self.client;
         Ok(LlmResponse {
             content: "Simulated LLM response".to_string(),
             tool_calls: vec![],
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            stop_reason: "end_turn".to_string(),
+        })
+    }
+
+    async fn continue_with_tool_result(
+        &self,
+        _messages: Vec<LlmMessage>,
+        _tools: Vec<kelpie_server::llm::ToolDefinition>,
+        _assistant_blocks: Vec<kelpie_server::llm::ContentBlock>,
+        _tool_results: Vec<(String, String)>,
+    ) -> Result<LlmResponse> {
+        let _ = &self.client;
+        Ok(LlmResponse {
+            content: "Simulated LLM response".to_string(),
+            tool_calls: vec![],
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            stop_reason: "end_turn".to_string(),
         })
     }
 
@@ -48,7 +75,7 @@ fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
         client: Arc::new(sim_llm),
     });
 
-    let actor = AgentActor::new(llm_adapter);
+    let actor = AgentActor::new(llm_adapter, Arc::new(UnifiedToolRegistry::new()));
     let factory = Arc::new(CloneFactory::new(actor));
     let kv = Arc::new(sim_env.storage.clone());
 
@@ -367,7 +394,7 @@ async fn test_dst_llm_streaming_concurrent() {
                     tool_ids: vec![],
                     tags: vec![],
                     metadata: serde_json::json!({}),
-                project_id: None,
+                    project_id: None,
                 };
                 let agent = service.create_agent(request).await?;
                 agent_ids.push(agent.id);

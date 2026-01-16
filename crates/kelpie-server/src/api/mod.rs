@@ -2,6 +2,7 @@
 //!
 //! TigerStyle: Letta-compatible REST API for agent management.
 
+pub mod agent_groups;
 pub mod agents;
 pub mod archival;
 pub mod blocks;
@@ -44,11 +45,16 @@ pub fn router(state: AppState) -> Router {
         // Capabilities
         .route("/v1/capabilities", get(capabilities))
         // Agent routes
-        .nest("/v1/agents", agents::router().merge(summarization::router()))
+        .nest(
+            "/v1/agents",
+            agents::router().merge(summarization::router()),
+        )
         // Standalone blocks routes (letta-code compatibility)
         .nest("/v1/blocks", standalone_blocks::router())
         // Tool routes
         .nest("/v1/tools", tools::router())
+        // Agent groups routes (Phase 8)
+        .nest("/v1", agent_groups::router())
         // Teleport routes
         .nest("/v1/teleport", teleport::router())
         // Scheduling routes (Phase 5)
@@ -201,6 +207,12 @@ impl ApiError {
             status: StatusCode::CONFLICT,
             body: ErrorResponse::new("conflict", message),
         }
+    }
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.body.code, self.body.message)
     }
 }
 

@@ -10,7 +10,7 @@ use axum::{
 };
 use kelpie_server::models::{AgentState, CreateAgentRequest, ListResponse, UpdateAgentRequest};
 use kelpie_server::state::AppState;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 /// Query parameters for listing agents
@@ -19,8 +19,13 @@ pub struct ListAgentsQuery {
     /// Maximum number of agents to return
     #[serde(default = "default_limit")]
     pub limit: usize,
-    /// Cursor for pagination
+    /// Cursor for pagination (Kelpie's native parameter)
     pub cursor: Option<String>,
+    /// Cursor for pagination (Letta SDK compatibility - alias for cursor)
+    /// The Letta SDK uses ?after={last_item_id} for pagination
+    pub after: Option<String>,
+    /// Filter by project ID
+    pub project_id: Option<String>,
 }
 
 fn default_limit() -> usize {
@@ -30,11 +35,61 @@ fn default_limit() -> usize {
 /// Maximum limit for list operations
 const LIST_LIMIT_MAX: usize = 100;
 
+// ============================================================================
+// Batch Models
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+struct BatchCreateAgentsRequest {
+    agents: Vec<CreateAgentRequest>,
+}
+
+#[derive(Debug, Serialize)]
+struct BatchAgentsResponse {
+    results: Vec<BatchAgentResult>,
+}
+
+#[derive(Debug, Serialize)]
+struct BatchAgentResult {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent: Option<AgentState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BatchDeleteAgentsRequest {
+    agent_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct BatchDeleteAgentsResponse {
+    results: Vec<BatchDeleteAgentResult>,
+}
+
+#[derive(Debug, Serialize)]
+struct BatchDeleteAgentResult {
+    agent_id: String,
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
 /// Create agent routes
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_agents).post(create_agent))
-        .route("/import", axum::routing::post(super::import_export::import_agent))
+        .route(
+            "/batch",
+            axum::routing::post(create_agents_batch).delete(delete_agents_batch),
+        )
+        .route(
+            "/import",
+            axum::routing::post(super::import_export::import_agent),
+        )
         .route(
             "/:agent_id",
             get(get_agent).patch(update_agent).delete(delete_agent),
@@ -48,8 +103,12 @@ pub fn router() -> Router<AppState> {
             "/:agent_id/blocks/:id_or_label",
             get(super::blocks::get_block_or_label).patch(super::blocks::update_block_or_label),
         )
-        // Core memory routes (explicit label-based access)
-        // Kept as alias for clarity - both paths work
+        // Core memory routes (Letta SDK compatibility)
+        // The SDK uses /core-memory/blocks for listing and /core-memory/blocks/{label} for access
+        .route(
+            "/:agent_id/core-memory/blocks",
+            get(super::blocks::list_blocks),
+        )
         .route(
             "/:agent_id/core-memory/blocks/:label",
             get(super::blocks::get_block_by_label).patch(super::blocks::update_block_by_label),
@@ -58,6 +117,14 @@ pub fn router() -> Router<AppState> {
         .route(
             "/:agent_id/messages",
             get(super::messages::list_messages).post(super::messages::send_message),
+        )
+        .route(
+            "/:agent_id/messages/batch",
+            axum::routing::post(super::messages::send_messages_batch),
+        )
+        .route(
+            "/:agent_id/messages/batch/:batch_id",
+            axum::routing::get(super::messages::get_batch_status),
         )
         // Streaming message route (letta-code SSE)
         .route(
@@ -72,6 +139,12 @@ pub fn router() -> Router<AppState> {
         .route(
             "/:agent_id/archival/:entry_id",
             get(super::archival::get_archival_entry).delete(super::archival::delete_archival_entry),
+        )
+        // Tool attachment routes (Letta SDK compatibility)
+        .route("/:agent_id/tools", get(list_agent_tools))
+        .route(
+            "/:agent_id/tools/:tool_id",
+            axum::routing::post(attach_tool).delete(detach_tool),
         )
 }
 
@@ -114,41 +187,262 @@ async fn create_agent(
     Ok(Json(created))
 }
 
+/// Query parameters for getting an agent
+#[derive(Debug, Deserialize, Default)]
+pub struct GetAgentQuery {
+    /// Include related resources (e.g., "agent.tools")
+    #[serde(default)]
+    pub include: Option<String>,
+}
+
 /// Get an agent by ID
 ///
 /// GET /v1/agents/{agent_id}
-#[instrument(skip(state), fields(agent_id = %agent_id), level = "info")]
+/// GET /v1/agents/{agent_id}?include=agent.tools
+#[instrument(skip(state, query), fields(agent_id = %agent_id), level = "info")]
 async fn get_agent(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
-) -> Result<Json<AgentState>, ApiError> {
+    Query(query): Query<GetAgentQuery>,
+) -> Result<Json<AgentStateWithTools>, ApiError> {
     let agent = state
         .get_agent_async(&agent_id)
         .await?
         .ok_or_else(|| ApiError::not_found("Agent", &agent_id))?;
 
-    Ok(Json(agent))
+    // If include=agent.tools, fetch and attach tool details
+    let tools = if query.include.as_deref() == Some("agent.tools") {
+        let mut tool_list = Vec::new();
+        for tool_id in &agent.tool_ids {
+            // Try to find tool by ID first, then by name
+            if let Some(tool) = state.get_tool_by_id(tool_id).await {
+                tool_list.push(super::tools::ToolResponse::from(tool));
+            } else if let Some(tool) = state.get_tool(tool_id).await {
+                tool_list.push(super::tools::ToolResponse::from(tool));
+            }
+        }
+        Some(tool_list)
+    } else {
+        None
+    };
+
+    Ok(Json(AgentStateWithTools { agent, tools }))
+}
+
+/// Agent state with optional tool details
+#[derive(Debug, Serialize)]
+pub struct AgentStateWithTools {
+    #[serde(flatten)]
+    pub agent: AgentState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<super::tools::ToolResponse>>,
+}
+
+/// List tools attached to an agent
+///
+/// GET /v1/agents/{agent_id}/tools
+#[instrument(skip(state), fields(agent_id = %agent_id), level = "info")]
+async fn list_agent_tools(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<Vec<super::tools::ToolResponse>>, ApiError> {
+    let agent = state
+        .get_agent_async(&agent_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Agent", &agent_id))?;
+
+    let mut tools = Vec::new();
+    for tool_id in &agent.tool_ids {
+        if let Some(tool) = state.get_tool_by_id(tool_id).await {
+            tools.push(super::tools::ToolResponse::from(tool));
+        } else if let Some(tool) = state.get_tool(tool_id).await {
+            tools.push(super::tools::ToolResponse::from(tool));
+        }
+    }
+
+    Ok(Json(tools))
+}
+
+/// Attach a tool to an agent
+///
+/// POST /v1/agents/{agent_id}/tools/{tool_id}
+#[instrument(skip(state), fields(agent_id = %agent_id, tool_id = %tool_id), level = "info")]
+async fn attach_tool(
+    State(state): State<AppState>,
+    Path((agent_id, tool_id)): Path<(String, String)>,
+) -> Result<Json<super::tools::ToolResponse>, ApiError> {
+    // Get the tool (by ID or name)
+    let tool = state
+        .get_tool_by_id(&tool_id)
+        .await
+        .or(state.get_tool(&tool_id).await)
+        .ok_or_else(|| ApiError::not_found("Tool", &tool_id))?;
+
+    // Get the agent and check if tool is already attached
+    let agent = state
+        .get_agent_async(&agent_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Agent", &agent_id))?;
+
+    // Add tool ID if not already attached
+    let tool_id_to_add = tool.id.clone();
+    if !agent.tool_ids.contains(&tool_id_to_add) {
+        let mut new_tool_ids = agent.tool_ids.clone();
+        new_tool_ids.push(tool_id_to_add);
+
+        let update = serde_json::json!({
+            "tool_ids": new_tool_ids
+        });
+        state.update_agent_async(&agent_id, update).await?;
+    }
+
+    tracing::info!(agent_id = %agent_id, tool_id = %tool.id, tool_name = %tool.name, "attached tool to agent");
+    Ok(Json(super::tools::ToolResponse::from(tool)))
+}
+
+/// Detach a tool from an agent
+///
+/// DELETE /v1/agents/{agent_id}/tools/{tool_id}
+#[instrument(skip(state), fields(agent_id = %agent_id, tool_id = %tool_id), level = "info")]
+async fn detach_tool(
+    State(state): State<AppState>,
+    Path((agent_id, tool_id)): Path<(String, String)>,
+) -> Result<(), ApiError> {
+    // Verify agent exists
+    let agent = state
+        .get_agent_async(&agent_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Agent", &agent_id))?;
+
+    // Remove tool ID
+    let new_tool_ids: Vec<String> = agent
+        .tool_ids
+        .into_iter()
+        .filter(|id| id != &tool_id)
+        .collect();
+
+    let update = serde_json::json!({
+        "tool_ids": new_tool_ids
+    });
+    state.update_agent_async(&agent_id, update).await?;
+
+    tracing::info!(agent_id = %agent_id, tool_id = %tool_id, "detached tool from agent");
+    Ok(())
 }
 
 /// List all agents with pagination
 ///
 /// GET /v1/agents
-#[instrument(skip(state, query), fields(limit = query.limit, cursor = ?query.cursor), level = "info")]
+///
+/// Supports both Kelpie's `cursor` and Letta SDK's `after` parameters for pagination.
+#[instrument(skip(state, query), fields(limit = query.limit, cursor = ?query.cursor, after = ?query.after), level = "info")]
 async fn list_agents(
     State(state): State<AppState>,
     Query(query): Query<ListAgentsQuery>,
 ) -> Result<Json<ListResponse<AgentState>>, ApiError> {
     let limit = query.limit.min(LIST_LIMIT_MAX);
-    let (items, cursor) = state
-        .list_agents_async(limit, query.cursor.as_deref())
-        .await?;
-    let total = state.agent_count()?;
+
+    // Support both Kelpie's `cursor` and Letta SDK's `after` parameter
+    // The `after` parameter is what the Letta SDK uses for pagination
+    let pagination_cursor = query.cursor.as_deref().or(query.after.as_deref());
+
+    let (items, cursor, total) = if let Some(project_id) = query.project_id.as_deref() {
+        let mut agents = state.list_agents_by_project(project_id)?;
+        agents.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        let total = agents.len();
+
+        let start_idx = if let Some(cursor_id) = pagination_cursor {
+            agents
+                .iter()
+                .position(|a| a.id == cursor_id)
+                .map(|i| i + 1)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        let page: Vec<_> = agents.into_iter().skip(start_idx).take(limit + 1).collect();
+
+        let (items, next_cursor) = if page.len() > limit {
+            let items: Vec<_> = page.into_iter().take(limit).collect();
+            let next_cursor = items.last().map(|a| a.id.clone());
+            (items, next_cursor)
+        } else {
+            (page, None)
+        };
+
+        (items, next_cursor, total)
+    } else {
+        let (items, cursor) = state.list_agents_async(limit, pagination_cursor).await?;
+        let total = state.agent_count()?;
+        (items, cursor, total)
+    };
 
     Ok(Json(ListResponse {
         items,
         total,
         cursor,
     }))
+}
+
+/// Batch create agents
+#[instrument(skip(state, request), level = "info")]
+async fn create_agents_batch(
+    State(state): State<AppState>,
+    Json(request): Json<BatchCreateAgentsRequest>,
+) -> Result<Json<BatchAgentsResponse>, ApiError> {
+    if request.agents.is_empty() {
+        return Err(ApiError::bad_request("agents batch cannot be empty"));
+    }
+
+    let mut results = Vec::with_capacity(request.agents.len());
+    for agent in request.agents {
+        match state.create_agent_async(agent).await {
+            Ok(created) => results.push(BatchAgentResult {
+                success: true,
+                agent_id: Some(created.id.clone()),
+                agent: Some(created),
+                error: None,
+            }),
+            Err(e) => results.push(BatchAgentResult {
+                success: false,
+                agent_id: None,
+                agent: None,
+                error: Some(e.to_string()),
+            }),
+        }
+    }
+
+    Ok(Json(BatchAgentsResponse { results }))
+}
+
+/// Batch delete agents
+#[instrument(skip(state, request), level = "info")]
+async fn delete_agents_batch(
+    State(state): State<AppState>,
+    Json(request): Json<BatchDeleteAgentsRequest>,
+) -> Result<Json<BatchDeleteAgentsResponse>, ApiError> {
+    if request.agent_ids.is_empty() {
+        return Err(ApiError::bad_request("agent_ids cannot be empty"));
+    }
+
+    let mut results = Vec::with_capacity(request.agent_ids.len());
+    for agent_id in request.agent_ids {
+        match state.delete_agent_async(&agent_id).await {
+            Ok(_) => results.push(BatchDeleteAgentResult {
+                agent_id,
+                success: true,
+                error: None,
+            }),
+            Err(e) => results.push(BatchDeleteAgentResult {
+                agent_id,
+                success: false,
+                error: Some(e.to_string()),
+            }),
+        }
+    }
+
+    Ok(Json(BatchDeleteAgentsResponse { results }))
 }
 
 /// Update an agent
@@ -205,6 +499,7 @@ mod tests {
     use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
     use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
     use kelpie_server::service;
+    use kelpie_server::tools::UnifiedToolRegistry;
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -213,10 +508,33 @@ mod tests {
 
     #[async_trait]
     impl LlmClient for MockLlmClient {
-        async fn complete(&self, _messages: Vec<LlmMessage>) -> kelpie_core::Result<LlmResponse> {
+        async fn complete_with_tools(
+            &self,
+            _messages: Vec<LlmMessage>,
+            _tools: Vec<kelpie_server::llm::ToolDefinition>,
+        ) -> kelpie_core::Result<LlmResponse> {
             Ok(LlmResponse {
                 content: "Test response".to_string(),
                 tool_calls: vec![],
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stop_reason: "end_turn".to_string(),
+            })
+        }
+
+        async fn continue_with_tool_result(
+            &self,
+            _messages: Vec<LlmMessage>,
+            _tools: Vec<kelpie_server::llm::ToolDefinition>,
+            _assistant_blocks: Vec<kelpie_server::llm::ContentBlock>,
+            _tool_results: Vec<(String, String)>,
+        ) -> kelpie_core::Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: "Test response".to_string(),
+                tool_calls: vec![],
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stop_reason: "end_turn".to_string(),
             })
         }
     }
@@ -225,7 +543,7 @@ mod tests {
     async fn test_app() -> Router {
         // Create a minimal AgentService setup for testing
         let llm: Arc<dyn LlmClient> = Arc::new(MockLlmClient);
-        let actor = AgentActor::new(llm);
+        let actor = AgentActor::new(llm, Arc::new(UnifiedToolRegistry::new()));
         let factory = Arc::new(CloneFactory::new(actor));
 
         // Use SimStorage for testing (in-memory KV store)

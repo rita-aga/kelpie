@@ -40,13 +40,22 @@ const SUPPORTED_LANGUAGES: &[&str] = &["python", "javascript", "typescript", "r"
 /// Get command and args for executing code in a given language
 fn get_execution_command(language: &str, code: &str) -> Result<(String, Vec<String>), String> {
     match language.to_lowercase().as_str() {
-        "python" => Ok(("python3".to_string(), vec!["-c".to_string(), code.to_string()])),
+        "python" => Ok((
+            "python3".to_string(),
+            vec!["-c".to_string(), code.to_string()],
+        )),
         "javascript" | "js" => Ok(("node".to_string(), vec!["-e".to_string(), code.to_string()])),
         "typescript" | "ts" => {
             // TypeScript requires compilation - use ts-node if available
-            Ok(("ts-node".to_string(), vec!["-e".to_string(), code.to_string()]))
+            Ok((
+                "ts-node".to_string(),
+                vec!["-e".to_string(), code.to_string()],
+            ))
         }
-        "r" => Ok(("Rscript".to_string(), vec!["-e".to_string(), code.to_string()])),
+        "r" => Ok((
+            "Rscript".to_string(),
+            vec!["-e".to_string(), code.to_string()],
+        )),
         "java" => {
             // Java requires a more complex setup - return error for now
             Err("Java execution requires compilation and is not yet supported in sandbox mode. Use a precompiled class or consider using JavaScript/Python instead.".to_string())
@@ -343,7 +352,8 @@ mod tests {
 
     #[test]
     fn test_get_execution_command_javascript() {
-        let (cmd, args) = get_execution_command("javascript", "console.log('test')").expect("should work");
+        let (cmd, args) =
+            get_execution_command("javascript", "console.log('test')").expect("should work");
         assert_eq!(cmd, "node");
         assert_eq!(args.len(), 2);
         assert_eq!(args[0], "-e");
@@ -357,7 +367,8 @@ mod tests {
 
     #[test]
     fn test_get_execution_command_typescript() {
-        let (cmd, _args) = get_execution_command("typescript", "console.log('test')").expect("should work");
+        let (cmd, _args) =
+            get_execution_command("typescript", "console.log('test')").expect("should work");
         assert_eq!(cmd, "ts-node");
     }
 
@@ -373,7 +384,9 @@ mod tests {
     fn test_get_execution_command_java_not_supported() {
         let result = get_execution_command("java", "System.out.println(\"test\");");
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Java execution requires compilation"));
+        assert!(result
+            .unwrap_err()
+            .contains("Java execution requires compilation"));
     }
 
     #[test]

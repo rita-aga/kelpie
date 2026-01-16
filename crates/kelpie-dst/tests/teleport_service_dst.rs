@@ -12,6 +12,7 @@
 use bytes::Bytes;
 use kelpie_dst::{
     Architecture, FaultConfig, FaultType, SimConfig, Simulation, SnapshotKind, TeleportPackage,
+    VmSnapshotBlob,
 };
 use kelpie_sandbox::{ExecOptions, ResourceLimits, Sandbox, SandboxConfig, SandboxFactory};
 
@@ -92,8 +93,11 @@ async fn test_dst_teleport_roundtrip_under_faults() {
                         Architecture::Arm64,
                         SnapshotKind::Teleport,
                     )
-                    .with_vm_memory(Bytes::from("simulated memory state"))
-                    .with_vm_cpu_state(Bytes::from("simulated cpu state"))
+                    .with_vm_snapshot(VmSnapshotBlob::encode(
+                        Bytes::new(),
+                        Bytes::from("simulated cpu state"),
+                        Bytes::from("simulated memory state"),
+                    ))
                     .with_agent_state(Bytes::from("simulated agent state"))
                     .with_workspace_ref(format!("s3://bucket/{}/workspace", agent_id))
                     .with_base_image_version("1.0.0")
@@ -217,8 +221,11 @@ async fn test_dst_teleport_with_storage_failures() {
                     Architecture::Arm64,
                     SnapshotKind::Teleport,
                 )
-                .with_vm_memory(Bytes::from(format!("memory-{}", i)))
-                .with_vm_cpu_state(Bytes::from(format!("cpu-{}", i)))
+                .with_vm_snapshot(VmSnapshotBlob::encode(
+                    Bytes::new(),
+                    Bytes::from(format!("cpu-{}", i)),
+                    Bytes::from(format!("memory-{}", i)),
+                ))
                 .with_base_image_version("1.0.0");
 
                 match env.teleport_storage.upload(package).await {
@@ -304,8 +311,11 @@ async fn test_dst_teleport_architecture_validation() {
                 Architecture::Arm64,
                 SnapshotKind::Teleport,
             )
-            .with_vm_memory(Bytes::from("memory"))
-            .with_vm_cpu_state(Bytes::from("cpu"))
+            .with_vm_snapshot(VmSnapshotBlob::encode(
+                Bytes::new(),
+                Bytes::from("cpu"),
+                Bytes::from("memory"),
+            ))
             .with_base_image_version("1.0.0");
 
             // Validation should pass for same architecture
@@ -420,8 +430,11 @@ async fn test_dst_teleport_concurrent_operations() {
                         Architecture::Arm64,
                         SnapshotKind::Teleport,
                     )
-                    .with_vm_memory(Bytes::from(format!("memory-{}", i)))
-                    .with_vm_cpu_state(Bytes::from(format!("cpu-{}", i)))
+                    .with_vm_snapshot(VmSnapshotBlob::encode(
+                        Bytes::new(),
+                        Bytes::from(format!("cpu-{}", i)),
+                        Bytes::from(format!("memory-{}", i)),
+                    ))
                     .with_agent_state(Bytes::from(format!("agent-state-{}", i)))
                     .with_base_image_version("1.0.0");
 
@@ -540,8 +553,11 @@ async fn test_dst_teleport_interrupted_midway() {
                 Architecture::Arm64,
                 SnapshotKind::Teleport,
             )
-            .with_vm_memory(Bytes::from("memory"))
-            .with_vm_cpu_state(Bytes::from("cpu"))
+            .with_vm_snapshot(VmSnapshotBlob::encode(
+                Bytes::new(),
+                Bytes::from("cpu"),
+                Bytes::from("memory"),
+            ))
             .with_agent_state(Bytes::from("agent state"))
             .with_base_image_version("1.0.0");
 
@@ -630,8 +646,11 @@ async fn stress_test_teleport_operations() {
                         Architecture::Arm64,
                         SnapshotKind::Teleport,
                     )
-                    .with_vm_memory(Bytes::from(format!("mem-{}", i)))
-                    .with_vm_cpu_state(Bytes::from(format!("cpu-{}", i)))
+                    .with_vm_snapshot(VmSnapshotBlob::encode(
+                        Bytes::new(),
+                        Bytes::from(format!("cpu-{}", i)),
+                        Bytes::from(format!("mem-{}", i)),
+                    ))
                     .with_base_image_version("1.0.0");
 
                     let package_id = env.teleport_storage.upload(package).await.map_err(|e| {

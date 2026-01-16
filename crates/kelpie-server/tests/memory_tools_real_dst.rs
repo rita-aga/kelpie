@@ -14,6 +14,7 @@
 //! NOTE: This test file requires the "dst" feature to compile.
 
 #![cfg(feature = "dst")]
+#![allow(deprecated)]
 
 use futures::future::join_all;
 use kelpie_dst::fault::{FaultConfig, FaultInjectorBuilder, FaultType};
@@ -57,7 +58,7 @@ fn create_test_agent(name: &str) -> AgentState {
         tool_ids: vec![],
         tags: vec![],
         metadata: json!({}),
-                project_id: None,
+        project_id: None,
     })
 }
 

@@ -7,6 +7,7 @@ use super::state::AgentActorState;
 use crate::models::{
     AgentState, CreateAgentRequest, Message, MessageRole, ToolCall, UpdateAgentRequest, UsageStats,
 };
+use crate::tools::{parse_pause_signal, ToolExecutionContext, ToolSignal, UnifiedToolRegistry};
 use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::actor::{Actor, ActorContext};
@@ -24,12 +25,14 @@ use std::sync::Arc;
 pub struct AgentActor {
     /// LLM client for message handling
     llm: Arc<dyn LlmClient>,
+    /// Unified tool registry for tool execution
+    tool_registry: Arc<UnifiedToolRegistry>,
 }
 
 impl AgentActor {
     /// Create a new AgentActor with LLM client
-    pub fn new(llm: Arc<dyn LlmClient>) -> Self {
-        Self { llm }
+    pub fn new(llm: Arc<dyn LlmClient>, tool_registry: Arc<UnifiedToolRegistry>) -> Self {
+        Self { llm, tool_registry }
     }
 
     /// Handle "create" operation - initialize agent from request
@@ -245,11 +248,15 @@ impl AgentActor {
 
         // Recent message history (last 20)
         for msg in ctx.state.recent_messages(20) {
+            // Skip tool and system messages - Claude API doesn't support role "tool"
+            if msg.role == MessageRole::Tool || msg.role == MessageRole::System {
+                continue;
+            }
             let role = match msg.role {
                 MessageRole::User => "user",
                 MessageRole::Assistant => "assistant",
-                MessageRole::System => "system",
-                MessageRole::Tool => "tool",
+                MessageRole::System => "system", // Won't reach
+                MessageRole::Tool => "user",     // Won't reach
             };
             llm_messages.push(LlmMessage {
                 role: role.to_string(),
@@ -257,22 +264,29 @@ impl AgentActor {
             });
         }
 
-        // 3. Call LLM
-        let mut response = self.llm.complete(llm_messages.clone()).await?;
+        // 3. Get tool definitions (filtered by agent capabilities)
+        let capabilities = agent.agent_type.capabilities();
+        let all_tools = self.tool_registry.get_tool_definitions().await;
+        let tools: Vec<_> = all_tools
+            .into_iter()
+            .filter(|t| capabilities.allowed_tools.contains(&t.name))
+            .collect();
 
-        // TODO(Phase 6.9): Track real token usage from LLM API
-        // Currently returns 0 because LlmClient trait doesn't provide token counts.
-        // Will be fixed when integrating with real LLM API that returns usage metadata.
-        let total_prompt_tokens = 0u64;
-        let total_completion_tokens = 0u64;
+        // 4. Call LLM with tools
+        let mut response = self
+            .llm
+            .complete_with_tools(llm_messages.clone(), tools.clone())
+            .await?;
 
+        let mut total_prompt_tokens = response.prompt_tokens;
+        let mut total_completion_tokens = response.completion_tokens;
         let mut iterations = 0u32;
         const MAX_ITERATIONS: u32 = 5;
 
         // TigerStyle: Explicit limit enforcement
         assert!(MAX_ITERATIONS > 0, "MAX_ITERATIONS must be positive");
 
-        // 4. Tool execution loop
+        // 5. Tool execution loop
         while !response.tool_calls.is_empty() && iterations < MAX_ITERATIONS {
             iterations += 1;
 
@@ -303,8 +317,19 @@ impl AgentActor {
             ctx.state.add_message(assistant_msg);
 
             // Execute each tool
+            let mut tool_results = Vec::new();
+            let mut should_break = false;
             for tool_call in &response.tool_calls {
-                let result = self.execute_tool(ctx, tool_call).await?;
+                let context = ToolExecutionContext {
+                    agent_id: Some(ctx.id.id().to_string()),
+                    project_id: agent.project_id.clone(),
+                };
+                let exec_result = self
+                    .tool_registry
+                    .execute_with_context(&tool_call.name, &tool_call.input, Some(&context))
+                    .await;
+                let result = exec_result.output.clone();
+                tool_results.push((tool_call.id.clone(), result.clone()));
 
                 // Store tool result message
                 let tool_msg = Message {
@@ -318,41 +343,83 @@ impl AgentActor {
                     created_at: chrono::Utc::now(),
                 };
                 ctx.state.add_message(tool_msg);
+
+                if let Some((minutes, pause_until_ms)) = parse_pause_signal(&exec_result.output) {
+                    if !capabilities.supports_heartbeats {
+                        tracing::warn!(
+                            agent_id = %ctx.id.id(),
+                            agent_type = ?agent.agent_type,
+                            "Agent called pause_heartbeats but type doesn't support heartbeats"
+                        );
+                    } else {
+                        ctx.state.is_paused = true;
+                        ctx.state.pause_until_ms = Some(pause_until_ms);
+                        should_break = true;
+                        tracing::info!(
+                            agent_id = %ctx.id.id(),
+                            pause_minutes = minutes,
+                            pause_until_ms = pause_until_ms,
+                            "Agent requested heartbeat pause"
+                        );
+                    }
+                }
+
+                if let ToolSignal::PauseHeartbeats {
+                    minutes,
+                    pause_until_ms,
+                } = exec_result.signal
+                {
+                    if !capabilities.supports_heartbeats {
+                        tracing::warn!(
+                            agent_id = %ctx.id.id(),
+                            agent_type = ?agent.agent_type,
+                            "Agent called pause_heartbeats but type doesn't support heartbeats (via signal)"
+                        );
+                    } else {
+                        ctx.state.is_paused = true;
+                        ctx.state.pause_until_ms = Some(pause_until_ms);
+                        should_break = true;
+                        tracing::info!(
+                            agent_id = %ctx.id.id(),
+                            pause_minutes = minutes,
+                            pause_until_ms = pause_until_ms,
+                            "Agent requested heartbeat pause (via signal)"
+                        );
+                    }
+                }
             }
 
-            // Rebuild messages with tool results for next LLM call
-            llm_messages.clear();
+            if should_break {
+                break;
+            }
 
-            // Re-add system context
-            if let Some(system) = &agent.system {
-                llm_messages.push(LlmMessage {
-                    role: "system".to_string(),
-                    content: system.clone(),
+            // Build assistant content blocks for continuation
+            let mut assistant_blocks = Vec::new();
+            if !response.content.is_empty() {
+                assistant_blocks.push(crate::llm::ContentBlock::Text {
+                    text: response.content.clone(),
                 });
             }
-            for block in &agent.blocks {
-                llm_messages.push(LlmMessage {
-                    role: "system".to_string(),
-                    content: format!("[{}]\n{}", block.label, block.value),
+            for tc in &response.tool_calls {
+                assistant_blocks.push(crate::llm::ContentBlock::ToolUse {
+                    id: tc.id.clone(),
+                    name: tc.name.clone(),
+                    input: tc.input.clone(),
                 });
             }
 
-            // Add recent history including tool results
-            for msg in ctx.state.recent_messages(20) {
-                let role = match msg.role {
-                    MessageRole::User => "user",
-                    MessageRole::Assistant => "assistant",
-                    MessageRole::System => "system",
-                    MessageRole::Tool => "tool",
-                };
-                llm_messages.push(LlmMessage {
-                    role: role.to_string(),
-                    content: msg.content.clone(),
-                });
-            }
-
-            // Continue conversation
-            response = self.llm.complete(llm_messages.clone()).await?;
+            // Continue conversation after tool execution
+            response = self
+                .llm
+                .continue_with_tool_result(
+                    llm_messages.clone(),
+                    tools.clone(),
+                    assistant_blocks,
+                    tool_results,
+                )
+                .await?;
+            total_prompt_tokens += response.prompt_tokens;
+            total_completion_tokens += response.completion_tokens;
         }
 
         // 5. Store final assistant response (with dual-mode send_message support)
@@ -425,51 +492,6 @@ impl AgentActor {
         } else {
             // Use send_message content (join multiple calls with newlines)
             Ok(messages.join("\n\n"))
-        }
-    }
-
-    /// Execute a tool call (Phase 6.8)
-    ///
-    /// TigerStyle: Explicit error handling, no unwrap
-    async fn execute_tool(
-        &self,
-        _ctx: &ActorContext<AgentActorState>,
-        tool_call: &LlmToolCall,
-    ) -> Result<String> {
-        // TigerStyle: Validate preconditions
-        assert!(!tool_call.name.is_empty(), "tool name must not be empty");
-        assert!(!tool_call.id.is_empty(), "tool id must not be empty");
-
-        match tool_call.name.as_str() {
-            "shell" => {
-                let command = tool_call
-                    .input
-                    .get("command")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| Error::Internal {
-                        message: "shell tool requires 'command' parameter".to_string(),
-                    })?;
-
-                // Placeholder - return simulated result
-                // TODO: Integrate with kelpie-sandbox in Phase 8
-                Ok(format!("Executed: {}", command))
-            }
-            "send_message" => {
-                // Extract message parameter
-                let message = tool_call
-                    .input
-                    .get("message")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| Error::Internal {
-                        message: "send_message tool requires 'message' parameter".to_string(),
-                    })?;
-
-                // Return confirmation - actual message routing handled by extract_send_message_content
-                Ok(format!("Message sent: {}", message))
-            }
-            _ => Err(Error::Internal {
-                message: format!("Unknown tool: {}", tool_call.name),
-            }),
         }
     }
 }
@@ -641,13 +663,14 @@ impl Actor for AgentActor {
 mod tests {
     use super::*;
     use crate::actor::llm_trait::{LlmResponse, LlmToolCall};
+    use crate::tools::UnifiedToolRegistry;
     use kelpie_core::actor::{ActorId, NoOpKV};
     use serde_json::json;
 
     /// Test dual-mode: send_message tool call content is extracted
     #[tokio::test]
     async fn test_extract_send_message_content_single() {
-        let actor = AgentActor::new(Arc::new(MockLlm));
+        let actor = AgentActor::new(Arc::new(MockLlm), Arc::new(UnifiedToolRegistry::new()));
 
         let response = LlmResponse {
             content: "This should be ignored".to_string(),
@@ -658,6 +681,9 @@ mod tests {
                     "message": "Hello from send_message!"
                 }),
             }],
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            stop_reason: "end_turn".to_string(),
         };
 
         let kv = Box::new(NoOpKV);
@@ -665,14 +691,17 @@ mod tests {
         let state = AgentActorState::default();
         let ctx = ActorContext::new(actor_id, state, kv);
 
-        let result = actor.extract_send_message_content(&response, &ctx).await.unwrap();
+        let result = actor
+            .extract_send_message_content(&response, &ctx)
+            .await
+            .unwrap();
         assert_eq!(result, "Hello from send_message!");
     }
 
     /// Test dual-mode: multiple send_message calls are concatenated
     #[tokio::test]
     async fn test_extract_send_message_content_multiple() {
-        let actor = AgentActor::new(Arc::new(MockLlm));
+        let actor = AgentActor::new(Arc::new(MockLlm), Arc::new(UnifiedToolRegistry::new()));
 
         let response = LlmResponse {
             content: "This should be ignored".to_string(),
@@ -692,6 +721,9 @@ mod tests {
                     }),
                 },
             ],
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            stop_reason: "end_turn".to_string(),
         };
 
         let kv = Box::new(NoOpKV);
@@ -699,14 +731,17 @@ mod tests {
         let state = AgentActorState::default();
         let ctx = ActorContext::new(actor_id, state, kv);
 
-        let result = actor.extract_send_message_content(&response, &ctx).await.unwrap();
+        let result = actor
+            .extract_send_message_content(&response, &ctx)
+            .await
+            .unwrap();
         assert_eq!(result, "First message\n\nSecond message");
     }
 
     /// Test dual-mode: no send_message call uses direct LLM response (fallback)
     #[tokio::test]
     async fn test_extract_send_message_content_fallback() {
-        let actor = AgentActor::new(Arc::new(MockLlm));
+        let actor = AgentActor::new(Arc::new(MockLlm), Arc::new(UnifiedToolRegistry::new()));
 
         let response = LlmResponse {
             content: "Direct LLM response".to_string(),
@@ -717,6 +752,9 @@ mod tests {
                     "command": "ls"
                 }),
             }],
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            stop_reason: "end_turn".to_string(),
         };
 
         let kv = Box::new(NoOpKV);
@@ -724,18 +762,24 @@ mod tests {
         let state = AgentActorState::default();
         let ctx = ActorContext::new(actor_id, state, kv);
 
-        let result = actor.extract_send_message_content(&response, &ctx).await.unwrap();
+        let result = actor
+            .extract_send_message_content(&response, &ctx)
+            .await
+            .unwrap();
         assert_eq!(result, "Direct LLM response");
     }
 
     /// Test dual-mode: empty tool calls uses direct response
     #[tokio::test]
     async fn test_extract_send_message_content_no_tools() {
-        let actor = AgentActor::new(Arc::new(MockLlm));
+        let actor = AgentActor::new(Arc::new(MockLlm), Arc::new(UnifiedToolRegistry::new()));
 
         let response = LlmResponse {
             content: "Direct response, no tools".to_string(),
             tool_calls: vec![],
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            stop_reason: "end_turn".to_string(),
         };
 
         let kv = Box::new(NoOpKV);
@@ -743,7 +787,10 @@ mod tests {
         let state = AgentActorState::default();
         let ctx = ActorContext::new(actor_id, state, kv);
 
-        let result = actor.extract_send_message_content(&response, &ctx).await.unwrap();
+        let result = actor
+            .extract_send_message_content(&response, &ctx)
+            .await
+            .unwrap();
         assert_eq!(result, "Direct response, no tools");
     }
 
@@ -752,10 +799,33 @@ mod tests {
 
     #[async_trait]
     impl LlmClient for MockLlm {
-        async fn complete(&self, _messages: Vec<LlmMessage>) -> Result<LlmResponse> {
+        async fn complete_with_tools(
+            &self,
+            _messages: Vec<LlmMessage>,
+            _tools: Vec<crate::llm::ToolDefinition>,
+        ) -> Result<LlmResponse> {
             Ok(LlmResponse {
                 content: "Mock response".to_string(),
                 tool_calls: vec![],
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stop_reason: "end_turn".to_string(),
+            })
+        }
+
+        async fn continue_with_tool_result(
+            &self,
+            _messages: Vec<LlmMessage>,
+            _tools: Vec<crate::llm::ToolDefinition>,
+            _assistant_blocks: Vec<crate::llm::ContentBlock>,
+            _tool_results: Vec<(String, String)>,
+        ) -> Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: "Mock response".to_string(),
+                tool_calls: vec![],
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stop_reason: "end_turn".to_string(),
             })
         }
     }

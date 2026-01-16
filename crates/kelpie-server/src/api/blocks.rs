@@ -4,21 +4,35 @@
 
 use crate::api::ApiError;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     Json,
 };
 use kelpie_server::models::{Block, UpdateBlockRequest};
 use kelpie_server::state::AppState;
+use serde::Deserialize;
 use tracing::instrument;
 use uuid;
+
+/// Query parameters for listing blocks (Letta SDK compatibility)
+#[derive(Debug, Deserialize, Default)]
+pub struct ListBlocksParams {
+    /// Cursor for pagination (Letta SDK uses 'after' with last item ID)
+    pub after: Option<String>,
+    /// Limit number of results
+    pub limit: Option<usize>,
+}
 
 /// List all blocks for an agent
 ///
 /// GET /v1/agents/{agent_id}/blocks
-#[instrument(skip(state), fields(agent_id = %agent_id), level = "info")]
+/// GET /v1/agents/{agent_id}/core-memory/blocks
+///
+/// Supports Letta SDK pagination via `after` parameter.
+#[instrument(skip(state), fields(agent_id = %agent_id, after = ?query.after), level = "info")]
 pub async fn list_blocks(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
+    Query(query): Query<ListBlocksParams>,
 ) -> Result<Json<Vec<Block>>, ApiError> {
     // Phase 6: Get agent from actor system (or HashMap fallback)
     let agent = state
@@ -26,7 +40,31 @@ pub async fn list_blocks(
         .await?
         .ok_or_else(|| ApiError::not_found("Agent", &agent_id))?;
 
-    Ok(Json(agent.blocks))
+    // Handle Letta SDK pagination via 'after' parameter
+    // The SDK passes the last item's ID and expects items AFTER that ID
+    // When we've returned all items, we should return an empty list
+    let blocks = if let Some(after_id) = query.after.as_ref() {
+        // Find the position of the 'after' block
+        let start_idx = agent
+            .blocks
+            .iter()
+            .position(|b| &b.id == after_id)
+            .map(|i| i + 1) // Start after this block
+            .unwrap_or(agent.blocks.len()); // If not found, return empty
+
+        agent.blocks.into_iter().skip(start_idx).collect()
+    } else {
+        agent.blocks
+    };
+
+    // Apply limit if specified
+    let blocks = if let Some(limit) = query.limit {
+        blocks.into_iter().take(limit).collect()
+    } else {
+        blocks
+    };
+
+    Ok(Json(blocks))
 }
 
 /// Get a specific block
@@ -292,6 +330,7 @@ mod tests {
     use kelpie_server::models::AgentState;
     use kelpie_server::service;
     use kelpie_server::state::AppState;
+    use kelpie_server::tools::UnifiedToolRegistry;
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -300,46 +339,41 @@ mod tests {
 
     #[async_trait]
     impl LlmClient for MockLlmClient {
-        async fn complete(&self, _messages: Vec<LlmMessage>) -> kelpie_core::Result<LlmResponse> {
+        async fn complete_with_tools(
+            &self,
+            _messages: Vec<LlmMessage>,
+            _tools: Vec<kelpie_server::llm::ToolDefinition>,
+        ) -> kelpie_core::Result<LlmResponse> {
             Ok(LlmResponse {
                 content: "Test response".to_string(),
                 tool_calls: vec![],
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stop_reason: "end_turn".to_string(),
             })
         }
-    }
 
-    /// Create a test AppState with AgentService
-    async fn test_app() -> Router {
-        let llm: Arc<dyn LlmClient> = Arc::new(MockLlmClient);
-        let actor = AgentActor::new(llm);
-        let factory = Arc::new(CloneFactory::new(actor));
-
-        let rng = DeterministicRng::new(42);
-        let faults = Arc::new(FaultInjector::new(rng.fork()));
-        let storage = SimStorage::new(rng.fork(), faults);
-        let kv = Arc::new(storage);
-
-        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState>::new(
-            factory,
-            kv,
-            DispatcherConfig::default(),
-        );
-        let handle = dispatcher.handle();
-
-        tokio::spawn(async move {
-            dispatcher.run().await;
-        });
-
-        let service = service::AgentService::new(handle.clone());
-        let state = AppState::with_agent_service(service, handle);
-
-        api::router(state)
+        async fn continue_with_tool_result(
+            &self,
+            _messages: Vec<LlmMessage>,
+            _tools: Vec<kelpie_server::llm::ToolDefinition>,
+            _assistant_blocks: Vec<kelpie_server::llm::ContentBlock>,
+            _tool_results: Vec<(String, String)>,
+        ) -> kelpie_core::Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: "Test response".to_string(),
+                tool_calls: vec![],
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stop_reason: "end_turn".to_string(),
+            })
+        }
     }
 
     async fn test_app_with_agent() -> (Router, String, String) {
         // Create app with AgentService
         let llm: Arc<dyn LlmClient> = Arc::new(MockLlmClient);
-        let actor = AgentActor::new(llm);
+        let actor = AgentActor::new(llm, Arc::new(UnifiedToolRegistry::new()));
         let factory = Arc::new(CloneFactory::new(actor));
 
         let rng = DeterministicRng::new(42);

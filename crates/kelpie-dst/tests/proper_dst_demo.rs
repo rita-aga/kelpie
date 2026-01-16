@@ -7,8 +7,7 @@
 //! 4. Meaningful testing - faults actually cause failures that test error handling
 
 use kelpie_dst::{
-    DeterministicRng, FaultConfig, FaultInjector, FaultInjectorBuilder, FaultType, SimClock,
-    SimSandboxIOFactory,
+    DeterministicRng, FaultConfig, FaultInjectorBuilder, FaultType, SimClock, SimSandboxIOFactory,
 };
 use kelpie_sandbox::{GenericSandbox, SandboxConfig, SandboxState};
 use std::sync::Arc;
@@ -16,7 +15,7 @@ use std::sync::Arc;
 /// Test 1: GenericSandbox uses SHARED state machine code
 ///
 /// The GenericSandbox<SimSandboxIO> uses the SAME lifecycle state machine
-/// that will be used by GenericSandbox<LibkrunSandboxIO> in production.
+/// that will be used by GenericSandbox<VmSandboxIO> in production.
 /// This means our DST tests exercise the actual production code paths.
 #[tokio::test]
 async fn test_proper_dst_shared_state_machine() {
@@ -140,9 +139,8 @@ async fn test_proper_dst_meaningful_chaos() {
 
     // 50% exec failure rate - tests error handling code paths
     let mut fault_injector = FaultInjectorBuilder::new(rng.fork());
-    fault_injector = fault_injector.with_fault(
-        FaultConfig::new(FaultType::SandboxExecFail, 0.5).with_filter("sandbox_exec"),
-    );
+    fault_injector = fault_injector
+        .with_fault(FaultConfig::new(FaultType::SandboxExecFail, 0.5).with_filter("sandbox_exec"));
     let faults = Arc::new(fault_injector.build());
     let clock = Arc::new(SimClock::default());
 
@@ -162,9 +160,15 @@ async fn test_proper_dst_meaningful_chaos() {
 
     // With 50% fault rate over 20 attempts, we should see both
     assert!(successes > 0, "Should have some successes");
-    assert!(failures > 0, "Should have some failures from fault injection");
+    assert!(
+        failures > 0,
+        "Should have some failures from fault injection"
+    );
 
-    println!("✅ Meaningful chaos testing: {} successes, {} failures", successes, failures);
+    println!(
+        "✅ Meaningful chaos testing: {} successes, {} failures",
+        successes, failures
+    );
     println!("   This tests that error handling code paths are exercised");
 }
 
@@ -210,7 +214,7 @@ async fn test_proper_dst_summary() {
     println!("╠══════════════════════════════════════════════════════════════╣");
     println!("║                                                              ║");
     println!("║  1. SHARED CODE: GenericSandbox<IO> state machine runs in    ║");
-    println!("║     both DST (SimSandboxIO) and production (LibkrunIO)       ║");
+    println!("║     both DST (SimSandboxIO) and production (VmIO)       ║");
     println!("║                                                              ║");
     println!("║  2. I/O BOUNDARY: Faults injected in SimSandboxIO, not in    ║");
     println!("║     business logic - tests REAL error handling               ║");

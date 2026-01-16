@@ -10,6 +10,7 @@
 //! 5. BUG-001 style timing windows
 //!
 //! ALL TESTS MUST FAIL INITIALLY (AppState doesn't have service yet)
+#![cfg(feature = "dst")]
 
 use async_trait::async_trait;
 use kelpie_core::Result;
@@ -19,6 +20,7 @@ use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, L
 use kelpie_server::models::{AgentType, CreateAgentRequest};
 use kelpie_server::service::AgentService;
 use kelpie_server::state::AppState;
+use kelpie_server::tools::UnifiedToolRegistry;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -81,8 +83,8 @@ async fn test_appstate_init_crash() {
                             partial_state_count += 1;
                             panic!(
                                 "BUG: AppState created but service non-functional after 3 retries at iteration {}. \
-                                 This indicates partial initialization during crash.",
-                                i
+                                 This indicates partial initialization during crash. partial_state_count={}",
+                                i, partial_state_count
                             );
                         }
                     }
@@ -160,7 +162,8 @@ async fn test_concurrent_agent_creation_race() {
                         tool_ids: vec![],
                         tags: vec![format!("thread-{}", i)],
                         metadata: serde_json::json!({"thread": i}),
-                project_id: None,                    };
+                        project_id: None,
+                    };
 
                     // Use app_state.agent_service() to create
                     app_clone
@@ -477,7 +480,8 @@ async fn test_first_invoke_after_creation() {
                     tool_ids: vec![format!("tool-{}", i)],
                     tags: vec![format!("tag-{}", i)],
                     metadata: serde_json::json!({"iteration": i}),
-                project_id: None,                };
+                    project_id: None,
+                };
 
                 // Create agent
                 match app_state
@@ -616,7 +620,7 @@ async fn create_appstate_with_service(sim_env: &SimEnvironment) -> Result<AppSta
     });
 
     // Create AgentActor with LLM client
-    let actor = AgentActor::new(llm_adapter);
+    let actor = AgentActor::new(llm_adapter, Arc::new(UnifiedToolRegistry::new()));
 
     // Create CloneFactory for dispatcher
     let factory = Arc::new(CloneFactory::new(actor));
@@ -653,7 +657,7 @@ async fn create_appstate_with_service(sim_env: &SimEnvironment) -> Result<AppSta
         tool_ids: vec![],
         tags: vec![],
         metadata: serde_json::json!({}),
-                project_id: None,
+        project_id: None,
     };
 
     // Try to create test agent to verify service works
@@ -688,7 +692,7 @@ async fn test_service_operational(app_state: &AppState) -> Result<()> {
         tool_ids: vec![],
         tags: vec![],
         metadata: serde_json::json!({}),
-                project_id: None,
+        project_id: None,
     };
 
     // If this succeeds, service is operational
@@ -703,7 +707,6 @@ async fn test_service_operational(app_state: &AppState) -> Result<()> {
 /// but we keep this trait for backward compatibility with tests.
 trait AppStateServiceExt {
     fn agent_service_required(&self) -> &AgentService;
-    async fn shutdown(&self, timeout: Duration) -> Result<()>;
 }
 
 impl AppStateServiceExt for AppState {
@@ -714,11 +717,6 @@ impl AppStateServiceExt for AppState {
              Use AppState::with_agent_service() or create_appstate_with_service()",
         )
     }
-
-    async fn shutdown(&self, timeout: Duration) -> Result<()> {
-        // Delegate to AppState's shutdown method
-        AppState::shutdown(self, timeout).await
-    }
 }
 
 // Helper types for test infrastructure
@@ -728,7 +726,11 @@ struct SimLlmClientAdapter {
 
 #[async_trait]
 impl LlmClient for SimLlmClientAdapter {
-    async fn complete(&self, messages: Vec<LlmMessage>) -> Result<LlmResponse> {
+    async fn complete_with_tools(
+        &self,
+        messages: Vec<LlmMessage>,
+        tools: Vec<kelpie_server::llm::ToolDefinition>,
+    ) -> Result<LlmResponse> {
         let sim_messages: Vec<kelpie_dst::SimChatMessage> = messages
             .into_iter()
             .map(|m| kelpie_dst::SimChatMessage {
@@ -736,10 +738,17 @@ impl LlmClient for SimLlmClientAdapter {
                 content: m.content,
             })
             .collect();
+        let sim_tools: Vec<kelpie_dst::SimToolDefinition> = tools
+            .into_iter()
+            .map(|t| kelpie_dst::SimToolDefinition {
+                name: t.name,
+                description: t.description,
+            })
+            .collect();
 
         let response = self
             .client
-            .complete_with_tools(sim_messages, vec![])
+            .complete_with_tools(sim_messages, sim_tools)
             .await
             .map_err(|e| kelpie_core::Error::Internal {
                 message: format!("LLM error: {}", e),
@@ -747,7 +756,65 @@ impl LlmClient for SimLlmClientAdapter {
 
         Ok(LlmResponse {
             content: response.content,
-            tool_calls: vec![],
+            tool_calls: response
+                .tool_calls
+                .into_iter()
+                .map(|tc| kelpie_server::actor::LlmToolCall {
+                    id: tc.id,
+                    name: tc.name,
+                    input: tc.input,
+                })
+                .collect(),
+            prompt_tokens: response.prompt_tokens,
+            completion_tokens: response.completion_tokens,
+            stop_reason: response.stop_reason,
+        })
+    }
+
+    async fn continue_with_tool_result(
+        &self,
+        messages: Vec<LlmMessage>,
+        tools: Vec<kelpie_server::llm::ToolDefinition>,
+        _assistant_blocks: Vec<kelpie_server::llm::ContentBlock>,
+        tool_results: Vec<(String, String)>,
+    ) -> Result<LlmResponse> {
+        let sim_messages: Vec<kelpie_dst::SimChatMessage> = messages
+            .into_iter()
+            .map(|m| kelpie_dst::SimChatMessage {
+                role: m.role,
+                content: m.content,
+            })
+            .collect();
+        let sim_tools: Vec<kelpie_dst::SimToolDefinition> = tools
+            .into_iter()
+            .map(|t| kelpie_dst::SimToolDefinition {
+                name: t.name,
+                description: t.description,
+            })
+            .collect();
+
+        let response = self
+            .client
+            .continue_with_tool_result(sim_messages, sim_tools, tool_results)
+            .await
+            .map_err(|e| kelpie_core::Error::Internal {
+                message: format!("LLM error: {}", e),
+            })?;
+
+        Ok(LlmResponse {
+            content: response.content,
+            tool_calls: response
+                .tool_calls
+                .into_iter()
+                .map(|tc| kelpie_server::actor::LlmToolCall {
+                    id: tc.id,
+                    name: tc.name,
+                    input: tc.input,
+                })
+                .collect(),
+            prompt_tokens: response.prompt_tokens,
+            completion_tokens: response.completion_tokens,
+            stop_reason: response.stop_reason,
         })
     }
 }

@@ -8,6 +8,7 @@
 //! - archival_memory_insert
 //! - archival_memory_search
 //! - conversation_search
+#![cfg(feature = "dst")]
 
 use kelpie_dst::fault::{FaultConfig, FaultInjectorBuilder, FaultType};
 use kelpie_dst::rng::DeterministicRng;

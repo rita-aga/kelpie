@@ -7,13 +7,16 @@
 
 #![cfg(feature = "dst")]
 
-use futures::stream::StreamExt;
-use kelpie_core::Result;
-use kelpie_dst::{FaultConfig, FaultType, SimClock, SimConfig, Simulation};
+use async_trait::async_trait;
+use bytes::Bytes;
+use futures::stream::{self, StreamExt};
+use kelpie_core::RngProvider;
+use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
 use kelpie_server::actor::{LlmClient, LlmMessage, RealLlmAdapter, StreamChunk};
-use kelpie_server::http::SimHttpClient;
+use kelpie_server::http::{HttpClient, HttpRequest, HttpResponse};
 use kelpie_server::llm::{LlmClient as RealLlmClient, LlmConfig};
-use mockito::Server;
+use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
 
 /// Build mock Anthropic SSE response
@@ -41,6 +44,57 @@ fn mock_sse_response() -> String {
     .join("")
 }
 
+struct FaultInjectedHttpClient {
+    faults: Arc<kelpie_dst::FaultInjector>,
+    rng: Arc<kelpie_dst::DeterministicRng>,
+    stream_body: String,
+}
+
+impl FaultInjectedHttpClient {
+    async fn inject_network_faults(&self) -> Result<(), String> {
+        if let Some(fault) = self.faults.should_inject("http_send") {
+            match fault {
+                FaultType::NetworkPacketLoss => {
+                    return Err("Network packet loss".to_string());
+                }
+                FaultType::NetworkDelay { min_ms, max_ms } => {
+                    let delay_ms = if min_ms == max_ms {
+                        min_ms
+                    } else {
+                        self.rng.as_ref().gen_range(min_ms, max_ms)
+                    };
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl HttpClient for FaultInjectedHttpClient {
+    async fn send(&self, _request: HttpRequest) -> Result<HttpResponse, String> {
+        self.inject_network_faults().await?;
+        Ok(HttpResponse {
+            status: 200,
+            headers: HashMap::new(),
+            body: Vec::new(),
+        })
+    }
+
+    async fn send_streaming(
+        &self,
+        _request: HttpRequest,
+    ) -> Result<Pin<Box<dyn futures::stream::Stream<Item = Result<Bytes, String>> + Send>>, String>
+    {
+        self.inject_network_faults().await?;
+        let stream = stream::iter(vec![Ok(Bytes::from(self.stream_body.clone()))]);
+        Ok(Box::pin(stream))
+    }
+}
+
 /// Test with REAL NetworkDelay fault injection
 ///
 /// This test verifies that NetworkDelay faults actually slow down HTTP requests.
@@ -60,27 +114,15 @@ async fn test_dst_network_delay_actually_triggers() {
             0.7, // 70% of HTTP operations delayed
         ))
         .run_async(|sim_env| async move {
-            // Start mock HTTP server
-            let mut server = Server::new_async().await;
-
-            // Configure mock to return SSE stream
-            let _mock = server
-                .mock("POST", "/test.anthropic.com/messages")
-                .with_status(200)
-                .with_header("content-type", "text/event-stream")
-                .with_body(mock_sse_response())
-                .create_async()
-                .await;
-
-            // Create SimHttpClient with fault injection
-            let sim_http_client = Arc::new(SimHttpClient::new(
-                sim_env.faults.clone(),
-                sim_env.rng.clone(),
-            ));
+            let sim_http_client = Arc::new(FaultInjectedHttpClient {
+                faults: sim_env.faults.clone(),
+                rng: sim_env.rng.clone(),
+                stream_body: mock_sse_response(),
+            });
 
             // Create LlmClient with SimHttpClient
             let llm_config = LlmConfig {
-                base_url: format!("{}/test.anthropic.com", server.url()),
+                base_url: "http://example.com/test.anthropic.com".to_string(),
                 api_key: "test-key".to_string(),
                 model: "claude-test".to_string(),
                 max_tokens: 100,
@@ -151,27 +193,15 @@ async fn test_dst_network_packet_loss_actually_triggers() {
             0.9, // 90% of HTTP operations fail
         ))
         .run_async(|sim_env| async move {
-            // Start mock HTTP server
-            let mut server = Server::new_async().await;
-
-            // Configure mock
-            let _mock = server
-                .mock("POST", "/test.anthropic.com/messages")
-                .with_status(200)
-                .with_header("content-type", "text/event-stream")
-                .with_body(mock_sse_response())
-                .create_async()
-                .await;
-
-            // Create SimHttpClient with high packet loss
-            let sim_http_client = Arc::new(SimHttpClient::new(
-                sim_env.faults.clone(),
-                sim_env.rng.clone(),
-            ));
+            let sim_http_client = Arc::new(FaultInjectedHttpClient {
+                faults: sim_env.faults.clone(),
+                rng: sim_env.rng.clone(),
+                stream_body: mock_sse_response(),
+            });
 
             // Create LlmClient
             let llm_config = LlmConfig {
-                base_url: format!("{}/test.anthropic.com", server.url()),
+                base_url: "http://example.com/test.anthropic.com".to_string(),
                 api_key: "test-key".to_string(),
                 model: "claude-test".to_string(),
                 max_tokens: 100,
@@ -240,27 +270,15 @@ async fn test_dst_combined_network_faults() {
             0.3, // 30% packet loss
         ))
         .run_async(|sim_env| async move {
-            // Start mock HTTP server
-            let mut server = Server::new_async().await;
-
-            // Configure mock
-            let _mock = server
-                .mock("POST", "/test.anthropic.com/messages")
-                .with_status(200)
-                .with_header("content-type", "text/event-stream")
-                .with_body(mock_sse_response())
-                .create_async()
-                .await;
-
-            // Create SimHttpClient
-            let sim_http_client = Arc::new(SimHttpClient::new(
-                sim_env.faults.clone(),
-                sim_env.rng.clone(),
-            ));
+            let sim_http_client = Arc::new(FaultInjectedHttpClient {
+                faults: sim_env.faults.clone(),
+                rng: sim_env.rng.clone(),
+                stream_body: mock_sse_response(),
+            });
 
             // Create LlmClient
             let llm_config = LlmConfig {
-                base_url: format!("{}/test.anthropic.com", server.url()),
+                base_url: "http://example.com/test.anthropic.com".to_string(),
                 api_key: "test-key".to_string(),
                 model: "claude-test".to_string(),
                 max_tokens: 100,

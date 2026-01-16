@@ -196,7 +196,8 @@ async fn perform_tavily_search(
             if e.is_timeout() {
                 format!("Request timed out after {}s", API_TIMEOUT_SECONDS)
             } else if e.is_connect() {
-                "Failed to connect to Tavily API. Please check your internet connection.".to_string()
+                "Failed to connect to Tavily API. Please check your internet connection."
+                    .to_string()
             } else {
                 format!("HTTP request failed: {}", e)
             }
@@ -213,15 +214,19 @@ async fn perform_tavily_search(
         return Err(match status.as_u16() {
             401 => "Authentication failed. Please check your TAVILY_API_KEY.".to_string(),
             429 => "Rate limit exceeded. Please try again later.".to_string(),
-            500..=599 => format!("Tavily API server error ({}). Please try again later.", status),
+            500..=599 => format!(
+                "Tavily API server error ({}). Please try again later.",
+                status
+            ),
             _ => format!("API request failed with status {}: {}", status, error_body),
         });
     }
 
     // Parse response
-    let search_response: TavilySearchResponse = response.json().await.map_err(|e| {
-        format!("Failed to parse API response: {}", e)
-    })?;
+    let search_response: TavilySearchResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse API response: {}", e))?;
 
     Ok(search_response.results)
 }

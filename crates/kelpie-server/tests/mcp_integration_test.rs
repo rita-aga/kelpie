@@ -7,7 +7,6 @@
 use kelpie_server::tools::UnifiedToolRegistry;
 use kelpie_tools::McpConfig;
 use serde_json::json;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 // =============================================================================
@@ -61,7 +60,10 @@ async fn test_mcp_stdio_connect_and_discover() {
     );
 
     let tool_count = result.unwrap();
-    assert!(tool_count > 0, "Expected at least one tool to be discovered");
+    assert!(
+        tool_count > 0,
+        "Expected at least one tool to be discovered"
+    );
 
     // List connected servers
     let servers = registry.list_mcp_servers().await;

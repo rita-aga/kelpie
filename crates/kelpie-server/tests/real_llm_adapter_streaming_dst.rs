@@ -11,6 +11,7 @@
 //!
 //! These tests focus on the LLM client streaming behavior,
 //! not the full service stack (which requires dispatcher streaming).
+#![cfg(feature = "dst")]
 
 use async_trait::async_trait;
 use futures::stream::{self, Stream, StreamExt};
@@ -35,11 +36,34 @@ impl MockStreamingLlmClient {
 
 #[async_trait]
 impl LlmClient for MockStreamingLlmClient {
-    async fn complete(&self, _messages: Vec<LlmMessage>) -> Result<LlmResponse> {
+    async fn complete_with_tools(
+        &self,
+        _messages: Vec<LlmMessage>,
+        _tools: Vec<kelpie_server::llm::ToolDefinition>,
+    ) -> Result<LlmResponse> {
         // Batch mode - concatenate all tokens
         Ok(LlmResponse {
             content: self.tokens.join(""),
             tool_calls: vec![],
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            stop_reason: "end_turn".to_string(),
+        })
+    }
+
+    async fn continue_with_tool_result(
+        &self,
+        _messages: Vec<LlmMessage>,
+        _tools: Vec<kelpie_server::llm::ToolDefinition>,
+        _assistant_blocks: Vec<kelpie_server::llm::ContentBlock>,
+        _tool_results: Vec<(String, String)>,
+    ) -> Result<LlmResponse> {
+        Ok(LlmResponse {
+            content: self.tokens.join(""),
+            tool_calls: vec![],
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            stop_reason: "end_turn".to_string(),
         })
     }
 

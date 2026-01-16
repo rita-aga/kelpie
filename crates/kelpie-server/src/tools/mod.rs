@@ -21,8 +21,9 @@ pub use heartbeat::{
 pub use memory::register_memory_tools;
 pub use messaging::register_messaging_tools;
 pub use registry::{
-    BuiltinToolHandler, RegisteredTool, RegistryStats, ToolExecutionResult, ToolSignal, ToolSource,
-    UnifiedToolRegistry, AGENT_LOOP_ITERATIONS_MAX, HEARTBEAT_PAUSE_MINUTES_DEFAULT,
-    HEARTBEAT_PAUSE_MINUTES_MAX, HEARTBEAT_PAUSE_MINUTES_MIN, MS_PER_MINUTE,
+    BuiltinToolHandler, CustomToolDefinition, RegisteredTool, RegistryStats, ToolExecutionContext,
+    ToolExecutionResult, ToolSignal, ToolSource, UnifiedToolRegistry, AGENT_LOOP_ITERATIONS_MAX,
+    HEARTBEAT_PAUSE_MINUTES_DEFAULT, HEARTBEAT_PAUSE_MINUTES_MAX, HEARTBEAT_PAUSE_MINUTES_MIN,
+    MS_PER_MINUTE,
 };
 pub use web_search::register_web_search_tool;

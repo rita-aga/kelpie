@@ -6,8 +6,8 @@
 //! and memory blocks for memory management and context compression.
 
 use crate::api::ApiError;
-use axum::{extract::State, Json};
 use axum::{extract::Path, routing::post, Router};
+use axum::{extract::State, Json};
 use kelpie_server::llm::ChatMessage;
 use kelpie_server::models::MessageRole;
 use kelpie_server::state::AppState;
@@ -59,10 +59,7 @@ pub struct SummarizationResponse {
 /// Create summarization routes
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route(
-            "/:agent_id/messages/summarize",
-            post(summarize_messages),
-        )
+        .route("/:agent_id/messages/summarize", post(summarize_messages))
         .route("/:agent_id/memory/summarize", post(summarize_memory))
 }
 
@@ -77,10 +74,7 @@ async fn summarize_messages(
 ) -> Result<Json<SummarizationResponse>, ApiError> {
     // Validate message count
     let message_count = request.message_count.min(MESSAGES_TO_SUMMARIZE_MAX);
-    assert!(
-        message_count > 0,
-        "message_count must be positive"
-    );
+    assert!(message_count > 0, "message_count must be positive");
 
     // Get agent to verify it exists
     let _agent = state
@@ -118,15 +112,12 @@ async fn summarize_messages(
         )
     });
 
-    let prompt = format!(
-        "{}\n\nConversation:\n{}",
-        instruction, conversation_text
-    );
+    let prompt = format!("{}\n\nConversation:\n{}", instruction, conversation_text);
 
     // Generate summary using LLM
-    let llm = state
-        .llm()
-        .ok_or_else(|| ApiError::internal("LLM not configured - set ANTHROPIC_API_KEY or OPENAI_API_KEY"))?;
+    let llm = state.llm().ok_or_else(|| {
+        ApiError::internal("LLM not configured - set ANTHROPIC_API_KEY or OPENAI_API_KEY")
+    })?;
 
     let llm_messages = vec![ChatMessage {
         role: "user".to_string(),
@@ -230,9 +221,9 @@ async fn summarize_memory(
     let prompt = format!("{}\n\nMemory Blocks:\n{}", instruction, memory_text);
 
     // Generate summary using LLM
-    let llm = state
-        .llm()
-        .ok_or_else(|| ApiError::internal("LLM not configured - set ANTHROPIC_API_KEY or OPENAI_API_KEY"))?;
+    let llm = state.llm().ok_or_else(|| {
+        ApiError::internal("LLM not configured - set ANTHROPIC_API_KEY or OPENAI_API_KEY")
+    })?;
 
     let llm_messages = vec![ChatMessage {
         role: "user".to_string(),
@@ -329,7 +320,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::OK, "Agent creation should succeed");
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "Agent creation should succeed"
+        );
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await

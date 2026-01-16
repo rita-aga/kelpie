@@ -29,7 +29,10 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::stream::{Stream, StreamExt};
+use futures::stream::Stream;
+#[cfg(feature = "dst")]
+use futures::StreamExt;
+#[cfg(feature = "dst")]
 use kelpie_core::RngProvider;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -293,6 +296,14 @@ impl SimHttpClient {
                 kelpie_dst::FaultType::NetworkPacketLoss => {
                     tracing::debug!("HTTP request dropped: packet loss fault");
                     return Err("Network packet loss".to_string());
+                }
+                kelpie_dst::FaultType::LlmTimeout => {
+                    tracing::debug!("HTTP request failed: simulated LLM timeout");
+                    return Err("LLM request timed out".to_string());
+                }
+                kelpie_dst::FaultType::LlmRateLimited => {
+                    tracing::debug!("HTTP request failed: simulated LLM rate limit");
+                    return Err("LLM rate limited".to_string());
                 }
                 kelpie_dst::FaultType::NetworkDelay { min_ms, max_ms } => {
                     // Calculate delay

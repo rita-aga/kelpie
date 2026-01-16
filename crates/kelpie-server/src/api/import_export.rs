@@ -12,8 +12,8 @@ use axum::{
 };
 use chrono::Utc;
 use kelpie_server::models::{
-    AgentState, CreateAgentRequest, CreateBlockRequest, ExportAgentResponse,
-    ImportAgentRequest, Message,
+    AgentState, CreateAgentRequest, CreateBlockRequest, ExportAgentResponse, ImportAgentRequest,
+    Message,
 };
 use kelpie_server::state::AppState;
 use serde::Deserialize;
@@ -201,8 +201,9 @@ mod tests {
     use kelpie_dst::{DeterministicRng, FaultInjector, SimStorage};
     use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
     use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
-    use kelpie_server::models::{AgentImportData, BlockImportData, MessageImportData};
+    use kelpie_server::models::{AgentImportData, BlockImportData};
     use kelpie_server::service;
+    use kelpie_server::tools::UnifiedToolRegistry;
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -211,13 +212,33 @@ mod tests {
 
     #[async_trait]
     impl LlmClient for MockLlmClient {
-        async fn complete(
+        async fn complete_with_tools(
             &self,
             _messages: Vec<LlmMessage>,
+            _tools: Vec<kelpie_server::llm::ToolDefinition>,
         ) -> kelpie_core::Result<LlmResponse> {
             Ok(LlmResponse {
                 content: "Test response".to_string(),
                 tool_calls: vec![],
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stop_reason: "end_turn".to_string(),
+            })
+        }
+
+        async fn continue_with_tool_result(
+            &self,
+            _messages: Vec<LlmMessage>,
+            _tools: Vec<kelpie_server::llm::ToolDefinition>,
+            _assistant_blocks: Vec<kelpie_server::llm::ContentBlock>,
+            _tool_results: Vec<(String, String)>,
+        ) -> kelpie_core::Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: "Test response".to_string(),
+                tool_calls: vec![],
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stop_reason: "end_turn".to_string(),
             })
         }
     }
@@ -225,7 +246,7 @@ mod tests {
     /// Create test app
     async fn test_app() -> Router {
         let llm: Arc<dyn LlmClient> = Arc::new(MockLlmClient);
-        let actor = AgentActor::new(llm);
+        let actor = AgentActor::new(llm, Arc::new(UnifiedToolRegistry::new()));
         let factory = Arc::new(CloneFactory::new(actor));
 
         let rng = DeterministicRng::new(42);
@@ -233,8 +254,11 @@ mod tests {
         let storage = SimStorage::new(rng.fork(), faults);
         let kv = Arc::new(storage);
 
-        let mut dispatcher =
-            Dispatcher::<AgentActor, AgentActorState>::new(factory, kv, DispatcherConfig::default());
+        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState>::new(
+            factory,
+            kv,
+            DispatcherConfig::default(),
+        );
         let handle = dispatcher.handle();
 
         tokio::spawn(async move {

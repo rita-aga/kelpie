@@ -11,7 +11,7 @@
 use crate::actor::{AgentActor, RealLlmAdapter};
 use crate::llm::LlmClient;
 use crate::models::ArchivalEntry;
-use crate::models::{AgentState, Block, Job, Message, Project};
+use crate::models::{AgentGroup, AgentState, BatchStatus, Block, Job, Message, Project};
 use crate::service::AgentService;
 use crate::storage::{AgentStorage, StorageError};
 use crate::tools::UnifiedToolRegistry;
@@ -41,10 +41,20 @@ pub const BLOCKS_COUNT_MAX: usize = 100_000;
 /// Tool information for API responses
 #[derive(Debug, Clone)]
 pub struct ToolInfo {
+    /// Unique tool ID
+    pub id: String,
+    /// Tool name (used for invocation)
     pub name: String,
+    /// Human-readable description
     pub description: String,
+    /// JSON schema for tool input
     pub input_schema: serde_json::Value,
+    /// Source code (for custom tools, None for client-side tools)
     pub source: Option<String>,
+    /// Whether tool requires user approval before execution
+    pub default_requires_approval: bool,
+    /// Tool type: "builtin", "custom", "client"
+    pub tool_type: String,
 }
 
 /// Server-wide shared state
@@ -66,10 +76,10 @@ struct AppStateInner {
     agents: RwLock<HashMap<String, AgentState>>,
     /// Messages by agent ID (in-memory hot cache)
     messages: RwLock<HashMap<String, Vec<Message>>>,
-    /// Tool definitions by name (legacy, for API compatibility)
-    tools: RwLock<HashMap<String, ToolInfo>>,
     /// Unified tool registry for execution
     tool_registry: Arc<UnifiedToolRegistry>,
+    /// Client-side tools (tools that require approval or execute client-side)
+    client_tools: RwLock<HashMap<String, ToolInfo>>,
     /// Archival memory entries by agent ID
     archival: RwLock<HashMap<String, Vec<ArchivalEntry>>>,
     /// Standalone blocks by ID (for letta-code compatibility)
@@ -78,6 +88,10 @@ struct AppStateInner {
     jobs: RwLock<HashMap<String, Job>>,
     /// Projects by ID (Phase 6: Projects)
     projects: RwLock<HashMap<String, Project>>,
+    /// Batch message statuses by ID (Phase 7)
+    batches: RwLock<HashMap<String, crate::models::BatchStatus>>,
+    /// Agent groups by ID (Phase 8)
+    agent_groups: RwLock<HashMap<String, crate::models::AgentGroup>>,
     /// Server start time for uptime calculation
     start_time: Instant,
     /// LLM client (None if no API key configured)
@@ -122,7 +136,7 @@ impl AppState {
                 Arc::new(RealLlmAdapter::new(llm_client.clone()));
 
             // Create AgentActor
-            let actor = AgentActor::new(llm_adapter);
+            let actor = AgentActor::new(llm_adapter, tool_registry.clone());
 
             // Create CloneFactory for dispatcher
             let factory = Arc::new(CloneFactory::new(actor));
@@ -158,12 +172,14 @@ impl AppState {
                 shutdown_tx,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
-                tools: RwLock::new(HashMap::new()),
                 tool_registry,
+                client_tools: RwLock::new(HashMap::new()),
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
                 projects: RwLock::new(HashMap::new()),
+                batches: RwLock::new(HashMap::new()),
+                agent_groups: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm,
                 storage: None,
@@ -197,7 +213,7 @@ impl AppState {
                 Arc::new(RealLlmAdapter::new(llm_client.clone()));
 
             // Create AgentActor
-            let actor = AgentActor::new(llm_adapter);
+            let actor = AgentActor::new(llm_adapter, tool_registry.clone());
 
             // Create CloneFactory for dispatcher
             let factory = Arc::new(CloneFactory::new(actor));
@@ -233,12 +249,14 @@ impl AppState {
                 shutdown_tx,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
-                tools: RwLock::new(HashMap::new()),
                 tool_registry,
+                client_tools: RwLock::new(HashMap::new()),
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
                 projects: RwLock::new(HashMap::new()),
+                batches: RwLock::new(HashMap::new()),
+                agent_groups: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm,
                 storage: None,
@@ -262,15 +280,47 @@ impl AppState {
                 shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
-                tools: RwLock::new(HashMap::new()),
                 tool_registry,
+                client_tools: RwLock::new(HashMap::new()),
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
                 projects: RwLock::new(HashMap::new()),
+                batches: RwLock::new(HashMap::new()),
+                agent_groups: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm,
                 storage: Some(storage),
+                #[cfg(feature = "otel")]
+                prometheus_registry: None,
+                #[cfg(feature = "dst")]
+                fault_injector: None,
+            }),
+        }
+    }
+
+    /// Create server state with an explicit LLM client (test helper)
+    pub fn with_llm(llm: LlmClient) -> Self {
+        let tool_registry = Arc::new(UnifiedToolRegistry::new());
+
+        Self {
+            inner: Arc::new(AppStateInner {
+                agent_service: None,
+                dispatcher: None,
+                shutdown_tx: None,
+                agents: RwLock::new(HashMap::new()),
+                messages: RwLock::new(HashMap::new()),
+                tool_registry,
+                client_tools: RwLock::new(HashMap::new()),
+                archival: RwLock::new(HashMap::new()),
+                blocks: RwLock::new(HashMap::new()),
+                jobs: RwLock::new(HashMap::new()),
+                projects: RwLock::new(HashMap::new()),
+                batches: RwLock::new(HashMap::new()),
+                agent_groups: RwLock::new(HashMap::new()),
+                start_time: Instant::now(),
+                llm: Some(llm),
+                storage: None,
                 #[cfg(feature = "otel")]
                 prometheus_registry: None,
                 #[cfg(feature = "dst")]
@@ -291,12 +341,14 @@ impl AppState {
                 shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
-                tools: RwLock::new(HashMap::new()),
                 tool_registry,
+                client_tools: RwLock::new(HashMap::new()),
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
                 projects: RwLock::new(HashMap::new()),
+                batches: RwLock::new(HashMap::new()),
+                agent_groups: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm: None,
                 storage: None,
@@ -322,12 +374,14 @@ impl AppState {
                 shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
-                tools: RwLock::new(HashMap::new()),
                 tool_registry,
+                client_tools: RwLock::new(HashMap::new()),
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
                 projects: RwLock::new(HashMap::new()),
+                batches: RwLock::new(HashMap::new()),
+                agent_groups: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm: None,
                 storage: Some(storage),
@@ -359,12 +413,14 @@ impl AppState {
                 shutdown_tx: Some(shutdown_tx),
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
-                tools: RwLock::new(HashMap::new()),
                 tool_registry,
+                client_tools: RwLock::new(HashMap::new()),
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
                 projects: RwLock::new(HashMap::new()),
+                batches: RwLock::new(HashMap::new()),
+                agent_groups: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm: None,
                 storage: None,
@@ -1346,10 +1402,11 @@ impl AppState {
             .read()
             .map_err(|_| StateError::LockPoisoned)?;
 
-        let agent_messages = messages.get(agent_id).ok_or_else(|| StateError::NotFound {
-            resource: "agent",
-            id: agent_id.to_string(),
-        })?;
+        // Return empty vec if agent has no messages yet (not an error)
+        let agent_messages = match messages.get(agent_id) {
+            Some(msgs) => msgs,
+            None => return Ok(Vec::new()),
+        };
 
         // If before is specified, find messages before that ID
         let end_idx = if let Some(before_id) = before {
@@ -1369,88 +1426,266 @@ impl AppState {
     // Tool operations
     // =========================================================================
 
-    /// Register a tool
-    pub fn register_tool(
+    /// Register a custom tool
+    pub async fn register_tool(
         &self,
         name: String,
         description: String,
         input_schema: serde_json::Value,
-        source: Option<String>,
-    ) -> Result<(), StateError> {
-        let mut tools = self
-            .inner
-            .tools
-            .write()
-            .map_err(|_| StateError::LockPoisoned)?;
+        source_code: String,
+        runtime: String,
+        requirements: Vec<String>,
+    ) -> Result<ToolInfo, StateError> {
+        if name.is_empty() {
+            return Err(StateError::Internal {
+                message: "tool name cannot be empty".to_string(),
+            });
+        }
 
-        tools.insert(
-            name.clone(),
-            ToolInfo {
-                name,
-                description,
-                input_schema,
-                source,
-            },
-        );
-        Ok(())
+        if source_code.trim().is_empty() {
+            return Err(StateError::Internal {
+                message: "source_code cannot be empty".to_string(),
+            });
+        }
+
+        self.tool_registry()
+            .register_custom_tool(
+                name.clone(),
+                description.clone(),
+                input_schema.clone(),
+                source_code.clone(),
+                runtime.clone(),
+                requirements.clone(),
+            )
+            .await;
+
+        if let Some(storage) = &self.inner.storage {
+            let now = chrono::Utc::now();
+            let record = crate::storage::CustomToolRecord {
+                name: name.clone(),
+                description: description.clone(),
+                input_schema: input_schema.clone(),
+                source_code,
+                runtime,
+                requirements,
+                created_at: now,
+                updated_at: now,
+            };
+            storage
+                .save_custom_tool(&record)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
+        }
+
+        Ok(ToolInfo {
+            id: uuid::Uuid::new_v4().to_string(),
+            name,
+            description,
+            input_schema,
+            source: Some("custom".to_string()),
+            default_requires_approval: false,
+            tool_type: "custom".to_string(),
+        })
+    }
+
+    /// Upsert a tool (create or update)
+    ///
+    /// This is the primary method for tool registration, supporting both
+    /// server-side and client-side tools.
+    pub async fn upsert_tool(
+        &self,
+        id: String,
+        name: String,
+        description: String,
+        input_schema: serde_json::Value,
+        source: Option<String>,
+        default_requires_approval: bool,
+        tool_type: String,
+    ) -> Result<ToolInfo, StateError> {
+        if name.is_empty() {
+            return Err(StateError::Internal {
+                message: "tool name cannot be empty".to_string(),
+            });
+        }
+
+        // For client-side tools, we store metadata but don't register executable code
+        if tool_type == "client" || default_requires_approval {
+            // Store in a client tools registry (in-memory for now)
+            let tool_info = ToolInfo {
+                id: id.clone(),
+                name: name.clone(),
+                description: description.clone(),
+                input_schema: input_schema.clone(),
+                source: source.clone(),
+                default_requires_approval,
+                tool_type: tool_type.clone(),
+            };
+
+            // Store in client tools map
+            self.inner
+                .client_tools
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?
+                .insert(name.clone(), tool_info.clone());
+
+            return Ok(tool_info);
+        }
+
+        // For server-side tools, register with the tool registry
+        if let Some(source_code) = &source {
+            self.tool_registry()
+                .register_custom_tool(
+                    name.clone(),
+                    description.clone(),
+                    input_schema.clone(),
+                    source_code.clone(),
+                    "python".to_string(),
+                    vec![],
+                )
+                .await;
+        }
+
+        Ok(ToolInfo {
+            id,
+            name,
+            description,
+            input_schema,
+            source,
+            default_requires_approval,
+            tool_type,
+        })
     }
 
     /// Get a tool by name
-    pub fn get_tool(&self, name: &str) -> Option<ToolInfo> {
-        let tools = self.inner.tools.read().ok()?;
-        tools.get(name).cloned()
+    pub async fn get_tool(&self, name: &str) -> Option<ToolInfo> {
+        // First check client tools
+        if let Ok(client_tools) = self.inner.client_tools.read() {
+            if let Some(tool) = client_tools.get(name) {
+                return Some(tool.clone());
+            }
+        }
+
+        // Then check registered tools
+        let tool = self.tool_registry().get_tool(name).await?;
+        Some(ToolInfo {
+            id: uuid::Uuid::new_v4().to_string(), // Generate ID for legacy tools
+            name: tool.definition.name,
+            description: tool.definition.description,
+            input_schema: tool.definition.input_schema,
+            source: Some(tool.source.to_string()),
+            default_requires_approval: false,
+            tool_type: tool.source.to_string(),
+        })
+    }
+
+    /// Get a tool by ID
+    pub async fn get_tool_by_id(&self, id: &str) -> Option<ToolInfo> {
+        // Check client tools
+        if let Ok(client_tools) = self.inner.client_tools.read() {
+            for tool in client_tools.values() {
+                if tool.id == id {
+                    return Some(tool.clone());
+                }
+            }
+        }
+
+        // For now, we can't look up registered tools by ID
+        // This would require maintaining an ID mapping
+        None
     }
 
     /// List all tools
-    pub fn list_tools(&self) -> Vec<ToolInfo> {
-        let tools = self.inner.tools.read().ok();
-        match tools {
-            Some(t) => t.values().cloned().collect(),
-            None => vec![],
+    pub async fn list_tools(&self) -> Vec<ToolInfo> {
+        let mut result = Vec::new();
+
+        // Add client tools
+        if let Ok(client_tools) = self.inner.client_tools.read() {
+            result.extend(client_tools.values().cloned());
         }
+
+        // Add registered tools
+        let tools = self.tool_registry().list_registered_tools().await;
+        for tool in tools {
+            // Skip if already in client tools
+            if result.iter().any(|t| t.name == tool.definition.name) {
+                continue;
+            }
+            result.push(ToolInfo {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: tool.definition.name,
+                description: tool.definition.description,
+                input_schema: tool.definition.input_schema,
+                source: Some(tool.source.to_string()),
+                default_requires_approval: false,
+                tool_type: tool.source.to_string(),
+            });
+        }
+
+        result
     }
 
     /// Delete a tool
-    pub fn delete_tool(&self, name: &str) -> Result<(), StateError> {
-        let mut tools = self
-            .inner
-            .tools
-            .write()
-            .map_err(|_| StateError::LockPoisoned)?;
-
-        if tools.remove(name).is_none() {
+    pub async fn delete_tool(&self, name: &str) -> Result<(), StateError> {
+        let removed = self.tool_registry().unregister(name).await;
+        if !removed {
             return Err(StateError::NotFound {
                 resource: "tool",
                 id: name.to_string(),
             });
+        }
+
+        if let Some(storage) = &self.inner.storage {
+            let _ = storage.delete_custom_tool(name).await;
         }
 
         Ok(())
     }
 
-    /// Execute a tool (placeholder - actual execution would integrate with kelpie-tools)
+    /// Execute a tool via the unified registry
     pub async fn execute_tool(
         &self,
         name: &str,
-        _arguments: serde_json::Value,
+        arguments: serde_json::Value,
     ) -> Result<String, StateError> {
-        // Verify tool exists
-        let tools = self
-            .inner
-            .tools
-            .read()
-            .map_err(|_| StateError::LockPoisoned)?;
+        let result = self.tool_registry().execute(name, &arguments).await;
+        if result.success {
+            Ok(result.output)
+        } else {
+            Err(StateError::Internal {
+                message: result.error.unwrap_or(result.output),
+            })
+        }
+    }
 
-        if !tools.contains_key(name) {
-            return Err(StateError::NotFound {
-                resource: "tool",
-                id: name.to_string(),
-            });
+    /// Load custom tools from storage into the registry
+    pub async fn load_custom_tools(&self) -> Result<(), StateError> {
+        let Some(storage) = &self.inner.storage else {
+            return Ok(());
+        };
+
+        let tools = storage
+            .list_custom_tools()
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("storage error: {}", e),
+            })?;
+
+        for tool in tools {
+            self.tool_registry()
+                .register_custom_tool(
+                    tool.name,
+                    tool.description,
+                    tool.input_schema,
+                    tool.source_code,
+                    tool.runtime,
+                    tool.requirements,
+                )
+                .await;
         }
 
-        // For now, return a placeholder response
-        // In a full implementation, this would integrate with kelpie-tools
-        Ok(format!("Tool '{}' executed successfully", name))
+        Ok(())
     }
 
     // =========================================================================
@@ -1598,6 +1833,12 @@ impl AppState {
 
     /// Add a scheduled job
     pub fn add_job(&self, job: Job) -> Result<(), StateError> {
+        if self.should_inject_fault("job_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "job_write".to_string(),
+            });
+        }
+
         let mut jobs = self
             .inner
             .jobs
@@ -1617,6 +1858,12 @@ impl AppState {
 
     /// Get a job by ID
     pub fn get_job(&self, job_id: &str) -> Result<Option<Job>, StateError> {
+        if self.should_inject_fault("job_read").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "job_read".to_string(),
+            });
+        }
+
         let jobs = self
             .inner
             .jobs
@@ -1627,6 +1874,12 @@ impl AppState {
 
     /// List jobs for a specific agent
     pub fn list_jobs_for_agent(&self, agent_id: &str) -> Result<Vec<Job>, StateError> {
+        if self.should_inject_fault("job_read").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "job_read".to_string(),
+            });
+        }
+
         let jobs = self
             .inner
             .jobs
@@ -1644,6 +1897,12 @@ impl AppState {
 
     /// List all jobs with optional agent filter
     pub fn list_all_jobs(&self, agent_id: Option<&str>) -> Result<Vec<Job>, StateError> {
+        if self.should_inject_fault("job_read").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "job_read".to_string(),
+            });
+        }
+
         let jobs = self
             .inner
             .jobs
@@ -1664,6 +1923,12 @@ impl AppState {
 
     /// Update a job
     pub fn update_job(&self, job: Job) -> Result<(), StateError> {
+        if self.should_inject_fault("job_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "job_write".to_string(),
+            });
+        }
+
         let mut jobs = self
             .inner
             .jobs
@@ -1683,6 +1948,12 @@ impl AppState {
 
     /// Delete a job
     pub fn delete_job(&self, job_id: &str) -> Result<(), StateError> {
+        if self.should_inject_fault("job_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "job_write".to_string(),
+            });
+        }
+
         let mut jobs = self
             .inner
             .jobs
@@ -1705,6 +1976,12 @@ impl AppState {
 
     /// Add a project
     pub fn add_project(&self, project: Project) -> Result<(), StateError> {
+        if self.should_inject_fault("project_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "project_write".to_string(),
+            });
+        }
+
         let mut projects = self
             .inner
             .projects
@@ -1724,6 +2001,12 @@ impl AppState {
 
     /// Get a project by ID
     pub fn get_project(&self, project_id: &str) -> Result<Option<Project>, StateError> {
+        if self.should_inject_fault("project_read").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "project_read".to_string(),
+            });
+        }
+
         let projects = self
             .inner
             .projects
@@ -1737,6 +2020,12 @@ impl AppState {
         &self,
         cursor: Option<&str>,
     ) -> Result<(Vec<Project>, Option<String>), StateError> {
+        if self.should_inject_fault("project_read").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "project_read".to_string(),
+            });
+        }
+
         let projects = self
             .inner
             .projects
@@ -1767,6 +2056,12 @@ impl AppState {
 
     /// Update a project
     pub fn update_project(&self, project: Project) -> Result<(), StateError> {
+        if self.should_inject_fault("project_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "project_write".to_string(),
+            });
+        }
+
         let mut projects = self
             .inner
             .projects
@@ -1786,6 +2081,12 @@ impl AppState {
 
     /// Delete a project
     pub fn delete_project(&self, project_id: &str) -> Result<(), StateError> {
+        if self.should_inject_fault("project_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "project_write".to_string(),
+            });
+        }
+
         let mut projects = self
             .inner
             .projects
@@ -1804,6 +2105,12 @@ impl AppState {
 
     /// List agents by project ID
     pub fn list_agents_by_project(&self, project_id: &str) -> Result<Vec<AgentState>, StateError> {
+        if self.should_inject_fault("project_read").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "project_read".to_string(),
+            });
+        }
+
         let agents = self
             .inner
             .agents
@@ -1817,6 +2124,198 @@ impl AppState {
             .collect();
 
         Ok(project_agents)
+    }
+
+    // =========================================================================
+    // Batch Operations (Phase 7)
+    // =========================================================================
+
+    /// Store a batch status
+    pub fn add_batch_status(&self, status: BatchStatus) -> Result<(), StateError> {
+        if self.should_inject_fault("batch_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "batch_write".to_string(),
+            });
+        }
+
+        let mut batches = self
+            .inner
+            .batches
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+        batches.insert(status.id.clone(), status);
+        Ok(())
+    }
+
+    /// Update a batch status
+    pub fn update_batch_status(&self, status: BatchStatus) -> Result<(), StateError> {
+        if self.should_inject_fault("batch_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "batch_write".to_string(),
+            });
+        }
+
+        let mut batches = self
+            .inner
+            .batches
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        if !batches.contains_key(&status.id) {
+            return Err(StateError::NotFound {
+                resource: "batch",
+                id: status.id.clone(),
+            });
+        }
+
+        batches.insert(status.id.clone(), status);
+        Ok(())
+    }
+
+    /// Get batch status by ID
+    pub fn get_batch_status(&self, batch_id: &str) -> Result<Option<BatchStatus>, StateError> {
+        if self.should_inject_fault("batch_read").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "batch_read".to_string(),
+            });
+        }
+
+        let batches = self
+            .inner
+            .batches
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+        Ok(batches.get(batch_id).cloned())
+    }
+
+    // =========================================================================
+    // Agent Group Operations (Phase 8)
+    // =========================================================================
+
+    /// Add a new agent group
+    pub fn add_agent_group(&self, group: AgentGroup) -> Result<(), StateError> {
+        if self.should_inject_fault("agent_group_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "agent_group_write".to_string(),
+            });
+        }
+
+        let mut groups = self
+            .inner
+            .agent_groups
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        if groups.contains_key(&group.id) {
+            return Err(StateError::AlreadyExists {
+                resource: "agent_group",
+                id: group.id.clone(),
+            });
+        }
+
+        groups.insert(group.id.clone(), group);
+        Ok(())
+    }
+
+    /// Get agent group by ID
+    pub fn get_agent_group(&self, group_id: &str) -> Result<Option<AgentGroup>, StateError> {
+        if self.should_inject_fault("agent_group_read").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "agent_group_read".to_string(),
+            });
+        }
+
+        let groups = self
+            .inner
+            .agent_groups
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+        Ok(groups.get(group_id).cloned())
+    }
+
+    /// List agent groups with pagination
+    pub fn list_agent_groups(
+        &self,
+        cursor: Option<&str>,
+    ) -> Result<(Vec<AgentGroup>, Option<String>), StateError> {
+        if self.should_inject_fault("agent_group_read").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "agent_group_read".to_string(),
+            });
+        }
+
+        let groups = self
+            .inner
+            .agent_groups
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        let mut all_groups: Vec<_> = groups.values().cloned().collect();
+        all_groups.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+        let start_idx = if let Some(cursor_id) = cursor {
+            all_groups
+                .iter()
+                .position(|g| g.id == cursor_id)
+                .map(|i| i + 1)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        let remaining: Vec<_> = all_groups.into_iter().skip(start_idx).collect();
+        let next_cursor = remaining.last().map(|g| g.id.clone());
+
+        Ok((remaining, next_cursor))
+    }
+
+    /// Update an agent group
+    pub fn update_agent_group(&self, group: AgentGroup) -> Result<(), StateError> {
+        if self.should_inject_fault("agent_group_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "agent_group_write".to_string(),
+            });
+        }
+
+        let mut groups = self
+            .inner
+            .agent_groups
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        if !groups.contains_key(&group.id) {
+            return Err(StateError::NotFound {
+                resource: "agent_group",
+                id: group.id.clone(),
+            });
+        }
+
+        groups.insert(group.id.clone(), group);
+        Ok(())
+    }
+
+    /// Delete an agent group
+    pub fn delete_agent_group(&self, group_id: &str) -> Result<(), StateError> {
+        if self.should_inject_fault("agent_group_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "agent_group_write".to_string(),
+            });
+        }
+
+        let mut groups = self
+            .inner
+            .agent_groups
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        if groups.remove(group_id).is_none() {
+            return Err(StateError::NotFound {
+                resource: "agent_group",
+                id: group_id.to_string(),
+            });
+        }
+
+        Ok(())
     }
 }
 
@@ -1872,6 +2371,7 @@ impl std::fmt::Display for StateError {
 impl std::error::Error for StateError {}
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::models::{AgentType, CreateAgentRequest, CreateBlockRequest};

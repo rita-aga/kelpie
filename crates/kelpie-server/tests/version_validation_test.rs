@@ -4,9 +4,9 @@
 
 use bytes::Bytes;
 use kelpie_core::{Error, Result};
-use kelpie_libkrun::{MockVmFactory, VmConfig, VmInstance};
 use kelpie_server::service::TeleportService;
 use kelpie_server::storage::{LocalTeleportStorage, SnapshotKind, TeleportStorage};
+use kelpie_vm::{MockVmFactory, VmConfig, VmInstance};
 use std::sync::Arc;
 
 fn test_config() -> VmConfig {
