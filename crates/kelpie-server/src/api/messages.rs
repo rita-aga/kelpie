@@ -15,8 +15,8 @@ use chrono::Utc;
 use futures::stream::{self, StreamExt};
 use kelpie_server::llm::{ChatMessage, ContentBlock};
 use kelpie_server::models::{
-    BatchMessagesRequest, BatchStatus, CreateMessageRequest, Message, MessageResponse, MessageRole,
-    UsageStats,
+    ApprovalRequest, BatchMessagesRequest, BatchStatus, ClientTool, CreateMessageRequest, Message,
+    MessageResponse, MessageRole, UsageStats,
 };
 use kelpie_server::state::AppState;
 use kelpie_server::tools::{parse_pause_signal, ToolSignal, AGENT_LOOP_ITERATIONS_MAX};
@@ -104,6 +104,31 @@ struct StopReasonEvent {
     stop_reason: String,
 }
 
+/// Check if a tool requires client-side execution
+///
+/// Returns true if:
+/// - Tool name is in the client_tools array from the request, OR
+/// - Tool has default_requires_approval=true in its registration
+///
+/// Note: This is synchronous wrapper around async get_tool, using block_on
+fn tool_requires_approval(tool_name: &str, client_tools: &[ClientTool], state: &AppState) -> bool {
+    // Check if tool is in client_tools array from request
+    if client_tools.iter().any(|ct| ct.name == tool_name) {
+        return true;
+    }
+
+    // Check if tool has default_requires_approval=true
+    // Use runtime handle to call async get_tool synchronously
+    let runtime_handle = tokio::runtime::Handle::current();
+    if let Some(tool_info) = runtime_handle.block_on(state.get_tool(tool_name)) {
+        if tool_info.default_requires_approval {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// List messages for an agent
 ///
 /// GET /v1/agents/{agent_id}/messages
@@ -183,6 +208,7 @@ pub async fn handle_message_request(
             messages: response.messages,
             usage: Some(response.usage),
             stop_reason: "end_turn".to_string(),
+            approval_requests: None,
         });
     }
 
@@ -241,6 +267,10 @@ pub async fn handle_message_request(
             }
             // Skip system messages in history (already added above)
             if msg.role == MessageRole::System {
+                continue;
+            }
+            // Skip messages with empty content - Claude API requires non-empty content
+            if msg.content.is_empty() {
                 continue;
             }
             messages.push(ChatMessage {
@@ -302,11 +332,52 @@ pub async fn handle_message_request(
                         "Executing tools"
                     );
 
-                    // Execute each tool via registry
+                    // Check if any tools require client-side execution
+                    let mut approval_needed = Vec::new();
+                    let mut server_tools = Vec::new();
+
+                    for tool_call in &response.tool_calls {
+                        if tool_requires_approval(&tool_call.name, &request.client_tools, &state) {
+                            approval_needed.push(tool_call.clone());
+                        } else {
+                            server_tools.push(tool_call.clone());
+                        }
+                    }
+
+                    // If any tools need approval, return approval_request and stop
+                    if !approval_needed.is_empty() {
+                        tracing::info!(
+                            agent_id = %agent_id,
+                            approval_count = approval_needed.len(),
+                            "Tools require client-side approval"
+                        );
+
+                        return Ok(MessageResponse {
+                            messages: vec![stored_user_msg],
+                            usage: Some(UsageStats {
+                                prompt_tokens: total_prompt,
+                                completion_tokens: total_completion,
+                                total_tokens: total_prompt + total_completion,
+                            }),
+                            stop_reason: "requires_approval".to_string(),
+                            approval_requests: Some(
+                                approval_needed
+                                    .iter()
+                                    .map(|tc| ApprovalRequest {
+                                        tool_call_id: tc.id.clone(),
+                                        tool_name: tc.name.clone(),
+                                        tool_arguments: tc.input.clone(),
+                                    })
+                                    .collect(),
+                            ),
+                        });
+                    }
+
+                    // Execute server-side tools only
                     let mut tool_results = Vec::new();
                     let mut should_break = false;
 
-                    for tool_call in &response.tool_calls {
+                    for tool_call in &server_tools {
                         let context = crate::tools::ToolExecutionContext {
                             agent_id: Some(agent_id.clone()),
                             project_id: agent.project_id.clone(),
@@ -490,6 +561,7 @@ pub async fn handle_message_request(
             total_tokens: prompt_tokens + completion_tokens,
         }),
         stop_reason: final_stop_reason,
+        approval_requests: None,
     })
 }
 
@@ -620,6 +692,7 @@ async fn send_message_streaming(
     let state_clone = state.clone();
     let llm_clone = llm.clone();
     let agent_clone = agent.clone();
+    let client_tools_clone = request.client_tools.clone();
 
     // Create user message
     let user_message = Message {
@@ -644,6 +717,7 @@ async fn send_message_streaming(
             &agent_clone,
             &llm_clone,
             content,
+            &client_tools_clone,
         )
         .await;
         stream::iter(events)
@@ -660,13 +734,18 @@ async fn send_message_streaming(
 }
 
 /// Generate all SSE events for a streaming response
-#[instrument(skip(state, agent, llm, content), fields(agent_id), level = "debug")]
+#[instrument(
+    skip(state, agent, llm, content, client_tools),
+    fields(agent_id),
+    level = "debug"
+)]
 async fn generate_sse_events(
     state: &AppState,
     agent_id: &str,
     agent: &kelpie_server::models::AgentState,
     llm: &crate::llm::LlmClient,
     content: String,
+    client_tools: &[ClientTool],
 ) -> Vec<Result<Event, Infallible>> {
     let mut events = Vec::new();
     let mut total_prompt_tokens = 0u64;
@@ -690,6 +769,10 @@ async fn generate_sse_events(
         // Skip tool and system messages - Claude API doesn't support role "tool"
         // and system is already added above
         if msg.role == MessageRole::Tool || msg.role == MessageRole::System {
+            continue;
+        }
+        // Skip messages with empty content - Claude API requires non-empty content
+        if msg.content.is_empty() {
             continue;
         }
         messages.push(ChatMessage {
@@ -730,8 +813,47 @@ async fn generate_sse_events(
             while response.stop_reason == "tool_use" && iterations < AGENT_LOOP_ITERATIONS_MAX {
                 iterations += 1;
 
-                // Send tool call events
+                // Check if any tools require client-side execution
+                let mut approval_needed = Vec::new();
+                let mut server_tools = Vec::new();
+
                 for tool_call in &response.tool_calls {
+                    if tool_requires_approval(&tool_call.name, client_tools, state) {
+                        approval_needed.push(tool_call.clone());
+                    } else {
+                        server_tools.push(tool_call.clone());
+                    }
+                }
+
+                // If any tools need approval, emit approval_request_message and stop
+                if !approval_needed.is_empty() {
+                    tracing::info!(
+                        agent_id = %agent_id,
+                        approval_count = approval_needed.len(),
+                        "Tools require client-side approval (streaming)"
+                    );
+
+                    for tool_call in &approval_needed {
+                        let approval_msg = SseMessage::ApprovalRequestMessage {
+                            id: Uuid::new_v4().to_string(),
+                            tool_call_id: tool_call.id.clone(),
+                            tool_call: ToolCallInfo {
+                                name: tool_call.name.clone(),
+                                arguments: tool_call.input.clone(),
+                            },
+                        };
+                        if let Ok(json) = serde_json::to_string(&approval_msg) {
+                            events.push(Ok(Event::default().data(json)));
+                        }
+                    }
+
+                    // Set stop reason and break
+                    final_stop_reason = "requires_approval".to_string();
+                    break;
+                }
+
+                // Send tool call events for server-side tools
+                for tool_call in &server_tools {
                     let tool_msg = SseMessage::ToolCallMessage {
                         id: Uuid::new_v4().to_string(),
                         tool_call: ToolCallInfo {
@@ -744,11 +866,11 @@ async fn generate_sse_events(
                     }
                 }
 
-                // Execute tools via registry
+                // Execute server-side tools only
                 let mut tool_results = Vec::new();
                 let mut should_break = false;
 
-                for tool_call in &response.tool_calls {
+                for tool_call in &server_tools {
                     let context = crate::tools::ToolExecutionContext {
                         agent_id: Some(agent_id.to_string()),
                         project_id: agent.project_id.clone(),

@@ -183,6 +183,11 @@ async fn create_agent(
         }
     }
 
+    // Persist to durable storage (if configured)
+    if let Err(e) = state.persist_agent(&created).await {
+        tracing::warn!(agent_id = %created.id, error = %e, "failed to persist agent to storage");
+    }
+
     tracing::info!(agent_id = %created.id, name = %created.name, block_count = created.blocks.len(), "created agent");
     Ok(Json(created))
 }

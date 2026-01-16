@@ -22,17 +22,21 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use foundationdb::api::FdbApiBuilder;
+use foundationdb::api::{FdbApiBuilder, NetworkAutoStop};
 use foundationdb::tuple::{pack, unpack, Subspace};
 use foundationdb::{Database, RangeOption, Transaction as FdbTransaction};
 use kelpie_core::constants::{
     ACTOR_KV_KEY_SIZE_BYTES_MAX, ACTOR_KV_VALUE_SIZE_BYTES_MAX, TRANSACTION_TIMEOUT_MS_DEFAULT,
 };
 use kelpie_core::{ActorId, Error, Result};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tracing::{debug, instrument, warn};
 
 use crate::kv::{ActorKV, ActorTransaction};
+
+/// Global FDB network guard - must live for the entire process
+/// Using OnceLock to ensure single initialization
+static FDB_NETWORK: OnceLock<NetworkAutoStop> = OnceLock::new();
 
 /// Key prefix for actor data in FDB
 const KEY_PREFIX_KELPIE: &str = "kelpie";
@@ -76,19 +80,19 @@ impl FdbKV {
     #[instrument(skip_all, fields(cluster_file))]
     pub async fn connect(cluster_file: Option<&str>) -> Result<Self> {
         // Boot FDB network (must be called once per process)
-        // Safe to call multiple times - subsequent calls are no-ops
-        let network_builder = FdbApiBuilder::default()
-            .build()
-            .map_err(|e| Error::Internal {
-                message: format!("FDB API build failed: {}", e),
-            })?;
+        // Using OnceLock to ensure single initialization and keep guard alive
+        FDB_NETWORK.get_or_init(|| {
+            let network_builder = FdbApiBuilder::default()
+                .build()
+                .expect("FDB API build failed");
 
-        // Start network thread (non-blocking after first call)
-        unsafe {
-            network_builder.boot().map_err(|e| Error::Internal {
-                message: format!("FDB network boot failed: {}", e),
-            })?;
-        }
+            // Start network thread - must keep the guard alive for operations to work
+            unsafe {
+                network_builder
+                    .boot()
+                    .expect("FDB network boot failed")
+            }
+        });
 
         // Open database
         let db = Database::new(cluster_file).map_err(|e| Error::Internal {
@@ -145,6 +149,10 @@ impl FdbKV {
     }
 
     /// Encode the prefix for listing keys
+    ///
+    /// NOTE: For prefix matching to work correctly, we need to use the subspace
+    /// bytes directly instead of tuple packing. The FDB tuple layer encoding
+    /// adds type markers and length encoding that prevent simple prefix matching.
     fn encode_prefix(&self, actor_id: &ActorId, prefix: &[u8]) -> Vec<u8> {
         // Preconditions
         assert!(
@@ -157,11 +165,9 @@ impl FdbKV {
             self.subspace
                 .subspace(&(actor_id.namespace(), actor_id.id(), KEY_PREFIX_DATA));
 
-        if prefix.is_empty() {
-            actor_subspace.bytes().to_vec()
-        } else {
-            actor_subspace.pack(&prefix)
-        }
+        // Always return just the subspace bytes - the range scan will find all keys
+        // in this subspace, and we filter by user prefix in the list_keys/scan_prefix code
+        actor_subspace.bytes().to_vec()
     }
 
     /// Decode a user key from FDB key
@@ -613,7 +619,7 @@ impl ActorKV for FdbKV {
         let range_option = RangeOption::from((start_key.as_slice(), end_key.as_slice()));
 
         let range =
-            txn.get_range(&range_option, 0, false)
+            txn.get_range(&range_option, 1, false)
                 .await
                 .map_err(|e| Error::StorageReadFailed {
                     key: format!("prefix:{}", String::from_utf8_lossy(prefix)),
@@ -673,7 +679,7 @@ impl ActorKV for FdbKV {
         let range_option = RangeOption::from((start_key.as_slice(), end_key.as_slice()));
 
         let range =
-            txn.get_range(&range_option, 0, false)
+            txn.get_range(&range_option, 1, false)
                 .await
                 .map_err(|e| Error::StorageReadFailed {
                     key: format!("prefix:{}", String::from_utf8_lossy(prefix)),
@@ -772,7 +778,7 @@ mod tests {
         assert!(!encoded.is_empty());
 
         // Verify we can decode it back
-        let (decoded, _): (Vec<u8>, _) = actor_subspace.unpack(&encoded).unwrap();
+        let decoded: Vec<u8> = actor_subspace.unpack(&encoded).unwrap();
         assert_eq!(decoded, b"my-key");
     }
 

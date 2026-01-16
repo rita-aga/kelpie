@@ -565,6 +565,17 @@ pub struct ToolCall {
     pub arguments: serde_json::Value,
 }
 
+/// Tool that requires client-side execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRequest {
+    /// Tool call ID
+    pub tool_call_id: String,
+    /// Tool name
+    pub tool_name: String,
+    /// Tool arguments as JSON
+    pub tool_arguments: serde_json::Value,
+}
+
 /// Response from sending a message
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageResponse {
@@ -575,6 +586,9 @@ pub struct MessageResponse {
     /// Stop reason (for letta-code compatibility)
     #[serde(default = "default_stop_reason")]
     pub stop_reason: String,
+    /// Tools that need client-side execution (when stop_reason is "requires_approval")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_requests: Option<Vec<ApprovalRequest>>,
 }
 
 fn default_stop_reason() -> String {

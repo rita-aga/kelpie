@@ -149,6 +149,11 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!(error = %err, "Failed to load custom tools from storage");
     }
 
+    // Load agents from storage (if configured)
+    if let Err(err) = state.load_agents_from_storage().await {
+        tracing::warn!(error = %err, "Failed to load agents from storage");
+    }
+
     // Create router
     let app = api::router(state);
 

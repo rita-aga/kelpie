@@ -1533,7 +1533,7 @@ impl AppState {
             return Ok(tool_info);
         }
 
-        // For server-side tools, register with the tool registry
+        // For server-side custom tools, register with the tool registry and persist to storage
         if let Some(source_code) = &source {
             self.tool_registry()
                 .register_custom_tool(
@@ -1545,6 +1545,30 @@ impl AppState {
                     vec![],
                 )
                 .await;
+
+            // Persist to durable storage (if configured)
+            if let Some(storage) = &self.inner.storage {
+                tracing::info!(name = %name, "persisting custom tool to storage");
+                let now = chrono::Utc::now();
+                let record = crate::storage::CustomToolRecord {
+                    name: name.clone(),
+                    description: description.clone(),
+                    input_schema: input_schema.clone(),
+                    source_code: source_code.clone(),
+                    runtime: "python".to_string(),
+                    requirements: vec![],
+                    created_at: now,
+                    updated_at: now,
+                };
+                match storage.save_custom_tool(&record).await {
+                    Ok(_) => tracing::info!(name = %name, "custom tool persisted successfully"),
+                    Err(e) => {
+                        tracing::warn!(name = %name, error = %e, "failed to persist custom tool to storage")
+                    }
+                }
+            } else {
+                tracing::debug!(name = %name, "no storage configured, custom tool not persisted");
+            }
         }
 
         Ok(ToolInfo {
@@ -1662,9 +1686,11 @@ impl AppState {
     /// Load custom tools from storage into the registry
     pub async fn load_custom_tools(&self) -> Result<(), StateError> {
         let Some(storage) = &self.inner.storage else {
+            tracing::debug!("no storage configured, skipping custom tool loading");
             return Ok(());
         };
 
+        tracing::info!("loading custom tools from storage...");
         let tools = storage
             .list_custom_tools()
             .await
@@ -1672,7 +1698,10 @@ impl AppState {
                 message: format!("storage error: {}", e),
             })?;
 
+        tracing::info!(count = tools.len(), "found custom tools in storage");
+
         for tool in tools {
+            tracing::info!(name = %tool.name, "loading custom tool from storage");
             self.tool_registry()
                 .register_custom_tool(
                     tool.name,
@@ -1685,6 +1714,38 @@ impl AppState {
                 .await;
         }
 
+        Ok(())
+    }
+
+    /// Load agents from storage into the in-memory state
+    ///
+    /// Called on server startup to restore persisted agents.
+    pub async fn load_agents_from_storage(&self) -> Result<(), StateError> {
+        let Some(storage) = &self.inner.storage else {
+            return Ok(());
+        };
+
+        let agents = storage
+            .list_agents()
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("storage error: {}", e),
+            })?;
+
+        let count = agents.len();
+        for metadata in agents {
+            // Load full agent state from storage
+            if let Ok(Some(agent)) = self.load_agent_from_storage(&metadata.id).await {
+                // Insert into in-memory state
+                self.inner
+                    .agents
+                    .write()
+                    .map_err(|_| StateError::LockPoisoned)?
+                    .insert(agent.id.clone(), agent);
+            }
+        }
+
+        tracing::info!(count = count, "loaded agents from storage");
         Ok(())
     }
 
