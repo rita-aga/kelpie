@@ -27,6 +27,6 @@ letta/schemas/response_format.py:18
     type: ResponseFormatType = Field(
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 1 skipped, 6 warnings in 2.22s ========================
+======================== 1 skipped, 6 warnings in 2.15s ========================
 
 OpenTelemetry configuration OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE is not supported by Datadog.

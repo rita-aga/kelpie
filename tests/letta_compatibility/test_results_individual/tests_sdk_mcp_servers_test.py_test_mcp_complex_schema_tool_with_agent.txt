@@ -24,24 +24,24 @@ tests/sdk/mcp_servers_test.py:1012: in test_mcp_complex_schema_tool_with_agent
 E   letta_client.InternalServerError: Error code: 500 - {'code': 'internal_error', 'message': 'LLM not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable.', 'details': None}
 ----------------------------- Captured stdout call -----------------------------
 httpx - INFO - HTTP Request: POST http://localhost:8283/v1/mcp-servers/ "HTTP/1.1 200 OK"
-httpx - INFO - HTTP Request: GET http://localhost:8283/v1/mcp-servers/mcp_server-79f2c9c7-1221-4f83-bd2c-717764d94079/tools "HTTP/1.1 200 OK"
+httpx - INFO - HTTP Request: GET http://localhost:8283/v1/mcp-servers/mcp_server-5769a56a-064d-4696-874b-7f5ea64151a6/tools "HTTP/1.1 200 OK"
 httpx - INFO - HTTP Request: POST http://localhost:8283/v1/agents/ "HTTP/1.1 200 OK"
-httpx - INFO - HTTP Request: POST http://localhost:8283/v1/agents/5e8517a1-22a1-44bc-8d70-1f1e5141822c/messages "HTTP/1.1 500 Internal Server Error"
-letta_client._base_client - INFO - Retrying request to /v1/agents/5e8517a1-22a1-44bc-8d70-1f1e5141822c/messages in 0.485354 seconds
-httpx - INFO - HTTP Request: POST http://localhost:8283/v1/agents/5e8517a1-22a1-44bc-8d70-1f1e5141822c/messages "HTTP/1.1 500 Internal Server Error"
-letta_client._base_client - INFO - Retrying request to /v1/agents/5e8517a1-22a1-44bc-8d70-1f1e5141822c/messages in 0.765062 seconds
-httpx - INFO - HTTP Request: POST http://localhost:8283/v1/agents/5e8517a1-22a1-44bc-8d70-1f1e5141822c/messages "HTTP/1.1 500 Internal Server Error"
-httpx - INFO - HTTP Request: DELETE http://localhost:8283/v1/mcp-servers/mcp_server-79f2c9c7-1221-4f83-bd2c-717764d94079 "HTTP/1.1 200 OK"
+httpx - INFO - HTTP Request: POST http://localhost:8283/v1/agents/fe19b0aa-c33c-42d9-8257-71ed17202cfe/messages "HTTP/1.1 500 Internal Server Error"
+letta_client._base_client - INFO - Retrying request to /v1/agents/fe19b0aa-c33c-42d9-8257-71ed17202cfe/messages in 0.458896 seconds
+httpx - INFO - HTTP Request: POST http://localhost:8283/v1/agents/fe19b0aa-c33c-42d9-8257-71ed17202cfe/messages "HTTP/1.1 500 Internal Server Error"
+letta_client._base_client - INFO - Retrying request to /v1/agents/fe19b0aa-c33c-42d9-8257-71ed17202cfe/messages in 0.970503 seconds
+httpx - INFO - HTTP Request: POST http://localhost:8283/v1/agents/fe19b0aa-c33c-42d9-8257-71ed17202cfe/messages "HTTP/1.1 500 Internal Server Error"
+httpx - INFO - HTTP Request: DELETE http://localhost:8283/v1/mcp-servers/mcp_server-5769a56a-064d-4696-874b-7f5ea64151a6 "HTTP/1.1 200 OK"
 ------------------------------ Captured log call -------------------------------
 INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/mcp-servers/ "HTTP/1.1 200 OK"
-INFO     httpx:_client.py:1025 HTTP Request: GET http://localhost:8283/v1/mcp-servers/mcp_server-79f2c9c7-1221-4f83-bd2c-717764d94079/tools "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://localhost:8283/v1/mcp-servers/mcp_server-5769a56a-064d-4696-874b-7f5ea64151a6/tools "HTTP/1.1 200 OK"
 INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/agents/ "HTTP/1.1 200 OK"
-INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/agents/5e8517a1-22a1-44bc-8d70-1f1e5141822c/messages "HTTP/1.1 500 Internal Server Error"
-INFO     letta_client._base_client:_base_client.py:1088 Retrying request to /v1/agents/5e8517a1-22a1-44bc-8d70-1f1e5141822c/messages in 0.485354 seconds
-INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/agents/5e8517a1-22a1-44bc-8d70-1f1e5141822c/messages "HTTP/1.1 500 Internal Server Error"
-INFO     letta_client._base_client:_base_client.py:1088 Retrying request to /v1/agents/5e8517a1-22a1-44bc-8d70-1f1e5141822c/messages in 0.765062 seconds
-INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/agents/5e8517a1-22a1-44bc-8d70-1f1e5141822c/messages "HTTP/1.1 500 Internal Server Error"
-INFO     httpx:_client.py:1025 HTTP Request: DELETE http://localhost:8283/v1/mcp-servers/mcp_server-79f2c9c7-1221-4f83-bd2c-717764d94079 "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/agents/fe19b0aa-c33c-42d9-8257-71ed17202cfe/messages "HTTP/1.1 500 Internal Server Error"
+INFO     letta_client._base_client:_base_client.py:1088 Retrying request to /v1/agents/fe19b0aa-c33c-42d9-8257-71ed17202cfe/messages in 0.458896 seconds
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/agents/fe19b0aa-c33c-42d9-8257-71ed17202cfe/messages "HTTP/1.1 500 Internal Server Error"
+INFO     letta_client._base_client:_base_client.py:1088 Retrying request to /v1/agents/fe19b0aa-c33c-42d9-8257-71ed17202cfe/messages in 0.970503 seconds
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/agents/fe19b0aa-c33c-42d9-8257-71ed17202cfe/messages "HTTP/1.1 500 Internal Server Error"
+INFO     httpx:_client.py:1025 HTTP Request: DELETE http://localhost:8283/v1/mcp-servers/mcp_server-5769a56a-064d-4696-874b-7f5ea64151a6 "HTTP/1.1 200 OK"
 =============================== warnings summary ===============================
 letta/schemas/letta_message.py:207
   /Users/seshendranalla/Development/letta/letta/schemas/letta_message.py:207: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
@@ -61,6 +61,6 @@ letta/schemas/response_format.py:18
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
 =========================== short test summary info ============================
 FAILED tests/sdk/mcp_servers_test.py::test_mcp_complex_schema_tool_with_agent
-======================== 1 failed, 6 warnings in 1.92s =========================
+======================== 1 failed, 6 warnings in 2.10s =========================
 
 OpenTelemetry configuration OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE is not supported by Datadog.
