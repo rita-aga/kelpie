@@ -1,0 +1,53 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.0.2, pluggy-1.6.0 -- /Users/seshendranalla/Development/kelpie/tests/letta_compatibility/.venv/bin/python3.12
+cachedir: .pytest_cache
+metadata: {'Python': '3.12.11', 'Platform': 'macOS-15.3-arm64-arm-64bit', 'Packages': {'pytest': '9.0.2', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.12.1', 'ddtrace': '4.2.1', 'mock': '3.15.1', 'json-report': '1.5.0', 'metadata': '3.1.1', 'order': '1.3.0', 'asyncio': '1.3.0', 'Faker': '40.1.2', 'typeguard': '4.4.4'}, 'JAVA_HOME': '/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home'}
+rootdir: /Users/seshendranalla/Development/letta/tests
+configfile: pytest.ini
+plugins: anyio-4.12.1, ddtrace-4.2.1, mock-3.15.1, json-report-1.5.0, metadata-3.1.1, order-1.3.0, asyncio-1.3.0, Faker-40.1.2, typeguard-4.4.4
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/sdk/agents_test.py::test_create[caren_agent-params0-extra_expected_values0-None] FAILED [100%]
+
+=================================== FAILURES ===================================
+_________ test_create[caren_agent-params0-extra_expected_values0-None] _________
+tests/sdk/conftest.py:139: in test_create
+    assert custom_model_dump(getattr(item, key)) == value
+E   AssertionError: assert None == 'openai/text-embedding-3-small'
+E    +  where None = custom_model_dump(None)
+E    +    where None = getattr(AgentState(id='55e7c2c6-cc9b-4177-b1fb-1eb7e5a7c9cd', agent_type='memgpt_agent', blocks=[], llm_config=None, memory=None, name='caren', sources=None, system=None, tags=[], tools=None, base_template_id=None, compaction_settings=None, created_at=datetime.datetime(2026, 1, 17, 12, 52, 3, 559585, tzinfo=TzInfo(0)), created_by_id=None, deployment_id=None, description=None, embedding=None, embedding_config=None, enable_sleeptime=None, entity_id=None, hidden=None, identities=None, identity_ids=None, last_run_completion=None, last_run_duration_ms=None, last_stop_reason=None, last_updated_by_id=None, managed_group=None, max_files_open=None, message_buffer_autoclear=None, message_ids=None, metadata=None, model='openai/gpt-4o-mini', api_model_settings=None, multi_agent_group=None, pending_approval=None, per_file_view_window_char_limit=None, project_id=None, response_format=None, secrets=None, template_id=None, timezone=None, tool_exec_environment_variables=None, tool_rules=None, updated_at=datetime.datetime(2026, 1, 17, 12, 52, 3, 559585, tzinfo=TzInfo(0)), tool_ids=[]), 'embedding')
+---------------------------- Captured stdout setup -----------------------------
+httpx - INFO - HTTP Request: POST http://localhost:8283/v1/agents/ "HTTP/1.1 200 OK"
+------------------------------ Captured log setup ------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/agents/ "HTTP/1.1 200 OK"
+----------------------------- Captured stdout call -----------------------------
+httpx - INFO - HTTP Request: POST http://localhost:8283/v1/agents/ "HTTP/1.1 200 OK"
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/agents/ "HTTP/1.1 200 OK"
+--------------------------- Captured stdout teardown ---------------------------
+httpx - INFO - HTTP Request: DELETE http://localhost:8283/v1/agents/200a98ee-8d15-4b82-923c-ad2e7f9827c2 "HTTP/1.1 200 OK"
+---------------------------- Captured log teardown -----------------------------
+INFO     httpx:_client.py:1025 HTTP Request: DELETE http://localhost:8283/v1/agents/200a98ee-8d15-4b82-923c-ad2e7f9827c2 "HTTP/1.1 200 OK"
+=============================== warnings summary ===============================
+letta/schemas/letta_message.py:207
+  /Users/seshendranalla/Development/letta/letta/schemas/letta_message.py:207: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    class ToolCallMessage(LettaMessage):
+
+../kelpie/tests/letta_compatibility/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:319
+../kelpie/tests/letta_compatibility/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:319
+../kelpie/tests/letta_compatibility/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:319
+../kelpie/tests/letta_compatibility/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:319
+  /Users/seshendranalla/Development/kelpie/tests/letta_compatibility/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:319: PydanticDeprecatedSince20: `json_encoders` is deprecated. See https://docs.pydantic.dev/2.12/concepts/serialization/#custom-serializers for alternatives. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    warnings.warn(
+
+letta/schemas/response_format.py:18
+  /Users/seshendranalla/Development/letta/letta/schemas/response_format.py:18: PydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    type: ResponseFormatType = Field(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/sdk/agents_test.py::test_create[caren_agent-params0-extra_expected_values0-None]
+======================== 1 failed, 6 warnings in 0.32s =========================
+
+OpenTelemetry configuration OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE is not supported by Datadog.
