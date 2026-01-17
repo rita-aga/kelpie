@@ -18,10 +18,10 @@ E   assert 0 == 2
 E    +  where 0 = len([])
 ----------------------------- Captured stdout call -----------------------------
 httpx - INFO - HTTP Request: GET http://localhost:8283/v1/blocks/ "HTTP/1.1 200 OK"
-httpx - INFO - HTTP Request: GET http://localhost:8283/v1/blocks/?after=3e86926e-c019-477e-bf9a-92cb83646011 "HTTP/1.1 200 OK"
+httpx - INFO - HTTP Request: GET http://localhost:8283/v1/blocks/?after=1e44e73a-8e56-4894-8cfa-81a27030088c "HTTP/1.1 200 OK"
 ------------------------------ Captured log call -------------------------------
 INFO     httpx:_client.py:1025 HTTP Request: GET http://localhost:8283/v1/blocks/ "HTTP/1.1 200 OK"
-INFO     httpx:_client.py:1025 HTTP Request: GET http://localhost:8283/v1/blocks/?after=3e86926e-c019-477e-bf9a-92cb83646011 "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://localhost:8283/v1/blocks/?after=1e44e73a-8e56-4894-8cfa-81a27030088c "HTTP/1.1 200 OK"
 =============================== warnings summary ===============================
 letta/schemas/letta_message.py:207
   /Users/seshendranalla/Development/letta/letta/schemas/letta_message.py:207: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
@@ -41,6 +41,6 @@ letta/schemas/response_format.py:18
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
 =========================== short test summary info ============================
 FAILED tests/sdk/blocks_test.py::test_list[query_params0-2] - assert 0 == 2
-======================== 1 failed, 6 warnings in 0.26s =========================
+======================== 1 failed, 6 warnings in 0.46s =========================
 
 OpenTelemetry configuration OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE is not supported by Datadog.

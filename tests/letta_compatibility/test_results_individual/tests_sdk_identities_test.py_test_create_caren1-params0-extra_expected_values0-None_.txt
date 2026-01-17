@@ -35,6 +35,6 @@ letta/schemas/response_format.py:18
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
 =========================== short test summary info ============================
 ERROR tests/sdk/identities_test.py::test_create[caren1-params0-extra_expected_values0-None]
-========================= 6 warnings, 1 error in 0.15s =========================
+========================= 6 warnings, 1 error in 0.70s =========================
 
 OpenTelemetry configuration OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE is not supported by Datadog.
