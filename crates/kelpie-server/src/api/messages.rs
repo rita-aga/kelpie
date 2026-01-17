@@ -94,7 +94,13 @@ enum SseMessage {
 #[derive(Debug, Clone, Serialize)]
 struct ToolCallInfo {
     name: String,
-    arguments: serde_json::Value,
+    /// Arguments serialized as JSON string (Letta SDK compatibility)
+    /// The Letta SDK sends arguments as a JSON string, not a nested object.
+    /// Clients expect to call JSON.parse(arguments) on this field.
+    arguments: String,
+    /// Tool call ID for tracking (Letta SDK compatibility)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
 }
 
 /// SSE event for stop reason
@@ -109,18 +115,14 @@ struct StopReasonEvent {
 /// Returns true if:
 /// - Tool name is in the client_tools array from the request, OR
 /// - Tool has default_requires_approval=true in its registration
-///
-/// Note: This is synchronous wrapper around async get_tool, using block_on
-fn tool_requires_approval(tool_name: &str, client_tools: &[ClientTool], state: &AppState) -> bool {
+async fn tool_requires_approval(tool_name: &str, client_tools: &[ClientTool], state: &AppState) -> bool {
     // Check if tool is in client_tools array from request
     if client_tools.iter().any(|ct| ct.name == tool_name) {
         return true;
     }
 
     // Check if tool has default_requires_approval=true
-    // Use runtime handle to call async get_tool synchronously
-    let runtime_handle = tokio::runtime::Handle::current();
-    if let Some(tool_info) = runtime_handle.block_on(state.get_tool(tool_name)) {
+    if let Some(tool_info) = state.get_tool(tool_name).await {
         if tool_info.default_requires_approval {
             return true;
         }
@@ -150,16 +152,23 @@ pub async fn list_messages(
 /// Builds a prompt from memory blocks and sends to configured LLM.
 /// Requires LLM to be configured via ANTHROPIC_API_KEY or OPENAI_API_KEY.
 /// Supports multiple request formats for letta-code compatibility.
-/// Supports SSE streaming when stream_steps=true query parameter is set.
-#[instrument(skip(state, query, request), fields(agent_id = %agent_id, stream = query.stream_steps), level = "info")]
+/// Supports SSE streaming when stream_steps=true query parameter is set,
+/// OR when streaming=true is passed in the request body (Letta SDK compatibility).
+#[instrument(skip(state, query, request), fields(agent_id = %agent_id), level = "info")]
 pub async fn send_message(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
     Query(query): Query<SendMessageQuery>,
     Json(request): Json<CreateMessageRequest>,
 ) -> Result<Response, ApiError> {
-    // If streaming is requested, delegate to SSE handler
-    if query.stream_steps {
+    // If streaming is requested (via query param OR request body), delegate to SSE handler
+    // This provides compatibility with both:
+    // - letta-code (uses stream_steps query param)
+    // - Letta SDK (uses streaming field in request body)
+    let should_stream = query.stream_steps || request.streaming;
+    tracing::info!(stream = should_stream, "Processing message request");
+
+    if should_stream {
         return send_message_streaming(state, agent_id, request).await;
     }
 
@@ -337,7 +346,7 @@ pub async fn handle_message_request(
                     let mut server_tools = Vec::new();
 
                     for tool_call in &response.tool_calls {
-                        if tool_requires_approval(&tool_call.name, &request.client_tools, &state) {
+                        if tool_requires_approval(&tool_call.name, &request.client_tools, &state).await {
                             approval_needed.push(tool_call.clone());
                         } else {
                             server_tools.push(tool_call.clone());
@@ -818,7 +827,7 @@ async fn generate_sse_events(
                 let mut server_tools = Vec::new();
 
                 for tool_call in &response.tool_calls {
-                    if tool_requires_approval(&tool_call.name, client_tools, state) {
+                    if tool_requires_approval(&tool_call.name, client_tools, state).await {
                         approval_needed.push(tool_call.clone());
                     } else {
                         server_tools.push(tool_call.clone());
@@ -834,12 +843,15 @@ async fn generate_sse_events(
                     );
 
                     for tool_call in &approval_needed {
+                        // Serialize arguments to JSON string (Letta SDK compatibility)
+                        let args_str = serde_json::to_string(&tool_call.input).unwrap_or_default();
                         let approval_msg = SseMessage::ApprovalRequestMessage {
                             id: Uuid::new_v4().to_string(),
                             tool_call_id: tool_call.id.clone(),
                             tool_call: ToolCallInfo {
                                 name: tool_call.name.clone(),
-                                arguments: tool_call.input.clone(),
+                                arguments: args_str,
+                                tool_call_id: Some(tool_call.id.clone()),
                             },
                         };
                         if let Ok(json) = serde_json::to_string(&approval_msg) {
@@ -854,11 +866,14 @@ async fn generate_sse_events(
 
                 // Send tool call events for server-side tools
                 for tool_call in &server_tools {
+                    // Serialize arguments to JSON string (Letta SDK compatibility)
+                    let args_str = serde_json::to_string(&tool_call.input).unwrap_or_default();
                     let tool_msg = SseMessage::ToolCallMessage {
                         id: Uuid::new_v4().to_string(),
                         tool_call: ToolCallInfo {
                             name: tool_call.name.clone(),
-                            arguments: tool_call.input.clone(),
+                            arguments: args_str,
+                            tool_call_id: Some(tool_call.id.clone()),
                         },
                     };
                     if let Ok(json) = serde_json::to_string(&tool_msg) {

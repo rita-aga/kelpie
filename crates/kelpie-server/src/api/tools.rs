@@ -90,8 +90,9 @@ pub struct RegisterToolRequest {
     /// Runtime (python, etc.)
     #[serde(default)]
     pub runtime: Option<String>,
-    /// Package requirements
+    /// Package requirements (reserved for future use)
     #[serde(default)]
+    #[allow(dead_code)]
     pub requirements: Vec<String>,
     /// Whether tool requires user approval (for client-side tools)
     #[serde(default)]
@@ -119,11 +120,13 @@ pub struct UpsertToolRequest {
     /// Alias for source
     #[serde(default, alias = "source_code")]
     pub source_code: Option<String>,
-    /// Runtime (python, etc.)
+    /// Runtime (python, etc.) - reserved for future use
     #[serde(default)]
+    #[allow(dead_code)]
     pub runtime: Option<String>,
-    /// Package requirements
+    /// Package requirements (reserved for future use)
     #[serde(default)]
+    #[allow(dead_code)]
     pub requirements: Option<Vec<String>>,
     /// Whether tool requires user approval (for client-side tools)
     #[serde(default)]
@@ -161,12 +164,23 @@ pub fn router() -> Router<AppState> {
 /// GET /v1/tools
 /// GET /v1/tools?name=<name>
 /// GET /v1/tools?id=<id>
-#[instrument(skip(state, query), level = "info")]
+#[instrument(skip(state), level = "info")]
 async fn list_tools(
     State(state): State<AppState>,
     Query(query): Query<ListToolsQuery>,
 ) -> Json<ToolListResponse> {
+    // Debug: Log the query parameters received
+    tracing::info!(?query, "list_tools called with query params");
+
     let tools = state.list_tools().await;
+
+    // Debug: Log total tools retrieved before filtering
+    let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+    tracing::info!(
+        total_tools = tools.len(),
+        ?tool_names,
+        "list_tools retrieved from state"
+    );
 
     // Apply filters
     let filtered: Vec<ToolResponse> = tools
