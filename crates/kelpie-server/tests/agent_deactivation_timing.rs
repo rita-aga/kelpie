@@ -39,6 +39,7 @@ async fn test_deactivate_during_create_crash() {
                     name: format!("deactivate-test-{}", i),
                     agent_type: AgentType::LettaV1Agent,
                     model: None,
+                    embedding: None,
                     system: Some(format!("System prompt {}", i)),
                     description: Some(format!("Description {}", i)),
                     memory_blocks: vec![
@@ -204,6 +205,7 @@ async fn test_update_with_forced_deactivation() {
                 name: "update-deactivation-test".to_string(),
                 agent_type: AgentType::ReactAgent,
                 model: None,
+                embedding: None,
                 system: Some("Original system".to_string()),
                 description: Some("Original description".to_string()),
                 memory_blocks: vec![CreateBlockRequest {

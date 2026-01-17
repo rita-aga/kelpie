@@ -45,6 +45,7 @@ async fn test_delete_crash_between_clear_and_deactivate() {
                     name: format!("delete-test-{}", i),
                     agent_type: AgentType::LettaV1Agent,
                     model: None,
+                    embedding: None,
                     system: None,
                     description: None,
                     memory_blocks: vec![],
@@ -143,6 +144,7 @@ async fn test_delete_then_recreate() {
                     name: format!("recreate-test-{}", i),
                     agent_type: AgentType::LettaV1Agent,
                     model: None,
+                    embedding: None,
                     system: Some(format!("Version 1")),
                     description: Some(format!("First version")),
                     memory_blocks: vec![],
@@ -190,6 +192,7 @@ async fn test_delete_then_recreate() {
                     name: format!("recreate-test-{}", i),
                     agent_type: AgentType::ReactAgent, // Different type
                     model: None,
+                    embedding: None,
                     system: Some(format!("Version 2")), // Different system
                     description: Some(format!("Second version")),
                     memory_blocks: vec![],

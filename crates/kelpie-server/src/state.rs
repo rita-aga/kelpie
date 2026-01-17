@@ -674,6 +674,7 @@ impl AppState {
                 name: agent.name.clone(),
                 agent_type: agent.agent_type.clone(),
                 model: agent.model.clone(),
+                embedding: agent.embedding.clone(),
                 system: agent.system.clone(),
                 description: agent.description.clone(),
                 tool_ids: agent.tool_ids.clone(),
@@ -737,6 +738,7 @@ impl AppState {
             name: metadata.name,
             agent_type: metadata.agent_type,
             model: metadata.model,
+            embedding: metadata.embedding,
             system: metadata.system,
             description: metadata.description,
             project_id: None, // Phase 6: Projects not stored in legacy storage yet
@@ -2442,6 +2444,7 @@ mod tests {
             name: name.to_string(),
             agent_type: AgentType::default(),
             model: None,
+            embedding: None,
             system: None,
             description: None,
             project_id: None,

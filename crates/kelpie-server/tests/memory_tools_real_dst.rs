@@ -46,6 +46,7 @@ fn create_test_agent(name: &str) -> AgentState {
         name: name.to_string(),
         agent_type: AgentType::default(),
         model: None,
+        embedding: None,
         system: None,
         description: None,
         memory_blocks: vec![CreateBlockRequest {

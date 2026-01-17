@@ -24,6 +24,7 @@ fn create_agent_with_type(name: &str, agent_type: AgentType) -> AgentState {
         name: name.to_string(),
         agent_type,
         model: None,
+        embedding: None,
         system: None,
         description: None,
         memory_blocks: vec![CreateBlockRequest {

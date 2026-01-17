@@ -115,7 +115,11 @@ struct StopReasonEvent {
 /// Returns true if:
 /// - Tool name is in the client_tools array from the request, OR
 /// - Tool has default_requires_approval=true in its registration
-async fn tool_requires_approval(tool_name: &str, client_tools: &[ClientTool], state: &AppState) -> bool {
+async fn tool_requires_approval(
+    tool_name: &str,
+    client_tools: &[ClientTool],
+    state: &AppState,
+) -> bool {
     // Check if tool is in client_tools array from request
     if client_tools.iter().any(|ct| ct.name == tool_name) {
         return true;
@@ -346,7 +350,9 @@ pub async fn handle_message_request(
                     let mut server_tools = Vec::new();
 
                     for tool_call in &response.tool_calls {
-                        if tool_requires_approval(&tool_call.name, &request.client_tools, &state).await {
+                        if tool_requires_approval(&tool_call.name, &request.client_tools, &state)
+                            .await
+                        {
                             approval_needed.push(tool_call.clone());
                         } else {
                             server_tools.push(tool_call.clone());

@@ -103,6 +103,8 @@ pub struct CreateAgentRequest {
     pub agent_type: AgentType,
     /// Model to use (e.g., "openai/gpt-4o")
     pub model: Option<String>,
+    /// Embedding model to use (e.g., "openai/text-embedding-3-small")
+    pub embedding: Option<String>,
     /// System prompt
     pub system: Option<String>,
     /// Description of the agent
@@ -135,6 +137,8 @@ fn default_agent_name() -> String {
 pub struct UpdateAgentRequest {
     /// New name
     pub name: Option<String>,
+    /// New embedding model
+    pub embedding: Option<String>,
     /// New system prompt
     pub system: Option<String>,
     /// New description
@@ -158,6 +162,8 @@ pub struct AgentState {
     pub agent_type: AgentType,
     /// Model being used
     pub model: Option<String>,
+    /// Embedding model being used
+    pub embedding: Option<String>,
     /// System prompt
     pub system: Option<String>,
     /// Description
@@ -195,6 +201,7 @@ impl AgentState {
             name: request.name,
             agent_type: request.agent_type,
             model: request.model,
+            embedding: request.embedding,
             system: request.system,
             description: request.description,
             project_id: request.project_id,
@@ -211,6 +218,9 @@ impl AgentState {
     pub fn apply_update(&mut self, update: UpdateAgentRequest) {
         if let Some(name) = update.name {
             self.name = name;
+        }
+        if let Some(embedding) = update.embedding {
+            self.embedding = Some(embedding);
         }
         if let Some(system) = update.system {
             self.system = Some(system);
@@ -762,6 +772,8 @@ pub struct AgentImportData {
     pub agent_type: AgentType,
     /// Model being used
     pub model: Option<String>,
+    /// Embedding model
+    pub embedding: Option<String>,
     /// System prompt
     pub system: Option<String>,
     /// Description
@@ -1243,7 +1255,8 @@ mod tests {
             name: "test-agent".to_string(),
             agent_type: AgentType::LettaV1Agent,
             model: Some("openai/gpt-4o".to_string()),
-            system: Some("You are a helpful assistant.".to_string()),
+            embedding: None,
+            system: Some("You are a helpful assistant".to_string()),
             description: Some("A test agent".to_string()),
             project_id: None,
             memory_blocks: vec![CreateBlockRequest {
@@ -1270,6 +1283,7 @@ mod tests {
             name: "test-agent".to_string(),
             agent_type: AgentType::default(),
             model: None,
+            embedding: None,
             system: None,
             description: None,
             project_id: None,

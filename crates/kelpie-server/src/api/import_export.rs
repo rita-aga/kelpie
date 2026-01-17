@@ -108,6 +108,7 @@ pub async fn import_agent(
         name: agent_data.name.clone(),
         agent_type: agent_data.agent_type,
         model: agent_data.model,
+        embedding: agent_data.embedding,
         system: agent_data.system,
         description: agent_data.description,
         memory_blocks,
@@ -482,6 +483,7 @@ mod tests {
                 name: format!("{}-imported", exported.agent.name),
                 agent_type: exported.agent.agent_type,
                 model: exported.agent.model,
+                embedding: exported.agent.embedding,
                 system: exported.agent.system,
                 description: exported.agent.description,
                 blocks: exported

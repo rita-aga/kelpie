@@ -55,6 +55,9 @@ pub struct AgentMetadata {
     /// LLM model to use (e.g., "claude-3-opus")
     pub model: Option<String>,
 
+    /// Embedding model to use (e.g., "openai/text-embedding-3-small")
+    pub embedding: Option<String>,
+
     /// System prompt override
     pub system: Option<String>,
 
@@ -120,6 +123,7 @@ impl AgentMetadata {
             name,
             agent_type,
             model: None,
+            embedding: None,
             system: None,
             description: None,
             tool_ids: Vec::new(),
