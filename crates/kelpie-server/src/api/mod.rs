@@ -208,6 +208,13 @@ impl ApiError {
             body: ErrorResponse::new("conflict", message),
         }
     }
+
+    pub fn unprocessable_entity(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            body: ErrorResponse::new("unprocessable_entity", message),
+        }
+    }
 }
 
 impl std::fmt::Display for ApiError {

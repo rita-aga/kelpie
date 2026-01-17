@@ -306,12 +306,14 @@ impl Block {
     /// Create a block from a create request
     pub fn from_request(request: CreateBlockRequest) -> Self {
         let now = Utc::now();
+        // Default limit to 20000 if not specified (Letta compatibility)
+        let limit = request.limit.or(Some(20000));
         Self {
             id: Uuid::new_v4().to_string(),
             label: request.label,
             value: request.value,
             description: request.description,
-            limit: request.limit,
+            limit,
             created_at: now,
             updated_at: now,
         }

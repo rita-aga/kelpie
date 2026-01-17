@@ -67,7 +67,7 @@ async fn create_block(
     // Check size limit if specified
     if let Some(limit) = request.limit {
         if request.value.len() > limit {
-            return Err(ApiError::bad_request(format!(
+            return Err(ApiError::unprocessable_entity(format!(
                 "block value exceeds limit ({} > {})",
                 request.value.len(),
                 limit
@@ -137,7 +137,7 @@ async fn update_block(
         let limit = request.limit.or(current.limit);
         if let Some(l) = limit {
             if new_value.len() > l {
-                return Err(ApiError::bad_request(format!(
+                return Err(ApiError::unprocessable_entity(format!(
                     "block value exceeds limit ({} > {})",
                     new_value.len(),
                     l
