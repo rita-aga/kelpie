@@ -2,9 +2,9 @@ name: Letta Compatibility
 
 on:
   push:
-    branches: [main]
+    branches: [master, main]
   pull_request:
-    branches: [main]
+    branches: [master, main]
   schedule:
     - cron: '0 0 * * 0' # Weekly on Sundays
 
