@@ -1153,18 +1153,13 @@ impl Project {
 // =========================================================================
 
 /// Routing policy for agent groups
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutingPolicy {
+    #[default]
     RoundRobin,
     Broadcast,
     Intelligent,
-}
-
-impl Default for RoutingPolicy {
-    fn default() -> Self {
-        Self::RoundRobin
-    }
 }
 
 /// Request to create an agent group

@@ -81,9 +81,10 @@ pub struct CustomToolDefinition {
 }
 
 /// Signals that tools can emit to control agent loop behavior
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum ToolSignal {
     /// No signal - normal execution
+    #[default]
     None,
     /// Pause heartbeats for the specified duration
     PauseHeartbeats {
@@ -92,12 +93,6 @@ pub enum ToolSignal {
         /// Duration in minutes (for logging/display)
         minutes: u64,
     },
-}
-
-impl Default for ToolSignal {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// Result of tool execution
