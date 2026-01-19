@@ -32,5 +32,8 @@ once_cell = { workspace = true, optional = true }
 default = []
 otel = ["opentelemetry", "opentelemetry-otlp", "opentelemetry_sdk", "opentelemetry-prometheus", "prometheus", "tracing-opentelemetry", "tracing-subscriber", "once_cell"]
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(madsim)'] }
+
 [dev-dependencies]
 proptest = { workspace = true }
