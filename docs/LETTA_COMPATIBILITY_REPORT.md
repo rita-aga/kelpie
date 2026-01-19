@@ -1,6 +1,5 @@
-# Letta SDK Compatibility Report - CORRECTED
+# Letta SDK Compatibility Report
 
-**Date:** 2026-01-17
 **Status:** 🎉 **43/52 Tests Passing (82.7% Pass Rate!)**
 
 This document outlines the **actual** state of compatibility between Kelpie and the official Letta SDK (v0.16.2), based on empirical testing with full module runs.
@@ -8,9 +7,6 @@ This document outlines the **actual** state of compatibility between Kelpie and 
 ---
 
 ## Executive Summary
-
-### Critical Discovery
-Previous analysis was **incorrect**. List operations work perfectly! The apparent failures were due to test isolation issues in the individual test runner.
 
 ### Actual Results (Running Tests Properly)
 When tests are run as **full modules** (not in isolation), Kelpie achieves:
@@ -139,10 +135,6 @@ pytest tests/sdk/groups_test.py -v
 
 **Root Cause:** Letta SDK client doesn't have `client.groups` attribute yet. This is a **Letta SDK issue**, not a Kelpie server issue.
 
-**Fix Required:**
-1. Implement `client.groups` in Letta SDK (letta-client package)
-2. Then implement server endpoints in Kelpie
-
 **Result:** 0 passed, 1 skipped, 7 errors (SDK not ready)
 
 ---
@@ -156,10 +148,6 @@ pytest tests/sdk/identities_test.py -v
 
 **Root Cause:** Letta SDK client doesn't have `client.identities` attribute yet. This is a **Letta SDK issue**, not a Kelpie server issue.
 
-**Fix Required:**
-1. Implement `client.identities` in Letta SDK (letta-client package)
-2. Then implement server endpoints in Kelpie
-
 **Result:** 0 passed, 0 skipped, 10 errors (SDK not ready)
 
 ---
@@ -167,20 +155,7 @@ pytest tests/sdk/identities_test.py -v
 ## What Was Wrong With Previous Analysis?
 
 ### The Mistake
-Previous handoff documents (V2, V3, FINAL) all claimed list operations were broken server-side:
-
-```rust
-// WRONG ANALYSIS - This was incorrect!
-pub async fn list_agents(...) -> Result<...> {
-    // BUG HERE: Not reading from same place!
-    let agents = state.in_memory_cache.values(); // ❌ Wrong storage
-
-    // Should do:
-    let agents = state.storage.list_all_agents().await?; // ✅
-}
-```
-
-**This analysis was completely wrong.** The server code already reads from storage correctly.
+Previous handoff documents (V2, V3, FINAL) all claimed list operations were broken server-side. **This analysis was completely wrong.** The server code already reads from storage correctly.
 
 ### The Reality
 **List operations already work perfectly!** The server code reads from storage correctly via `state.list_agents_async(...)` and related methods.
@@ -227,102 +202,13 @@ When run as **full modules** with shared pytest fixtures:
 **Blocker:** Letta SDK client needs `client.groups` attribute first
 **Priority:** P1 (after SDK ready)
 
-**Required Endpoints:**
-```
-POST   /v1/groups/          - Create group
-GET    /v1/groups/          - List groups
-GET    /v1/groups/{id}      - Get group
-PUT    /v1/groups/{id}      - Update group
-DELETE /v1/groups/{id}      - Delete group
-```
-
-**Schema:**
-```rust
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct GroupState {
-    pub id: String,
-    pub name: String,
-    pub group_type: String,  // "round_robin" | "supervisor"
-    pub agent_ids: Vec<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-```
-
 ### Identities API - Not Implemented Yet
 **Tests:** 10 errors
 **Issue:** Kelpie server doesn't have `/v1/identities/*` endpoints
 **Blocker:** Letta SDK client needs `client.identities` attribute first
 **Priority:** P2 (after SDK ready)
 
-**Required Endpoints:**
-```
-POST   /v1/identities/          - Create identity
-GET    /v1/identities/          - List identities
-GET    /v1/identities/{id}      - Get identity
-PUT    /v1/identities/{id}      - Update identity
-DELETE /v1/identities/{id}      - Delete identity
-```
-
 **Note:** Both Groups and Identities are **blocked on Letta SDK**, not Kelpie server limitations.
-
----
-
-## How to Test Properly
-
-### ❌ Wrong Way (Isolation Issues)
-```bash
-# DON'T use individual test runner for pass/fail assessment
-cd /Users/seshendranalla/Development/kelpie/tests/letta_compatibility
-python3 run_individual_tests_fixed.py
-
-# Issues:
-# - Tests run in isolation (no shared fixtures)
-# - List tests fail because create tests didn't run first
-# - False negative results
-```
-
-### ✅ Right Way (Full Module Runs)
-```bash
-cd /Users/seshendranalla/Development/letta
-export LETTA_SERVER_URL=http://localhost:8283
-
-# Run full modules to get accurate results
-pytest tests/sdk/agents_test.py -v      # 6 passed, 1 skipped
-pytest tests/sdk/blocks_test.py -v      # 9 passed, 1 skipped
-pytest tests/sdk/tools_test.py -v       # 9 passed, 0 skipped
-pytest tests/sdk/mcp_servers_test.py -v # 19 passed, 0 skipped
-pytest tests/sdk/search_test.py -v      # 0 passed, 7 skipped (expected)
-```
-
----
-
-## API Compatibility Matrix
-
-### ✅ Fully Implemented Endpoints
-
-| Endpoint | Method | Kelpie Support | Test Coverage |
-|----------|--------|----------------|---------------|
-| `/v1/agents` | GET, POST | ✅ Full | 100% |
-| `/v1/agents/{id}` | GET, PATCH, DELETE | ✅ Full | 100% |
-| `/v1/blocks` | GET, POST | ✅ Full | 100% |
-| `/v1/blocks/{id}` | GET, PATCH, DELETE | ✅ Full | 100% |
-| `/v1/tools` | GET, POST, DELETE | ✅ Full | 100% |
-| `/v1/tools/{id}` | GET, PATCH | ✅ Full | 100% |
-| `/v1/mcp-servers` | GET, POST | ✅ Full | 100% |
-| `/v1/mcp-servers/{id}` | GET, PATCH, DELETE | ✅ Full | 100% |
-| `/v1/mcp-servers/{id}/tools` | GET | ✅ Full | 100% |
-
-### ❌ Missing Endpoints
-
-| Resource | Endpoints | Impact | Blocker |
-|----------|-----------|--------|---------|
-| **Groups** | `/v1/groups/*` (5 endpoints) | ⚠️ Medium | SDK missing `client.groups` |
-| **Identities** | `/v1/identities/*` (5 endpoints) | ⚠️ Medium | SDK missing `client.identities` |
-| **Sources** | `/v1/sources/*` | ℹ️ Low | Document uploads (future) |
-| **Runs** | `/v1/runs/*` | ℹ️ Low | Observability (future) |
-| **Jobs** | `/v1/jobs/*` | ℹ️ Low | Background tasks (future) |
-| **Templates** | `/v1/templates/*` | ℹ️ Low | Agent presets (future) |
 
 ---
 
@@ -344,77 +230,13 @@ class Letta:
 ### Step 2: Implement Groups API (When SDK Ready)
 Add 5 CRUD endpoints following the same pattern as agents/blocks/tools.
 
-**Files to create/modify:**
-- `crates/kelpie-server/src/letta_compatibility/schemas.rs` - Add `GroupState`
-- `crates/kelpie-server/src/letta_compatibility/handlers/groups.rs` - New file with 5 handlers
-- `crates/kelpie-server/src/letta_compatibility/routes.rs` - Add routes
-- `crates/kelpie-server/src/state.rs` - Add groups storage
-
-**Expected Impact:** +7 tests → 50/59 (85%)
-
 ### Step 3: Implement Identities API (When SDK Ready)
 Add 5 CRUD endpoints following the same pattern.
-
-**Expected Impact:** +10 tests → 60/69 (87%)
 
 ### Step 4: Final Testing
 Run full test suite to verify complete compatibility.
 
 **Target:** 60/69 tests (87%) or better
-
----
-
-## Files & References
-
-### Test Scripts
-- **✅ Proper testing:** `pytest tests/sdk/{module}_test.py -v`
-- **❌ Individual runner:** `tests/letta_compatibility/run_individual_tests_fixed.py` (creates false failures!)
-
-### Documentation
-- **This report:** `docs/LETTA_COMPATIBILITY_REPORT.md` ← **Current (corrected)**
-- **Outdated handoffs (wrong analysis):**
-  - `tests/letta_compatibility/AGENT_HANDOFF_V2.md`
-  - `tests/letta_compatibility/AGENT_HANDOFF_V3.md`
-  - `tests/letta_compatibility/HANDOFF_FINAL.md`
-
-### Letta SDK
-- **Tests:** `/Users/seshendranalla/Development/letta/tests/sdk/`
-- **Install dev SDK:**
-  ```bash
-  cd /Users/seshendranalla/Development/kelpie/tests/letta_compatibility
-  .venv/bin/pip install -e /Users/seshendranalla/Development/letta
-  ```
-
----
-
-## Key Commands
-
-### Start Kelpie Server
-```bash
-cd /Users/seshendranalla/Development/kelpie
-cargo run -p kelpie-server > /tmp/kelpie-server.log 2>&1 &
-
-# Verify health
-curl http://localhost:8283/health | jq .
-# Expected: {"status":"ok","version":"0.1.0","uptime_seconds":N}
-```
-
-### Run Full Test Suite (Correct Method)
-```bash
-cd /Users/seshendranalla/Development/letta
-export LETTA_SERVER_URL=http://localhost:8283
-
-# Test each module
-pytest tests/sdk/agents_test.py -v       # 6/7 pass
-pytest tests/sdk/blocks_test.py -v       # 9/10 pass
-pytest tests/sdk/tools_test.py -v        # 9/9 pass
-pytest tests/sdk/mcp_servers_test.py -v  # 19/19 pass
-pytest tests/sdk/search_test.py -v       # 0/7 pass (all skip)
-
-# Groups/Identities (after SDK updated):
-pytest tests/sdk/groups_test.py -v       # Currently: 7 errors (SDK issue)
-pytest tests/sdk/identities_test.py -v   # Currently: 10 errors (SDK issue)
-```
 
 ---
 
@@ -440,5 +262,3 @@ pytest tests/sdk/identities_test.py -v   # Currently: 10 errors (SDK issue)
 3. Achieve 60/69 tests passing (87%)
 
 **No critical bugs. No broken core features. Just missing Groups/Identities APIs.**
-
-The previous analysis claiming list operations were broken was incorrect. All list operations work perfectly when tests are run properly as full modules.

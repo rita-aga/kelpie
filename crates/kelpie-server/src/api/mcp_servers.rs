@@ -6,7 +6,7 @@
 use super::ApiError;
 use axum::{
     extract::{Path, State},
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post, put},
     Json, Router,
 };
 use kelpie_server::models::{MCPServer, MCPServerConfig};
@@ -18,7 +18,6 @@ use tracing::instrument;
 #[derive(Debug, Deserialize)]
 pub struct CreateMCPServerRequest {
     pub server_name: String,
-    #[serde(flatten)]
     pub config: MCPServerConfig,
 }
 
@@ -27,7 +26,7 @@ pub struct CreateMCPServerRequest {
 pub struct UpdateMCPServerRequest {
     #[serde(default)]
     pub server_name: Option<String>,
-    #[serde(flatten)]
+    #[serde(default)]
     pub config: Option<MCPServerConfig>,
 }
 
@@ -54,18 +53,11 @@ impl From<MCPServer> for MCPServerResponse {
     }
 }
 
-/// List MCP servers response
-#[derive(Debug, Serialize)]
-pub struct MCPServerListResponse {
-    pub items: Vec<MCPServerResponse>,
-    pub count: usize,
-}
-
 /// Create router for MCP servers endpoints
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_servers).post(create_server))
-        .route("/:server_id", get(get_server).put(update_server).delete(delete_server))
+        .route("/:server_id", get(get_server).put(update_server).patch(update_server).delete(delete_server))
         .route("/:server_id/tools", get(list_server_tools))
 }
 
@@ -73,12 +65,11 @@ pub fn router() -> Router<AppState> {
 ///
 /// GET /v1/mcp-servers/
 #[instrument(skip(state), level = "info")]
-async fn list_servers(State(state): State<AppState>) -> Json<MCPServerListResponse> {
+async fn list_servers(State(state): State<AppState>) -> Json<Vec<MCPServerResponse>> {
     let servers = state.list_mcp_servers().await;
     let items: Vec<MCPServerResponse> = servers.into_iter().map(MCPServerResponse::from).collect();
-    let count = items.len();
 
-    Json(MCPServerListResponse { items, count })
+    Json(items)
 }
 
 /// Create a new MCP server
@@ -129,7 +120,7 @@ async fn get_server(
 
 /// Update an MCP server
 ///
-/// PUT /v1/mcp-servers/{server_id}
+/// PUT/PATCH /v1/mcp-servers/{server_id}
 #[instrument(skip(state, request), fields(server_id = %server_id), level = "info")]
 async fn update_server(
     State(state): State<AppState>,
@@ -228,9 +219,11 @@ mod tests {
 
         let body = serde_json::json!({
             "server_name": "test-server",
-            "mcp_server_type": "stdio",
-            "command": "python",
-            "args": ["server.py"]
+            "config": {
+                "mcp_server_type": "stdio",
+                "command": "python",
+                "args": ["server.py"]
+            }
         });
 
         let response = app

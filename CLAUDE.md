@@ -58,7 +58,10 @@ kelpie/
 │   ├── kelpie-dst/       # Deterministic Simulation Testing
 │   ├── kelpie-server/    # Standalone server binary
 │   └── kelpie-cli/       # CLI tools
-├── docs/adr/             # Architecture Decision Records
+├── docs/                 # Documentation
+│   ├── adr/              # Architecture Decision Records
+│   ├── VISION.md         # Project goals and architecture (moved from root)
+│   └── LETTA_MIGRATION_GUIDE.md # Letta migration guide (moved from root)
 ├── images/               # Base image build system
 │   ├── Dockerfile        # Alpine base image
 │   ├── build.sh          # Multi-arch build script
@@ -378,7 +381,7 @@ fn test_actor_under_faults() {
 #### 1. Check for Vision Files
 
 - **Read `.vision/CONSTRAINTS.md`** - Non-negotiable rules and principles
-- **Read `VISION.md`** - Project goals and architecture
+- **Read `VISION.md`** - Project goals and architecture (in root)
 - **Read existing `.progress/` plans** - Understand current state
 
 #### 2. Create a Numbered Plan File

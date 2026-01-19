@@ -123,7 +123,7 @@ The agent framework is **~80% complete**. Core functionality works today:
 | `kelpie-cluster` | Node coordination | Complete |
 | `kelpie-server` | REST API + agent loop | Complete |
 | `kelpie-dst` | Simulation testing | Complete |
-| `kelpie-agent` | Agent type abstractions | Planned |
+| `kelpie-agent` | Agent type abstractions | Stub (Phase 5) |
 | `kelpie-wasm` | WASM actors | Planned |
 
 ## API Compatibility
@@ -145,6 +145,9 @@ POST /v1/agents/{id}/messages/stream       # SSE streaming
 GET  /v1/blocks                            # Standalone blocks
 POST /v1/blocks
 GET  /v1/agents/{id}/core-memory/blocks/{label}  # Access by label
+GET  /v1/tools                             # List tools
+GET  /v1/mcp-servers                       # List MCP servers
+POST /v1/mcp-servers                       # Connect new MCP server
 ```
 
 ### letta-code CLI
@@ -251,9 +254,17 @@ Environment variables:
 
 ## Storage
 
-> **Current limitation:** Server uses in-memory storage (HashMap). Data is lost on restart.
->
-> The FoundationDB backend is implemented (`kelpie-storage/src/fdb.rs`) but not yet wired to the server.
+Kelpie supports two storage backends:
+
+1. **In-Memory (Default)**: Fast, non-persistent. Data is lost on restart.
+2. **FoundationDB**: Persistent, linearizable, distributed.
+
+To use FoundationDB:
+
+```bash
+# Build/run with fdb feature
+cargo run -p kelpie-server --features fdb -- --fdb-cluster-file /path/to/fdb.cluster
+```
 
 ## Roadmap
 
