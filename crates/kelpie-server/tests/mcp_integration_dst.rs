@@ -3,6 +3,7 @@
 //! TigerStyle: DST-first development - write tests before implementation.
 //!
 //! These tests verify that MCP tools work correctly under fault conditions.
+#![cfg(feature = "dst")]
 
 use kelpie_core::error::Error as CoreError;
 use kelpie_dst::fault::{FaultConfig, FaultType};
@@ -63,7 +64,7 @@ async fn test_dst_mcp_tool_discovery_basic() {
 
     let result = Simulation::new(config)
         .run_async(|env| async move {
-            let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng());
+            let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng_raw());
 
             // Register a server with tools
             client.register_server(create_test_server("server1"));
@@ -95,7 +96,7 @@ async fn test_dst_mcp_tool_execution_basic() {
 
     let result = Simulation::new(config)
         .run_async(|env| async move {
-            let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng());
+            let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng_raw());
             client.register_server(create_test_server("server1"));
             client.connect("server1").await.map_err(to_core_error)?;
 
@@ -122,7 +123,7 @@ async fn test_dst_mcp_multiple_servers() {
 
     let result = Simulation::new(config)
         .run_async(|env| async move {
-            let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng());
+            let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng_raw());
 
             // Register multiple servers
             client.register_server(create_test_server("server1"));
@@ -176,7 +177,7 @@ async fn test_dst_mcp_server_crash_during_connect() {
         .run_async(move |env| {
             let fo = fo.clone();
             async move {
-                let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng());
+                let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng_raw());
                 client.register_server(create_test_server("server1"));
 
                 // Connect should fail due to server crash
@@ -220,7 +221,7 @@ async fn test_dst_mcp_tool_fail_during_execution() {
         .run_async(move |env| {
             let fo = fo.clone();
             async move {
-                let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng());
+                let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng_raw());
                 client.register_server(create_test_server("server1"));
 
                 // Connect should succeed (no fault for connect)
@@ -260,7 +261,7 @@ async fn test_dst_mcp_tool_timeout() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::McpToolTimeout, 1.0).with_filter("mcp_execute"))
         .run_async(|env| async move {
-            let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng());
+            let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng_raw());
             client.register_server(create_test_server("server1"));
             client.connect("server1").await.map_err(to_core_error)?;
 
@@ -295,7 +296,7 @@ async fn test_dst_mcp_network_partition() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::NetworkPartition, 1.0).with_filter("mcp_connect"))
         .run_async(|env| async move {
-            let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng());
+            let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng_raw());
             client.register_server(create_test_server("server1"));
 
             // Connection should fail due to partition
@@ -325,7 +326,7 @@ async fn test_dst_mcp_packet_loss_during_discovery() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::NetworkPacketLoss, 1.0).with_filter("mcp_discover"))
         .run_async(|env| async move {
-            let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng());
+            let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng_raw());
             client.register_server(create_test_server("server1"));
 
             // Connection should succeed
@@ -353,7 +354,7 @@ async fn test_dst_mcp_graceful_degradation() {
 
     let result = Simulation::new(config)
         .run_async(|env| async move {
-            let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng());
+            let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng_raw());
 
             // Register multiple servers, one is offline
             client.register_server(create_test_server("server1"));
@@ -411,7 +412,7 @@ async fn test_dst_mcp_mixed_tools_with_faults() {
             let sc = sc.clone();
             let fc = fc.clone();
             async move {
-                let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng());
+                let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng_raw());
 
                 client.register_server(create_test_server("server1"));
                 client.register_server(create_test_server("server2"));
@@ -479,7 +480,7 @@ async fn test_dst_mcp_determinism() {
             .run_async(move |env| {
                 let log = log.clone();
                 async move {
-                    let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng());
+                    let mut client = SimMcpClient::new(env.faults.clone(), env.fork_rng_raw());
                     client.register_server(create_test_server("server1"));
                     client.connect("server1").await.map_err(to_core_error)?;
 
@@ -521,7 +522,7 @@ async fn test_dst_mcp_environment_builder() {
             let client = SimMcpEnvironment::new()
                 .with_server(create_test_server("alpha"))
                 .with_server(create_test_server("beta"))
-                .build(env.faults.clone(), env.fork_rng());
+                .build(env.faults.clone(), env.fork_rng_raw());
 
             // Verify servers were registered
             let servers = client.servers();

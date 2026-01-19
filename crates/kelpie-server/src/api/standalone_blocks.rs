@@ -20,8 +20,10 @@ pub struct ListBlocksQuery {
     /// Maximum number of blocks to return
     #[serde(default = "default_limit")]
     pub limit: usize,
-    /// Cursor for pagination
+    /// Cursor for pagination (Kelpie's native parameter)
     pub cursor: Option<String>,
+    /// Cursor for pagination (Letta SDK compatibility - alias for cursor)
+    pub after: Option<String>,
     /// Filter by label
     pub label: Option<String>,
 }
@@ -65,7 +67,7 @@ async fn create_block(
     // Check size limit if specified
     if let Some(limit) = request.limit {
         if request.value.len() > limit {
-            return Err(ApiError::bad_request(format!(
+            return Err(ApiError::unprocessable_entity(format!(
                 "block value exceeds limit ({} > {})",
                 request.value.len(),
                 limit
@@ -104,8 +106,9 @@ async fn list_blocks(
     Query(query): Query<ListBlocksQuery>,
 ) -> Result<Json<ListResponse<Block>>, ApiError> {
     let limit = query.limit.min(LIST_LIMIT_MAX);
+    let cursor_param = query.cursor.as_deref().or(query.after.as_deref());
     let (items, cursor) =
-        state.list_standalone_blocks(limit, query.cursor.as_deref(), query.label.as_deref())?;
+        state.list_standalone_blocks(limit, cursor_param, query.label.as_deref())?;
     let total = state.standalone_block_count()?;
 
     Ok(Json(ListResponse {
@@ -134,7 +137,7 @@ async fn update_block(
         let limit = request.limit.or(current.limit);
         if let Some(l) = limit {
             if new_value.len() > l {
-                return Err(ApiError::bad_request(format!(
+                return Err(ApiError::unprocessable_entity(format!(
                     "block value exceeds limit ({} > {})",
                     new_value.len(),
                     l

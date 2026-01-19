@@ -15,7 +15,8 @@ use chrono::Utc;
 use futures::stream::{self, StreamExt};
 use kelpie_server::llm::{ChatMessage, ContentBlock};
 use kelpie_server::models::{
-    CreateMessageRequest, Message, MessageResponse, MessageRole, UsageStats,
+    ApprovalRequest, BatchMessagesRequest, BatchStatus, ClientTool, CreateMessageRequest, Message,
+    MessageResponse, MessageRole, UsageStats,
 };
 use kelpie_server::state::AppState;
 use kelpie_server::tools::{parse_pause_signal, ToolSignal, AGENT_LOOP_ITERATIONS_MAX};
@@ -75,6 +76,12 @@ enum SseMessage {
         tool_return: String,
         status: String,
     },
+    #[serde(rename = "approval_request_message")]
+    ApprovalRequestMessage {
+        id: String,
+        tool_call_id: String,
+        tool_call: ToolCallInfo,
+    },
     #[serde(rename = "usage_statistics")]
     UsageStatistics {
         completion_tokens: u64,
@@ -87,7 +94,13 @@ enum SseMessage {
 #[derive(Debug, Clone, Serialize)]
 struct ToolCallInfo {
     name: String,
-    arguments: serde_json::Value,
+    /// Arguments serialized as JSON string (Letta SDK compatibility)
+    /// The Letta SDK sends arguments as a JSON string, not a nested object.
+    /// Clients expect to call JSON.parse(arguments) on this field.
+    arguments: String,
+    /// Tool call ID for tracking (Letta SDK compatibility)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
 }
 
 /// SSE event for stop reason
@@ -95,6 +108,31 @@ struct ToolCallInfo {
 struct StopReasonEvent {
     message_type: &'static str,
     stop_reason: String,
+}
+
+/// Check if a tool requires client-side execution
+///
+/// Returns true if:
+/// - Tool name is in the client_tools array from the request, OR
+/// - Tool has default_requires_approval=true in its registration
+async fn tool_requires_approval(
+    tool_name: &str,
+    client_tools: &[ClientTool],
+    state: &AppState,
+) -> bool {
+    // Check if tool is in client_tools array from request
+    if client_tools.iter().any(|ct| ct.name == tool_name) {
+        return true;
+    }
+
+    // Check if tool has default_requires_approval=true
+    if let Some(tool_info) = state.get_tool(tool_name).await {
+        if tool_info.default_requires_approval {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// List messages for an agent
@@ -118,16 +156,23 @@ pub async fn list_messages(
 /// Builds a prompt from memory blocks and sends to configured LLM.
 /// Requires LLM to be configured via ANTHROPIC_API_KEY or OPENAI_API_KEY.
 /// Supports multiple request formats for letta-code compatibility.
-/// Supports SSE streaming when stream_steps=true query parameter is set.
-#[instrument(skip(state, query, request), fields(agent_id = %agent_id, stream = query.stream_steps), level = "info")]
+/// Supports SSE streaming when stream_steps=true query parameter is set,
+/// OR when streaming=true is passed in the request body (Letta SDK compatibility).
+#[instrument(skip(state, query, request), fields(agent_id = %agent_id), level = "info")]
 pub async fn send_message(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
     Query(query): Query<SendMessageQuery>,
     Json(request): Json<CreateMessageRequest>,
 ) -> Result<Response, ApiError> {
-    // If streaming is requested, delegate to SSE handler
-    if query.stream_steps {
+    // If streaming is requested (via query param OR request body), delegate to SSE handler
+    // This provides compatibility with both:
+    // - letta-code (uses stream_steps query param)
+    // - Letta SDK (uses streaming field in request body)
+    let should_stream = query.stream_steps || request.streaming;
+    tracing::info!(stream = should_stream, "Processing message request");
+
+    if should_stream {
         return send_message_streaming(state, agent_id, request).await;
     }
 
@@ -142,10 +187,46 @@ async fn send_message_json(
     agent_id: String,
     request: CreateMessageRequest,
 ) -> Result<Response, ApiError> {
+    let response = handle_message_request(state, agent_id, request).await?;
+    Ok(Json(response).into_response())
+}
+
+/// Shared handler for message processing (non-streaming)
+pub async fn handle_message_request(
+    state: AppState,
+    agent_id: String,
+    request: CreateMessageRequest,
+) -> Result<MessageResponse, ApiError> {
     // Extract effective content from various request formats
     let (role, content) = request
         .effective_content()
         .ok_or_else(|| ApiError::bad_request("message content cannot be empty"))?;
+
+    // Phase 6.10: Use AgentService if available
+    if let Some(service) = state.agent_service() {
+        tracing::debug!(agent_id = %agent_id, "Using AgentService for message handling");
+
+        let response = service
+            .send_message_full(&agent_id, content.clone())
+            .await
+            .map_err(|e| ApiError::internal(format!("Agent service call failed: {}", e)))?;
+
+        tracing::info!(
+            agent_id = %agent_id,
+            message_count = response.messages.len(),
+            "Processed message via AgentService"
+        );
+
+        return Ok(MessageResponse {
+            messages: response.messages,
+            usage: Some(response.usage),
+            stop_reason: "end_turn".to_string(),
+            approval_requests: None,
+        });
+    }
+
+    // Fallback to HashMap-based implementation (backward compatibility)
+    tracing::debug!(agent_id = %agent_id, "Using HashMap-based message handling (fallback)");
 
     // Create user message
     let user_message = Message {
@@ -192,12 +273,25 @@ async fn send_message_json(
             if msg.id == stored_user_msg.id {
                 continue;
             }
+            // Skip tool messages - Claude API doesn't support role "tool"
+            // Tool results are handled via tool_use/tool_result content blocks
+            if msg.role == MessageRole::Tool {
+                continue;
+            }
+            // Skip system messages in history (already added above)
+            if msg.role == MessageRole::System {
+                continue;
+            }
+            // Skip messages with empty content - Claude API requires non-empty content
+            if msg.content.is_empty() {
+                continue;
+            }
             messages.push(ChatMessage {
                 role: match msg.role {
                     MessageRole::User => "user",
                     MessageRole::Assistant => "assistant",
-                    MessageRole::System => "system",
-                    MessageRole::Tool => "tool",
+                    MessageRole::System => "system", // Won't reach here due to skip above
+                    MessageRole::Tool => "user",     // Won't reach here due to skip above
                 }
                 .to_string(),
                 content: msg.content.clone(),
@@ -251,14 +345,61 @@ async fn send_message_json(
                         "Executing tools"
                     );
 
-                    // Execute each tool via registry
+                    // Check if any tools require client-side execution
+                    let mut approval_needed = Vec::new();
+                    let mut server_tools = Vec::new();
+
+                    for tool_call in &response.tool_calls {
+                        if tool_requires_approval(&tool_call.name, &request.client_tools, &state)
+                            .await
+                        {
+                            approval_needed.push(tool_call.clone());
+                        } else {
+                            server_tools.push(tool_call.clone());
+                        }
+                    }
+
+                    // If any tools need approval, return approval_request and stop
+                    if !approval_needed.is_empty() {
+                        tracing::info!(
+                            agent_id = %agent_id,
+                            approval_count = approval_needed.len(),
+                            "Tools require client-side approval"
+                        );
+
+                        return Ok(MessageResponse {
+                            messages: vec![stored_user_msg],
+                            usage: Some(UsageStats {
+                                prompt_tokens: total_prompt,
+                                completion_tokens: total_completion,
+                                total_tokens: total_prompt + total_completion,
+                            }),
+                            stop_reason: "requires_approval".to_string(),
+                            approval_requests: Some(
+                                approval_needed
+                                    .iter()
+                                    .map(|tc| ApprovalRequest {
+                                        tool_call_id: tc.id.clone(),
+                                        tool_name: tc.name.clone(),
+                                        tool_arguments: tc.input.clone(),
+                                    })
+                                    .collect(),
+                            ),
+                        });
+                    }
+
+                    // Execute server-side tools only
                     let mut tool_results = Vec::new();
                     let mut should_break = false;
 
-                    for tool_call in &response.tool_calls {
+                    for tool_call in &server_tools {
+                        let context = crate::tools::ToolExecutionContext {
+                            agent_id: Some(agent_id.clone()),
+                            project_id: agent.project_id.clone(),
+                        };
                         let exec_result = state
                             .tool_registry()
-                            .execute(&tool_call.name, &tool_call.input)
+                            .execute_with_context(&tool_call.name, &tool_call.input, Some(&context))
                             .await;
 
                         tracing::info!(
@@ -269,11 +410,9 @@ async fn send_message_json(
                         );
 
                         // Check for pause_heartbeats signal
-                        // Parse from output format: "PAUSE_HEARTBEATS:minutes:pause_until_ms"
                         if let Some((minutes, pause_until_ms)) =
                             parse_pause_signal(&exec_result.output)
                         {
-                            // Verify agent type supports heartbeats (defense-in-depth)
                             if !capabilities.supports_heartbeats {
                                 tracing::warn!(
                                     agent_id = %agent_id,
@@ -294,13 +433,11 @@ async fn send_message_json(
                             }
                         }
 
-                        // Also check signal field
                         if let ToolSignal::PauseHeartbeats {
                             minutes,
                             pause_until_ms,
                         } = &exec_result.signal
                         {
-                            // Verify agent type supports heartbeats (defense-in-depth)
                             if !capabilities.supports_heartbeats {
                                 tracing::warn!(
                                     agent_id = %agent_id,
@@ -324,7 +461,6 @@ async fn send_message_json(
                         tool_results.push((tool_call.id.clone(), exec_result.output));
                     }
 
-                    // Break the loop if pause was requested
                     if should_break {
                         tracing::info!(
                             agent_id = %agent_id,
@@ -349,7 +485,6 @@ async fn send_message_json(
                         });
                     }
 
-                    // Continue conversation with tool results
                     match llm
                         .continue_with_tool_result(
                             messages.clone(),
@@ -382,7 +517,6 @@ async fn send_message_json(
                     "LLM response received"
                 );
 
-                // If we hit max iterations without pause, set stop_reason
                 if iterations >= AGENT_LOOP_ITERATIONS_MAX && stop_reason == "end_turn" {
                     stop_reason = "max_iterations".to_string();
                 }
@@ -402,7 +536,6 @@ async fn send_message_json(
         }
     };
 
-    // Log pause info if present
     if let Some((minutes, pause_until_ms)) = pause_info {
         tracing::info!(
             agent_id = %agent_id,
@@ -435,7 +568,7 @@ async fn send_message_json(
         "processed message"
     );
 
-    Ok(Json(MessageResponse {
+    Ok(MessageResponse {
         messages: vec![stored_user_msg, stored_assistant_msg],
         usage: Some(UsageStats {
             prompt_tokens,
@@ -443,8 +576,107 @@ async fn send_message_json(
             total_tokens: prompt_tokens + completion_tokens,
         }),
         stop_reason: final_stop_reason,
+        approval_requests: None,
     })
-    .into_response())
+}
+
+/// Send a batch of messages
+#[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
+pub async fn send_messages_batch(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(request): Json<BatchMessagesRequest>,
+) -> Result<Json<BatchStatus>, ApiError> {
+    const BATCH_MESSAGES_MAX: usize = 100;
+    const BATCH_CONCURRENCY_MAX: usize = 5;
+
+    if request.messages.is_empty() {
+        return Err(ApiError::bad_request("batch messages cannot be empty"));
+    }
+    if request.messages.len() > BATCH_MESSAGES_MAX {
+        return Err(ApiError::bad_request(format!(
+            "batch size exceeds limit ({})",
+            BATCH_MESSAGES_MAX
+        )));
+    }
+
+    let _agent = state
+        .get_agent_async(&agent_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Agent", &agent_id))?;
+
+    let now = Utc::now();
+    let batch_id = Uuid::new_v4().to_string();
+
+    let mut status = BatchStatus {
+        id: batch_id.clone(),
+        agent_id: agent_id.clone(),
+        total: request.messages.len(),
+        completed: 0,
+        results: Vec::with_capacity(request.messages.len()),
+        created_at: now,
+        updated_at: now,
+    };
+
+    state.add_batch_status(status.clone())?;
+
+    let results = stream::iter(request.messages.into_iter().enumerate())
+        .map(|(idx, message)| {
+            let state = state.clone();
+            let agent_id = agent_id.clone();
+            async move {
+                let result = handle_message_request(state, agent_id, message).await;
+                (idx, result)
+            }
+        })
+        .buffer_unordered(BATCH_CONCURRENCY_MAX)
+        .collect::<Vec<_>>()
+        .await;
+
+    let mut ordered = results;
+    ordered.sort_by_key(|(idx, _)| *idx);
+
+    for (_idx, result) in ordered {
+        match result {
+            Ok(response) => status
+                .results
+                .push(kelpie_server::models::BatchMessageResult {
+                    success: true,
+                    response: Some(response),
+                    error: None,
+                }),
+            Err(e) => status
+                .results
+                .push(kelpie_server::models::BatchMessageResult {
+                    success: false,
+                    response: None,
+                    error: Some(e.to_string()),
+                }),
+        }
+    }
+
+    status.completed = status.results.len();
+    status.updated_at = Utc::now();
+    state.update_batch_status(status.clone())?;
+
+    Ok(Json(status))
+}
+
+/// Get batch status
+#[instrument(skip(state), fields(agent_id = %agent_id, batch_id = %batch_id), level = "info")]
+pub async fn get_batch_status(
+    State(state): State<AppState>,
+    Path((agent_id, batch_id)): Path<(String, String)>,
+) -> Result<Json<BatchStatus>, ApiError> {
+    let status = state
+        .get_batch_status(&batch_id)?
+        .ok_or_else(|| ApiError::not_found("Batch", &batch_id))?;
+
+    if status.agent_id != agent_id {
+        return Err(ApiError::bad_request("batch does not belong to agent"));
+    }
+
+    Ok(Json(status))
 }
 
 /// Send a message with SSE streaming response
@@ -475,6 +707,7 @@ async fn send_message_streaming(
     let state_clone = state.clone();
     let llm_clone = llm.clone();
     let agent_clone = agent.clone();
+    let client_tools_clone = request.client_tools.clone();
 
     // Create user message
     let user_message = Message {
@@ -499,6 +732,7 @@ async fn send_message_streaming(
             &agent_clone,
             &llm_clone,
             content,
+            &client_tools_clone,
         )
         .await;
         stream::iter(events)
@@ -515,13 +749,18 @@ async fn send_message_streaming(
 }
 
 /// Generate all SSE events for a streaming response
-#[instrument(skip(state, agent, llm, content), fields(agent_id), level = "debug")]
+#[instrument(
+    skip(state, agent, llm, content, client_tools),
+    fields(agent_id),
+    level = "debug"
+)]
 async fn generate_sse_events(
     state: &AppState,
     agent_id: &str,
     agent: &kelpie_server::models::AgentState,
     llm: &crate::llm::LlmClient,
     content: String,
+    client_tools: &[ClientTool],
 ) -> Vec<Result<Event, Infallible>> {
     let mut events = Vec::new();
     let mut total_prompt_tokens = 0u64;
@@ -542,12 +781,21 @@ async fn generate_sse_events(
     // Get recent message history
     let history = state.list_messages(agent_id, 20, None).unwrap_or_default();
     for msg in history.iter() {
+        // Skip tool and system messages - Claude API doesn't support role "tool"
+        // and system is already added above
+        if msg.role == MessageRole::Tool || msg.role == MessageRole::System {
+            continue;
+        }
+        // Skip messages with empty content - Claude API requires non-empty content
+        if msg.content.is_empty() {
+            continue;
+        }
         messages.push(ChatMessage {
             role: match msg.role {
                 MessageRole::User => "user",
                 MessageRole::Assistant => "assistant",
-                MessageRole::System => "system",
-                MessageRole::Tool => "tool",
+                MessageRole::System => "system", // Won't reach here
+                MessageRole::Tool => "user",     // Won't reach here
             }
             .to_string(),
             content: msg.content.clone(),
@@ -580,13 +828,58 @@ async fn generate_sse_events(
             while response.stop_reason == "tool_use" && iterations < AGENT_LOOP_ITERATIONS_MAX {
                 iterations += 1;
 
-                // Send tool call events
+                // Check if any tools require client-side execution
+                let mut approval_needed = Vec::new();
+                let mut server_tools = Vec::new();
+
                 for tool_call in &response.tool_calls {
+                    if tool_requires_approval(&tool_call.name, client_tools, state).await {
+                        approval_needed.push(tool_call.clone());
+                    } else {
+                        server_tools.push(tool_call.clone());
+                    }
+                }
+
+                // If any tools need approval, emit approval_request_message and stop
+                if !approval_needed.is_empty() {
+                    tracing::info!(
+                        agent_id = %agent_id,
+                        approval_count = approval_needed.len(),
+                        "Tools require client-side approval (streaming)"
+                    );
+
+                    for tool_call in &approval_needed {
+                        // Serialize arguments to JSON string (Letta SDK compatibility)
+                        let args_str = serde_json::to_string(&tool_call.input).unwrap_or_default();
+                        let approval_msg = SseMessage::ApprovalRequestMessage {
+                            id: Uuid::new_v4().to_string(),
+                            tool_call_id: tool_call.id.clone(),
+                            tool_call: ToolCallInfo {
+                                name: tool_call.name.clone(),
+                                arguments: args_str,
+                                tool_call_id: Some(tool_call.id.clone()),
+                            },
+                        };
+                        if let Ok(json) = serde_json::to_string(&approval_msg) {
+                            events.push(Ok(Event::default().data(json)));
+                        }
+                    }
+
+                    // Set stop reason and break
+                    final_stop_reason = "requires_approval".to_string();
+                    break;
+                }
+
+                // Send tool call events for server-side tools
+                for tool_call in &server_tools {
+                    // Serialize arguments to JSON string (Letta SDK compatibility)
+                    let args_str = serde_json::to_string(&tool_call.input).unwrap_or_default();
                     let tool_msg = SseMessage::ToolCallMessage {
                         id: Uuid::new_v4().to_string(),
                         tool_call: ToolCallInfo {
                             name: tool_call.name.clone(),
-                            arguments: tool_call.input.clone(),
+                            arguments: args_str,
+                            tool_call_id: Some(tool_call.id.clone()),
                         },
                     };
                     if let Ok(json) = serde_json::to_string(&tool_msg) {
@@ -594,14 +887,18 @@ async fn generate_sse_events(
                     }
                 }
 
-                // Execute tools via registry
+                // Execute server-side tools only
                 let mut tool_results = Vec::new();
                 let mut should_break = false;
 
-                for tool_call in &response.tool_calls {
+                for tool_call in &server_tools {
+                    let context = crate::tools::ToolExecutionContext {
+                        agent_id: Some(agent_id.to_string()),
+                        project_id: agent.project_id.clone(),
+                    };
                     let exec_result = state
                         .tool_registry()
-                        .execute(&tool_call.name, &tool_call.input)
+                        .execute_with_context(&tool_call.name, &tool_call.input, Some(&context))
                         .await;
 
                     // Check for pause_heartbeats signal

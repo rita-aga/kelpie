@@ -22,17 +22,21 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use foundationdb::api::FdbApiBuilder;
-use foundationdb::tuple::{pack, unpack, Subspace};
+use foundationdb::api::{FdbApiBuilder, NetworkAutoStop};
+use foundationdb::tuple::Subspace;
 use foundationdb::{Database, RangeOption, Transaction as FdbTransaction};
 use kelpie_core::constants::{
     ACTOR_KV_KEY_SIZE_BYTES_MAX, ACTOR_KV_VALUE_SIZE_BYTES_MAX, TRANSACTION_TIMEOUT_MS_DEFAULT,
 };
 use kelpie_core::{ActorId, Error, Result};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tracing::{debug, instrument, warn};
 
 use crate::kv::{ActorKV, ActorTransaction};
+
+/// Global FDB network guard - must live for the entire process
+/// Using OnceLock to ensure single initialization
+static FDB_NETWORK: OnceLock<NetworkAutoStop> = OnceLock::new();
 
 /// Key prefix for actor data in FDB
 const KEY_PREFIX_KELPIE: &str = "kelpie";
@@ -76,19 +80,15 @@ impl FdbKV {
     #[instrument(skip_all, fields(cluster_file))]
     pub async fn connect(cluster_file: Option<&str>) -> Result<Self> {
         // Boot FDB network (must be called once per process)
-        // Safe to call multiple times - subsequent calls are no-ops
-        let network_builder = FdbApiBuilder::default()
-            .build()
-            .map_err(|e| Error::Internal {
-                message: format!("FDB API build failed: {}", e),
-            })?;
+        // Using OnceLock to ensure single initialization and keep guard alive
+        FDB_NETWORK.get_or_init(|| {
+            let network_builder = FdbApiBuilder::default()
+                .build()
+                .expect("FDB API build failed");
 
-        // Start network thread (non-blocking after first call)
-        unsafe {
-            network_builder.boot().map_err(|e| Error::Internal {
-                message: format!("FDB network boot failed: {}", e),
-            })?;
-        }
+            // Start network thread - must keep the guard alive for operations to work
+            unsafe { network_builder.boot().expect("FDB network boot failed") }
+        });
 
         // Open database
         let db = Database::new(cluster_file).map_err(|e| Error::Internal {
@@ -145,7 +145,11 @@ impl FdbKV {
     }
 
     /// Encode the prefix for listing keys
-    fn encode_prefix(&self, actor_id: &ActorId, prefix: &[u8]) -> Vec<u8> {
+    ///
+    /// NOTE: For prefix matching to work correctly, we need to use the subspace
+    /// bytes directly instead of tuple packing. The FDB tuple layer encoding
+    /// adds type markers and length encoding that prevent simple prefix matching.
+    fn encode_prefix(&self, actor_id: &ActorId, _prefix: &[u8]) -> Vec<u8> {
         // Preconditions
         assert!(
             !actor_id.namespace().is_empty(),
@@ -157,11 +161,9 @@ impl FdbKV {
             self.subspace
                 .subspace(&(actor_id.namespace(), actor_id.id(), KEY_PREFIX_DATA));
 
-        if prefix.is_empty() {
-            actor_subspace.bytes().to_vec()
-        } else {
-            actor_subspace.pack(&prefix)
-        }
+        // Always return just the subspace bytes - the range scan will find all keys
+        // in this subspace, and we filter by user prefix in the list_keys/scan_prefix code
+        actor_subspace.bytes().to_vec()
     }
 
     /// Decode a user key from FDB key
@@ -170,10 +172,7 @@ impl FdbKV {
             self.subspace
                 .subspace(&(actor_id.namespace(), actor_id.id(), KEY_PREFIX_DATA));
 
-        actor_subspace
-            .unpack::<Vec<u8>>(fdb_key)
-            .ok()
-            .map(|(key, _)| key)
+        actor_subspace.unpack::<Vec<u8>>(fdb_key).ok()
     }
 
     /// Execute a transaction with automatic retry on conflicts
@@ -416,7 +415,7 @@ impl ActorTransaction for FdbActorTransaction {
                 }
             }
 
-            // Commit
+            // Commit (consumes txn in FDB 0.10)
             match txn.commit().await {
                 Ok(_) => {
                     debug!(
@@ -433,12 +432,12 @@ impl ActorTransaction for FdbActorTransaction {
                         "Transaction conflict (attempt {}/{}), retrying",
                         attempts, TRANSACTION_RETRY_COUNT_MAX
                     );
-                    // Wait before retry using on_error
-                    txn.on_error(e)
-                        .await
-                        .map_err(|e| Error::TransactionFailed {
-                            reason: format!("retry wait failed: {}", e),
-                        })?;
+                    // FDB 0.10: TransactionCommitError contains the transaction.
+                    // Call on_error() to wait with exponential backoff before retrying.
+                    let _txn = e.on_error().await.map_err(|e| Error::TransactionFailed {
+                        reason: format!("retry wait failed: {}", e),
+                    })?;
+                    // Loop back to create a new transaction and retry
                     continue;
                 }
                 Err(e) if e.is_retryable() => {
@@ -616,7 +615,7 @@ impl ActorKV for FdbKV {
         let range_option = RangeOption::from((start_key.as_slice(), end_key.as_slice()));
 
         let range =
-            txn.get_range(&range_option, 0, false)
+            txn.get_range(&range_option, 1, false)
                 .await
                 .map_err(|e| Error::StorageReadFailed {
                     key: format!("prefix:{}", String::from_utf8_lossy(prefix)),
@@ -644,6 +643,69 @@ impl ActorKV for FdbKV {
         Ok(keys)
     }
 
+    #[instrument(skip(self, prefix), fields(actor_id = %actor_id.qualified_name(), prefix_len = prefix.len()))]
+    async fn scan_prefix(
+        &self,
+        actor_id: &ActorId,
+        prefix: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Bytes)>> {
+        // Preconditions
+        assert!(
+            prefix.len() <= ACTOR_KV_KEY_SIZE_BYTES_MAX,
+            "prefix size {} exceeds max {}",
+            prefix.len(),
+            ACTOR_KV_KEY_SIZE_BYTES_MAX
+        );
+        assert!(
+            !actor_id.namespace().is_empty(),
+            "actor namespace cannot be empty"
+        );
+
+        let start_key = self.encode_prefix(actor_id, prefix);
+
+        // Calculate end key (prefix + 0xFF for range scan)
+        let mut end_key = start_key.clone();
+        end_key.push(0xFF);
+
+        let txn = self.db.create_trx().map_err(|e| Error::StorageReadFailed {
+            key: format!("prefix:{}", String::from_utf8_lossy(prefix)),
+            reason: format!("create transaction failed: {}", e),
+        })?;
+
+        let range_option = RangeOption::from((start_key.as_slice(), end_key.as_slice()));
+
+        let range =
+            txn.get_range(&range_option, 1, false)
+                .await
+                .map_err(|e| Error::StorageReadFailed {
+                    key: format!("prefix:{}", String::from_utf8_lossy(prefix)),
+                    reason: format!("range scan failed: {}", e),
+                })?;
+
+        let mut results = Vec::new();
+        for kv in range.iter() {
+            if let Some(user_key) = self.decode_user_key(actor_id, kv.key()) {
+                // Only include keys that match the prefix
+                if prefix.is_empty() || user_key.starts_with(prefix) {
+                    let value = Bytes::copy_from_slice(kv.value());
+                    results.push((user_key, value));
+                }
+            }
+        }
+
+        debug!(count = results.len(), "FDB scan_prefix complete");
+
+        // Postcondition
+        assert!(
+            results
+                .iter()
+                .all(|(k, _)| k.len() <= ACTOR_KV_KEY_SIZE_BYTES_MAX),
+            "returned keys must be within size limit"
+        );
+
+        Ok(results)
+    }
+
     #[instrument(skip(self), fields(actor_id = %actor_id.qualified_name()))]
     async fn begin_transaction(&self, actor_id: &ActorId) -> Result<Box<dyn ActorTransaction>> {
         // Preconditions
@@ -662,6 +724,41 @@ impl ActorKV for FdbKV {
     }
 }
 
+// Implement ActorKV for Arc<FdbKV> to allow using it through Arc
+//
+// This is a common pattern in Rust - implement traits for smart pointers
+// by delegating to the inner type.
+#[async_trait]
+impl ActorKV for Arc<FdbKV> {
+    async fn get(&self, actor_id: &ActorId, key: &[u8]) -> Result<Option<Bytes>> {
+        (**self).get(actor_id, key).await
+    }
+
+    async fn set(&self, actor_id: &ActorId, key: &[u8], value: &[u8]) -> Result<()> {
+        (**self).set(actor_id, key, value).await
+    }
+
+    async fn delete(&self, actor_id: &ActorId, key: &[u8]) -> Result<()> {
+        (**self).delete(actor_id, key).await
+    }
+
+    async fn list_keys(&self, actor_id: &ActorId, prefix: &[u8]) -> Result<Vec<Vec<u8>>> {
+        (**self).list_keys(actor_id, prefix).await
+    }
+
+    async fn scan_prefix(
+        &self,
+        actor_id: &ActorId,
+        prefix: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Bytes)>> {
+        (**self).scan_prefix(actor_id, prefix).await
+    }
+
+    async fn begin_transaction(&self, actor_id: &ActorId) -> Result<Box<dyn ActorTransaction>> {
+        (**self).begin_transaction(actor_id).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,7 +774,7 @@ mod tests {
         assert!(!encoded.is_empty());
 
         // Verify we can decode it back
-        let (decoded, _): (Vec<u8>, _) = actor_subspace.unpack(&encoded).unwrap();
+        let decoded: Vec<u8> = actor_subspace.unpack(&encoded).unwrap();
         assert_eq!(decoded, b"my-key");
     }
 

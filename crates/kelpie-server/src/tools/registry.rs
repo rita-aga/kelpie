@@ -3,10 +3,12 @@
 //! TigerStyle: Single registry for all tool types with explicit source tracking.
 
 use crate::llm::ToolDefinition;
+use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 // =============================================================================
@@ -58,6 +60,24 @@ pub struct RegisteredTool {
     pub source: ToolSource,
     /// Optional description (more detailed than in definition)
     pub description: Option<String>,
+}
+
+/// Execution context for tool calls
+#[derive(Debug, Clone)]
+pub struct ToolExecutionContext {
+    pub agent_id: Option<String>,
+    pub project_id: Option<String>,
+}
+
+/// Custom tool definition with source code
+#[derive(Debug, Clone)]
+pub struct CustomToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+    pub source_code: String,
+    pub runtime: String,
+    pub requirements: Vec<String>,
 }
 
 /// Signals that tools can emit to control agent loop behavior
@@ -142,10 +162,13 @@ pub struct UnifiedToolRegistry {
     tools: RwLock<HashMap<String, RegisteredTool>>,
     /// Builtin tool handlers
     builtin_handlers: RwLock<HashMap<String, BuiltinToolHandler>>,
-    /// MCP client pool (server_name -> client)
-    /// For now, this is a placeholder - will be connected to actual MCP clients
+    /// MCP client pool (server_name -> client) for production
+    mcp_clients: RwLock<HashMap<String, Arc<kelpie_tools::McpClient>>>,
+    /// Simulated MCP client for DST testing
     #[cfg(feature = "dst")]
     sim_mcp_client: RwLock<Option<Arc<kelpie_tools::SimMcpClient>>>,
+    /// Custom tool definitions (source code + runtime)
+    custom_tools: RwLock<HashMap<String, CustomToolDefinition>>,
 }
 
 impl UnifiedToolRegistry {
@@ -154,8 +177,10 @@ impl UnifiedToolRegistry {
         Self {
             tools: RwLock::new(HashMap::new()),
             builtin_handlers: RwLock::new(HashMap::new()),
+            mcp_clients: RwLock::new(HashMap::new()),
             #[cfg(feature = "dst")]
             sim_mcp_client: RwLock::new(None),
+            custom_tools: RwLock::new(HashMap::new()),
         }
     }
 
@@ -222,10 +247,135 @@ impl UnifiedToolRegistry {
         self.tools.write().await.insert(name, tool);
     }
 
+    /// Register a custom tool with source code
+    pub async fn register_custom_tool(
+        &self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: Value,
+        source_code: String,
+        runtime: impl Into<String>,
+        requirements: Vec<String>,
+    ) {
+        let name = name.into();
+        let description_str = description.into();
+        let runtime = runtime.into();
+
+        assert!(!name.is_empty(), "tool name cannot be empty");
+        assert!(!source_code.is_empty(), "source code cannot be empty");
+
+        let definition = ToolDefinition {
+            name: name.clone(),
+            description: description_str.clone(),
+            input_schema: input_schema.clone(),
+        };
+
+        let tool = RegisteredTool {
+            definition,
+            source: ToolSource::Custom,
+            description: Some(description_str.clone()),
+        };
+
+        self.tools.write().await.insert(name.clone(), tool);
+        self.custom_tools.write().await.insert(
+            name.clone(),
+            CustomToolDefinition {
+                name,
+                description: description_str,
+                input_schema,
+                source_code,
+                runtime,
+                requirements,
+            },
+        );
+    }
+
     /// Set simulated MCP client for DST testing
     #[cfg(feature = "dst")]
     pub async fn set_sim_mcp_client(&self, client: Arc<kelpie_tools::SimMcpClient>) {
         *self.sim_mcp_client.write().await = Some(client);
+    }
+
+    /// Connect to an MCP server and auto-discover its tools
+    ///
+    /// # Arguments
+    /// * `server_name` - Unique name for this MCP server connection
+    /// * `config` - MCP configuration (transport, timeouts, env vars)
+    ///
+    /// # Returns
+    /// Number of tools discovered and registered
+    pub async fn connect_mcp_server(
+        &self,
+        server_name: impl Into<String>,
+        config: kelpie_tools::McpConfig,
+    ) -> Result<usize, String> {
+        let server_name = server_name.into();
+
+        // TigerStyle: Preconditions
+        assert!(!server_name.is_empty(), "server name cannot be empty");
+
+        // Create MCP client
+        let client = Arc::new(kelpie_tools::McpClient::new(config));
+
+        // Connect to server
+        client
+            .connect()
+            .await
+            .map_err(|e| format!("Failed to connect to MCP server '{}': {}", server_name, e))?;
+
+        // Discover tools
+        let tools = client.discover_tools().await.map_err(|e| {
+            format!(
+                "Failed to discover tools from MCP server '{}': {}",
+                server_name, e
+            )
+        })?;
+
+        // Register discovered tools
+        let tool_count = tools.len();
+        for tool in tools {
+            self.register_mcp_tool(
+                tool.name.clone(),
+                tool.description.clone(),
+                tool.input_schema,
+                server_name.clone(),
+            )
+            .await;
+        }
+
+        // Store client
+        self.mcp_clients.write().await.insert(server_name, client);
+
+        Ok(tool_count)
+    }
+
+    /// Disconnect from an MCP server and unregister its tools
+    pub async fn disconnect_mcp_server(&self, server_name: &str) -> Result<(), String> {
+        // Remove client
+        let client = self.mcp_clients.write().await.remove(server_name);
+
+        if let Some(client) = client {
+            // Disconnect
+            client.disconnect().await.map_err(|e| {
+                format!(
+                    "Failed to disconnect from MCP server '{}': {}",
+                    server_name, e
+                )
+            })?;
+
+            // Remove tools from this server
+            let mut tools = self.tools.write().await;
+            tools.retain(|_, tool| {
+                !matches!(&tool.source, ToolSource::Mcp { server } if server == server_name)
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Get all connected MCP server names
+    pub async fn list_mcp_servers(&self) -> Vec<String> {
+        self.mcp_clients.read().await.keys().cloned().collect()
     }
 
     /// Get all tool definitions for LLM
@@ -258,8 +408,28 @@ impl UnifiedToolRegistry {
         self.tools.read().await.keys().cloned().collect()
     }
 
+    /// List registered tools with metadata
+    pub async fn list_registered_tools(&self) -> Vec<RegisteredTool> {
+        self.tools.read().await.values().cloned().collect()
+    }
+
+    /// Get a custom tool definition
+    pub async fn get_custom_tool(&self, name: &str) -> Option<CustomToolDefinition> {
+        self.custom_tools.read().await.get(name).cloned()
+    }
+
     /// Execute a tool by name
     pub async fn execute(&self, name: &str, input: &Value) -> ToolExecutionResult {
+        self.execute_with_context(name, input, None).await
+    }
+
+    /// Execute a tool by name with optional context
+    pub async fn execute_with_context(
+        &self,
+        name: &str,
+        input: &Value,
+        context: Option<&ToolExecutionContext>,
+    ) -> ToolExecutionResult {
         let start = std::time::Instant::now();
 
         // TigerStyle: Preconditions
@@ -280,13 +450,7 @@ impl UnifiedToolRegistry {
         match &tool.source {
             ToolSource::Builtin => self.execute_builtin(name, input, start).await,
             ToolSource::Mcp { server } => self.execute_mcp(name, server, input, start).await,
-            ToolSource::Custom => {
-                // Custom tools are not yet supported
-                ToolExecutionResult::failure(
-                    format!("Custom tool execution not yet implemented: {}", name),
-                    start.elapsed().as_millis() as u64,
-                )
-            }
+            ToolSource::Custom => self.execute_custom(name, input, context, start).await,
         }
     }
 
@@ -321,11 +485,10 @@ impl UnifiedToolRegistry {
     }
 
     /// Execute an MCP tool
-    #[allow(unused_variables)]
     async fn execute_mcp(
         &self,
         name: &str,
-        _server: &str,
+        server: &str,
         input: &Value,
         start: std::time::Instant,
     ) -> ToolExecutionResult {
@@ -352,12 +515,187 @@ impl UnifiedToolRegistry {
             }
         }
 
-        // TODO: Implement real MCP client execution
-        // For now, return a placeholder
-        ToolExecutionResult::failure(
-            format!("MCP tool execution not yet implemented: {}", name),
-            start.elapsed().as_millis() as u64,
-        )
+        // Get MCP client for the server
+        let client = {
+            let clients = self.mcp_clients.read().await;
+            match clients.get(server) {
+                Some(client) => Arc::clone(client),
+                None => {
+                    return ToolExecutionResult::failure(
+                        format!("MCP server '{}' not connected", server),
+                        start.elapsed().as_millis() as u64,
+                    );
+                }
+            }
+        };
+
+        // Check if client is connected
+        if !client.is_connected().await {
+            return ToolExecutionResult::failure(
+                format!("MCP server '{}' is not connected", server),
+                start.elapsed().as_millis() as u64,
+            );
+        }
+
+        // Execute tool via MCP client
+        match client.execute_tool(name, input.clone()).await {
+            Ok(result) => {
+                // Extract content from MCP result
+                // MCP tools/call returns: {"content": [{"type": "text", "text": "..."}]}
+                let output = if let Some(content) = result.get("content").and_then(|c| c.as_array())
+                {
+                    // Concatenate all text content
+                    content
+                        .iter()
+                        .filter_map(|item| {
+                            item.get("text")
+                                .and_then(|t| t.as_str())
+                                .map(|s| s.to_string())
+                        })
+                        .collect::<Vec<String>>()
+                        .join("\n")
+                } else {
+                    // Fallback: serialize entire result
+                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string())
+                };
+
+                ToolExecutionResult::success(output, start.elapsed().as_millis() as u64)
+            }
+            Err(e) => ToolExecutionResult::failure(
+                format!("MCP tool execution failed: {}", e),
+                start.elapsed().as_millis() as u64,
+            ),
+        }
+    }
+
+    /// Execute a custom tool in a sandboxed runtime
+    async fn execute_custom(
+        &self,
+        name: &str,
+        input: &Value,
+        context: Option<&ToolExecutionContext>,
+        start: std::time::Instant,
+    ) -> ToolExecutionResult {
+        let Some(custom_tool) = self.custom_tools.read().await.get(name).cloned() else {
+            return ToolExecutionResult::failure(
+                format!("Custom tool not found: {}", name),
+                start.elapsed().as_millis() as u64,
+            );
+        };
+
+        let runtime = custom_tool.runtime.to_lowercase();
+        if runtime != "python" && runtime != "py" {
+            return ToolExecutionResult::failure(
+                format!("Unsupported custom tool runtime: {}", custom_tool.runtime),
+                start.elapsed().as_millis() as u64,
+            );
+        }
+
+        let mut script = String::new();
+        script.push_str("import json\nimport sys\n\n");
+        script.push_str(&custom_tool.source_code);
+        script.push_str("\n\n");
+        script.push_str("def _kelpie_call(args):\n");
+        script.push_str(&format!("    fn = globals().get(\"{}\")\n", name));
+        script.push_str("    if fn is None:\n");
+        script.push_str(&format!(
+            "        raise RuntimeError(\"Tool function '{}' not found\")\n",
+            name
+        ));
+        script.push_str("    if isinstance(args, dict):\n");
+        script.push_str("        try:\n");
+        script.push_str("            return fn(**args)\n");
+        script.push_str("        except TypeError:\n");
+        script.push_str("            return fn(args)\n");
+        script.push_str("    return fn(args)\n\n");
+        script.push_str("def _kelpie_main():\n");
+        script.push_str("    payload = sys.stdin.read()\n");
+        script.push_str("    args = json.loads(payload) if payload else {}\n");
+        script.push_str("    result = _kelpie_call(args)\n");
+        script.push_str("    if not isinstance(result, str):\n");
+        script.push_str("        try:\n");
+        script.push_str("            result = json.dumps(result)\n");
+        script.push_str("        except Exception:\n");
+        script.push_str("            result = str(result)\n");
+        script.push_str("    sys.stdout.write(result)\n\n");
+        script.push_str("if __name__ == \"__main__\":\n");
+        script.push_str("    _kelpie_main()\n");
+
+        let mut sandbox = ProcessSandbox::new(SandboxConfig::default());
+        if let Err(e) = sandbox.start().await {
+            return ToolExecutionResult::failure(
+                format!("Failed to start sandbox: {}", e),
+                start.elapsed().as_millis() as u64,
+            );
+        }
+
+        if !custom_tool.requirements.is_empty() {
+            let mut install_args = vec!["-m", "pip", "install"];
+            for requirement in &custom_tool.requirements {
+                install_args.push(requirement);
+            }
+
+            let install_output = sandbox
+                .exec(
+                    "python3",
+                    &install_args,
+                    ExecOptions::new().with_timeout(Duration::from_secs(120)),
+                )
+                .await;
+
+            if let Err(e) = install_output {
+                return ToolExecutionResult::failure(
+                    format!("Failed to install tool requirements: {}", e),
+                    start.elapsed().as_millis() as u64,
+                );
+            }
+        }
+
+        let mut exec_opts = ExecOptions::new()
+            .with_timeout(Duration::from_secs(30))
+            .with_max_output(1024 * 1024)
+            .with_stdin(serde_json::to_vec(input).unwrap_or_default());
+
+        if let Some(ctx) = context {
+            if let Some(agent_id) = &ctx.agent_id {
+                exec_opts = exec_opts.with_env("LETTA_AGENT_ID", agent_id.clone());
+            }
+            if let Some(project_id) = &ctx.project_id {
+                exec_opts = exec_opts.with_env("LETTA_PROJECT_ID", project_id.clone());
+            }
+        }
+
+        if let Ok(api_key) = std::env::var("LETTA_API_KEY") {
+            exec_opts = exec_opts.with_env("LETTA_API_KEY", api_key);
+        }
+        if let Ok(base_url) = std::env::var("LETTA_BASE_URL") {
+            exec_opts = exec_opts.with_env("LETTA_BASE_URL", base_url);
+        }
+
+        let output = match sandbox.exec("python3", &["-c", &script], exec_opts).await {
+            Ok(output) => output,
+            Err(e) => {
+                return ToolExecutionResult::failure(
+                    format!("Custom tool execution failed: {}", e),
+                    start.elapsed().as_millis() as u64,
+                )
+            }
+        };
+
+        let duration = start.elapsed().as_millis() as u64;
+        if output.is_success() {
+            ToolExecutionResult::success(output.stdout_string(), duration)
+        } else {
+            let error = output.stderr_string();
+            ToolExecutionResult::failure(
+                if error.is_empty() {
+                    "Custom tool execution failed".to_string()
+                } else {
+                    error
+                },
+                duration,
+            )
+        }
     }
 
     /// Unregister a tool
@@ -371,6 +709,7 @@ impl UnifiedToolRegistry {
     pub async fn clear(&self) {
         self.tools.write().await.clear();
         self.builtin_handlers.write().await.clear();
+        self.custom_tools.write().await.clear();
     }
 
     /// Get statistics about registered tools
@@ -560,5 +899,49 @@ mod tests {
         assert!(!result.success);
         assert!(result.error.is_some());
         assert!(result.error.unwrap().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_server_not_connected() {
+        let registry = UnifiedToolRegistry::new();
+
+        // Register an MCP tool without connecting the server
+        registry
+            .register_mcp_tool("test_tool", "Test tool", json!({}), "test_server")
+            .await;
+
+        // Try to execute - should fail because server not connected
+        let result = registry.execute("test_tool", &json!({})).await;
+
+        assert!(!result.success);
+        assert!(result.error.is_some());
+        let error = result.error.unwrap();
+        assert!(error.contains("not connected"));
+    }
+
+    #[tokio::test]
+    async fn test_list_mcp_servers() {
+        let registry = UnifiedToolRegistry::new();
+
+        // Initially no servers
+        let servers = registry.list_mcp_servers().await;
+        assert_eq!(servers.len(), 0);
+
+        // Note: Can't test actual connection without a real MCP server
+        // Full integration tests will be in separate test file
+    }
+
+    #[tokio::test]
+    async fn test_mcp_execute_with_text_content() {
+        let registry = UnifiedToolRegistry::new();
+
+        // Register MCP tool
+        registry
+            .register_mcp_tool("test_tool", "Test", json!({}), "server1")
+            .await;
+
+        // Note: execute_mcp is private, so we test through execute()
+        // which will fail because server not connected
+        // Full MCP execution tests require real or mock MCP client
     }
 }

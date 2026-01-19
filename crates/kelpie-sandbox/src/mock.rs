@@ -258,7 +258,8 @@ impl Sandbox for MockSandbox {
             reason: e.to_string(),
         })?;
 
-        let snapshot = Snapshot::new(&self.id)
+        // Mock sandbox uses Suspend snapshot (memory-only, same-host)
+        let snapshot = Snapshot::suspend(&self.id)
             .with_memory(Bytes::from(fs_data))
             .with_env_state(env.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
 

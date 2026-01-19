@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::models::{Block, Message};
 
-use super::types::{AgentMetadata, SessionState};
+use super::types::{AgentMetadata, CustomToolRecord, SessionState};
 
 // =============================================================================
 // Storage Error
@@ -78,12 +78,67 @@ impl StorageError {
                 | StorageError::ReadFailed { .. }
                 | StorageError::TransactionConflict { .. }
                 | StorageError::ConnectionFailed { .. }
-        )
+        ) || {
+            #[cfg(feature = "dst")]
+            {
+                matches!(self, StorageError::FaultInjected { .. })
+            }
+            #[cfg(not(feature = "dst"))]
+            {
+                false
+            }
+        }
     }
 
     /// Check if this error indicates data not found
     pub fn is_not_found(&self) -> bool {
         matches!(self, StorageError::NotFound { .. })
+    }
+}
+
+// Convert StorageError to kelpie_core::Error for DST tests
+impl From<StorageError> for kelpie_core::Error {
+    fn from(err: StorageError) -> Self {
+        match err {
+            StorageError::NotFound { resource, id } => {
+                if resource == "agent" {
+                    kelpie_core::Error::ActorNotFound { id }
+                } else {
+                    kelpie_core::Error::Internal {
+                        message: format!("{} not found: {}", resource, id),
+                    }
+                }
+            }
+            StorageError::AlreadyExists { resource, id } => kelpie_core::Error::Internal {
+                message: format!("{} with id {} already exists", resource, id),
+            },
+            StorageError::WriteFailed { operation, reason } => kelpie_core::Error::Internal {
+                message: format!("Write failed: {} - {}", operation, reason),
+            },
+            StorageError::ReadFailed { operation, reason } => kelpie_core::Error::Internal {
+                message: format!("Read failed: {} - {}", operation, reason),
+            },
+            StorageError::TransactionConflict { reason } => kelpie_core::Error::Internal {
+                message: format!("Transaction conflict: {}", reason),
+            },
+            StorageError::SerializationFailed { reason } => kelpie_core::Error::Internal {
+                message: format!("Serialization failed: {}", reason),
+            },
+            StorageError::DeserializationFailed { reason } => kelpie_core::Error::Internal {
+                message: format!("Deserialization failed: {}", reason),
+            },
+            StorageError::ConnectionFailed { reason } => kelpie_core::Error::Internal {
+                message: format!("Connection failed: {}", reason),
+            },
+            StorageError::LimitExceeded { resource, limit } => kelpie_core::Error::Internal {
+                message: format!("{} limit exceeded: {}", resource, limit),
+            },
+            #[cfg(feature = "dst")]
+            StorageError::FaultInjected { operation } => kelpie_core::Error::Internal {
+                message: format!("Fault injected: {}", operation),
+            },
+            StorageError::Internal { message } => kelpie_core::Error::Internal { message },
+        }
     }
 }
 
@@ -163,6 +218,22 @@ pub trait AgentStorage: Send + Sync {
 
     /// List active sessions for an agent
     async fn list_sessions(&self, agent_id: &str) -> Result<Vec<SessionState>, StorageError>;
+
+    // =========================================================================
+    // Custom Tool Operations
+    // =========================================================================
+
+    /// Save a custom tool definition
+    async fn save_custom_tool(&self, tool: &CustomToolRecord) -> Result<(), StorageError>;
+
+    /// Load a custom tool definition by name
+    async fn load_custom_tool(&self, name: &str) -> Result<Option<CustomToolRecord>, StorageError>;
+
+    /// Delete a custom tool definition
+    async fn delete_custom_tool(&self, name: &str) -> Result<(), StorageError>;
+
+    /// List all custom tool definitions
+    async fn list_custom_tools(&self) -> Result<Vec<CustomToolRecord>, StorageError>;
 
     /// Get the latest session for an agent (for resume)
     async fn load_latest_session(

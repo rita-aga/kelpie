@@ -6,8 +6,12 @@ use crate::clock::SimClock;
 use crate::fault::{FaultConfig, FaultInjector, FaultInjectorBuilder};
 use crate::network::SimNetwork;
 use crate::rng::DeterministicRng;
+use crate::sandbox::SimSandboxFactory;
+use crate::sandbox_io::SimSandboxIOFactory;
 use crate::storage::SimStorage;
-use kelpie_core::{DST_STEPS_COUNT_MAX, DST_TIME_MS_MAX};
+use crate::teleport::SimTeleportStorage;
+use crate::vm::SimVmFactory;
+use kelpie_core::{IoContext, RngProvider, TimeProvider, DST_STEPS_COUNT_MAX, DST_TIME_MS_MAX};
 use std::future::Future;
 use std::sync::Arc;
 
@@ -88,20 +92,37 @@ impl Default for SimConfig {
 /// Environment provided to simulation tests
 pub struct SimEnvironment {
     /// Deterministic clock
-    pub clock: SimClock,
+    pub clock: Arc<SimClock>,
     /// Deterministic RNG
-    pub rng: DeterministicRng,
-    /// Simulated storage
+    pub rng: Arc<DeterministicRng>,
+    /// I/O context for DST (unified time/rng abstraction)
+    pub io_context: IoContext,
+    /// Simulated storage (for actor state)
     pub storage: SimStorage,
     /// Simulated network
     pub network: SimNetwork,
-    /// Fault injector
+    /// Fault injector (shared across all components)
     pub faults: Arc<FaultInjector>,
+    /// Simulated sandbox factory (for creating sandboxes with fault injection)
+    /// DEPRECATED: Use sandbox_io_factory for proper DST
+    pub sandbox_factory: SimSandboxFactory,
+    /// New sandbox factory using GenericSandbox<SimSandboxIO> for proper DST
+    /// This uses the SAME state machine code as production, only I/O differs
+    pub sandbox_io_factory: SimSandboxIOFactory,
+    /// Simulated teleport storage (for teleport package upload/download)
+    pub teleport_storage: SimTeleportStorage,
+    /// Simulated VM factory (for VmInstance-based teleport testing)
+    pub vm_factory: SimVmFactory,
 }
 
 impl SimEnvironment {
-    /// Fork the RNG to create an independent stream
-    pub fn fork_rng(&self) -> DeterministicRng {
+    /// Fork the RNG to create an independent stream (wrapped in Arc for sharing)
+    pub fn fork_rng(&self) -> Arc<DeterministicRng> {
+        Arc::new(self.rng.fork())
+    }
+
+    /// Fork the RNG to create an independent stream (raw, not wrapped)
+    pub fn fork_rng_raw(&self) -> DeterministicRng {
         self.rng.fork()
     }
 
@@ -113,6 +134,16 @@ impl SimEnvironment {
     /// Get current simulation time in milliseconds
     pub fn now_ms(&self) -> u64 {
         self.clock.now_ms()
+    }
+
+    /// Get time via IoContext (proper DST pattern)
+    pub fn time(&self) -> &Arc<dyn TimeProvider> {
+        &self.io_context.time
+    }
+
+    /// Get RNG via IoContext (proper DST pattern)
+    pub fn rng_provider(&self) -> &Arc<dyn RngProvider> {
+        &self.io_context.rng
     }
 }
 
@@ -150,8 +181,8 @@ impl Simulation {
         Fut: Future<Output = Result<T, kelpie_core::Error>>,
     {
         // Build the simulation environment
-        let rng = DeterministicRng::new(self.config.seed);
-        let clock = SimClock::default();
+        let rng = Arc::new(DeterministicRng::new(self.config.seed));
+        let clock = Arc::new(SimClock::default());
 
         // Build fault injector
         let mut fault_builder = FaultInjectorBuilder::new(rng.fork());
@@ -160,6 +191,12 @@ impl Simulation {
         }
         let faults = Arc::new(fault_builder.build());
 
+        // Build IoContext (unified time/rng for DST)
+        let io_context = IoContext {
+            time: clock.clone() as Arc<dyn TimeProvider>,
+            rng: rng.clone() as Arc<dyn RngProvider>,
+        };
+
         // Build storage
         let mut storage = SimStorage::new(rng.fork(), faults.clone());
         if let Some(limit) = self.config.storage_limit_bytes {
@@ -167,17 +204,33 @@ impl Simulation {
         }
 
         // Build network
-        let network = SimNetwork::new(clock.clone(), rng.fork(), faults.clone()).with_latency(
+        let network = SimNetwork::new((*clock).clone(), rng.fork(), faults.clone()).with_latency(
             self.config.network_latency_ms,
             self.config.network_jitter_ms,
         );
 
+        // Build old sandbox factory (deprecated)
+        let sandbox_factory = SimSandboxFactory::new(rng.fork(), faults.clone());
+
+        // Build new sandbox IO factory (proper DST - same state machine as production)
+        let sandbox_io_factory =
+            SimSandboxIOFactory::new(rng.clone(), faults.clone(), clock.clone());
+
+        // Build teleport storage
+        let teleport_storage = SimTeleportStorage::new(rng.fork(), faults.clone());
+        let vm_factory = SimVmFactory::new(rng.clone(), faults.clone(), clock.clone());
+
         let env = SimEnvironment {
             clock,
             rng,
+            io_context,
             storage,
             network,
             faults,
+            sandbox_factory,
+            sandbox_io_factory,
+            teleport_storage,
+            vm_factory,
         };
 
         // Run the test
@@ -195,8 +248,8 @@ impl Simulation {
         F: FnOnce(SimEnvironment) -> Fut,
         Fut: Future<Output = Result<T, kelpie_core::Error>>,
     {
-        let rng = DeterministicRng::new(self.config.seed);
-        let clock = SimClock::default();
+        let rng = Arc::new(DeterministicRng::new(self.config.seed));
+        let clock = Arc::new(SimClock::default());
 
         let mut fault_builder = FaultInjectorBuilder::new(rng.fork());
         for fault in self.fault_configs {
@@ -204,22 +257,44 @@ impl Simulation {
         }
         let faults = Arc::new(fault_builder.build());
 
+        // Build IoContext (unified time/rng for DST)
+        let io_context = IoContext {
+            time: clock.clone() as Arc<dyn TimeProvider>,
+            rng: rng.clone() as Arc<dyn RngProvider>,
+        };
+
         let mut storage = SimStorage::new(rng.fork(), faults.clone());
         if let Some(limit) = self.config.storage_limit_bytes {
             storage = storage.with_size_limit(limit);
         }
 
-        let network = SimNetwork::new(clock.clone(), rng.fork(), faults.clone()).with_latency(
+        let network = SimNetwork::new((*clock).clone(), rng.fork(), faults.clone()).with_latency(
             self.config.network_latency_ms,
             self.config.network_jitter_ms,
         );
 
+        // Build old sandbox factory (deprecated)
+        let sandbox_factory = SimSandboxFactory::new(rng.fork(), faults.clone());
+
+        // Build new sandbox IO factory (proper DST - same state machine as production)
+        let sandbox_io_factory =
+            SimSandboxIOFactory::new(rng.clone(), faults.clone(), clock.clone());
+
+        // Build teleport storage
+        let teleport_storage = SimTeleportStorage::new(rng.fork(), faults.clone());
+        let vm_factory = SimVmFactory::new(rng.clone(), faults.clone(), clock.clone());
+
         let env = SimEnvironment {
             clock,
             rng,
+            io_context,
             storage,
             network,
             faults,
+            sandbox_factory,
+            sandbox_io_factory,
+            teleport_storage,
+            vm_factory,
         };
 
         test(env).await.map_err(SimulationError::TestFailed)

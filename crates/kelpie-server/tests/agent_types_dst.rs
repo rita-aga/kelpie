@@ -4,6 +4,8 @@
 //! These tests define the expected behavior for agent type capabilities.
 //!
 //! Run with: cargo test -p kelpie-server --features dst --test agent_types_dst
+#![cfg(feature = "dst")]
+#![allow(deprecated)]
 
 use kelpie_dst::fault::FaultConfig;
 use kelpie_dst::{FaultType, SimConfig, Simulation};
@@ -22,6 +24,7 @@ fn create_agent_with_type(name: &str, agent_type: AgentType) -> AgentState {
         name: name.to_string(),
         agent_type,
         model: None,
+        embedding: None,
         system: None,
         description: None,
         memory_blocks: vec![CreateBlockRequest {
@@ -34,6 +37,7 @@ fn create_agent_with_type(name: &str, agent_type: AgentType) -> AgentState {
         tool_ids: vec![],
         tags: vec![],
         metadata: json!({}),
+        project_id: None,
     })
 }
 

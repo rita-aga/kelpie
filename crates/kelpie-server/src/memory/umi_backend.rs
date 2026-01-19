@@ -12,11 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use umi_memory::dst::SimEnvironment;
-use umi_memory::storage::SimVectorBackend;
-use umi_memory::{
-    Entity, Memory, RecallOptions, RememberOptions, SimEmbeddingProvider, SimLLMProvider,
-    SimStorageBackend,
-};
+use umi_memory::{Entity, Memory, RecallOptions, RememberOptions};
 
 // TigerStyle: Explicit constants with units
 /// Maximum core memory block size in bytes

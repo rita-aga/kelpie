@@ -21,8 +21,10 @@ pub mod actor;
 pub mod config;
 pub mod constants;
 pub mod error;
+pub mod io;
 pub mod metrics;
 pub mod telemetry;
+pub mod teleport;
 
 pub use actor::{
     Actor, ActorContext, ActorId, ActorRef, ArcContextKV, BufferedKVOp, BufferingContextKV,
@@ -31,4 +33,9 @@ pub use actor::{
 pub use config::KelpieConfig;
 pub use constants::*;
 pub use error::{Error, Result};
+pub use io::{IoContext, RngProvider, StdRngProvider, TimeProvider, WallClockTime};
 pub use telemetry::{init_telemetry, TelemetryConfig, TelemetryGuard};
+pub use teleport::{
+    Architecture, SnapshotKind, TeleportPackage, TeleportSnapshotError, TeleportStorage,
+    TeleportStorageError, TeleportStorageResult, VmSnapshotBlob,
+};

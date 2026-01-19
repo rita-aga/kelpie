@@ -25,11 +25,14 @@ pub const PENDING_TOOL_CALLS_MAX: usize = 10;
 pub const TOOL_INPUT_SIZE_BYTES_MAX: usize = 1024 * 1024; // 1MB
 
 /// Maximum messages to load by default
+#[allow(dead_code)]
 pub const MESSAGES_LOAD_LIMIT_DEFAULT: usize = 50;
 
 /// Maximum messages to load
+#[allow(dead_code)]
 pub const MESSAGES_LOAD_LIMIT_MAX: usize = 1000;
 
+/// Maximum custom tool name length in bytes
 // =============================================================================
 // Agent Metadata
 // =============================================================================
@@ -51,6 +54,9 @@ pub struct AgentMetadata {
 
     /// LLM model to use (e.g., "claude-3-opus")
     pub model: Option<String>,
+
+    /// Embedding model to use (e.g., "openai/text-embedding-3-small")
+    pub embedding: Option<String>,
 
     /// System prompt override
     pub system: Option<String>,
@@ -74,6 +80,31 @@ pub struct AgentMetadata {
     pub updated_at: DateTime<Utc>,
 }
 
+// =============================================================================
+// Custom Tool Metadata
+// =============================================================================
+
+/// Custom tool definition stored in durable storage
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CustomToolRecord {
+    /// Tool name (unique)
+    pub name: String,
+    /// Description for LLM and user display
+    pub description: String,
+    /// JSON schema for inputs
+    pub input_schema: Value,
+    /// Source code (runtime-specific)
+    pub source_code: String,
+    /// Runtime identifier (python, javascript, etc.)
+    pub runtime: String,
+    /// Optional runtime requirements
+    pub requirements: Vec<String>,
+    /// Creation timestamp
+    pub created_at: DateTime<Utc>,
+    /// Last update timestamp
+    pub updated_at: DateTime<Utc>,
+}
+
 impl AgentMetadata {
     /// Create new agent metadata with defaults
     pub fn new(id: String, name: String, agent_type: AgentType) -> Self {
@@ -92,6 +123,7 @@ impl AgentMetadata {
             name,
             agent_type,
             model: None,
+            embedding: None,
             system: None,
             description: None,
             tool_ids: Vec::new(),

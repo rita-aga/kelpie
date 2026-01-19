@@ -2,12 +2,19 @@
 //!
 //! TigerStyle: Letta-compatible REST API for agent management.
 
+pub mod agent_groups;
 pub mod agents;
 pub mod archival;
 pub mod blocks;
+pub mod import_export;
+pub mod mcp_servers;
 pub mod messages;
+pub mod projects;
+pub mod scheduling;
 pub mod standalone_blocks;
 pub mod streaming;
+pub mod summarization;
+pub mod teleport;
 pub mod tools;
 
 use axum::{
@@ -39,11 +46,24 @@ pub fn router(state: AppState) -> Router {
         // Capabilities
         .route("/v1/capabilities", get(capabilities))
         // Agent routes
-        .nest("/v1/agents", agents::router())
+        .nest(
+            "/v1/agents",
+            agents::router().merge(summarization::router()),
+        )
         // Standalone blocks routes (letta-code compatibility)
         .nest("/v1/blocks", standalone_blocks::router())
         // Tool routes
         .nest("/v1/tools", tools::router())
+        // MCP servers routes (Letta compatibility)
+        .nest("/v1/mcp-servers", mcp_servers::router())
+        // Agent groups routes (Phase 8)
+        .nest("/v1", agent_groups::router())
+        // Teleport routes
+        .nest("/v1/teleport", teleport::router())
+        // Scheduling routes (Phase 5)
+        .nest("/v1", scheduling::router())
+        // Projects routes (Phase 6)
+        .nest("/v1", projects::router())
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state)
@@ -59,6 +79,7 @@ async fn capabilities() -> Json<CapabilitiesResponse> {
             "tools".to_string(),
             "archival_memory".to_string(),
             "semantic_search".to_string(),
+            "teleport".to_string(),
         ],
         api_version: "v1".to_string(),
         llm_models: vec![
@@ -190,6 +211,19 @@ impl ApiError {
             body: ErrorResponse::new("conflict", message),
         }
     }
+
+    pub fn unprocessable_entity(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            body: ErrorResponse::new("unprocessable_entity", message),
+        }
+    }
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.body.code, self.body.message)
+    }
 }
 
 impl IntoResponse for ApiError {
@@ -212,6 +246,10 @@ impl From<StateError> for ApiError {
             StateError::FaultInjected { operation } => {
                 // DST fault injection - return as internal error
                 ApiError::internal(format!("operation failed: {}", operation))
+            }
+            StateError::Internal { message } => {
+                // Service errors or other internal errors
+                ApiError::internal(message)
             }
         }
     }

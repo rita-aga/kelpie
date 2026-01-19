@@ -99,6 +99,27 @@ impl ActorKV for MemoryKV {
             .unwrap_or_default())
     }
 
+    #[instrument(skip(self, prefix), fields(actor_id = %actor_id.qualified_name(), prefix_len = prefix.len()))]
+    async fn scan_prefix(
+        &self,
+        actor_id: &ActorId,
+        prefix: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Bytes)>> {
+        let data = self.data.read().await;
+        let actor_key = Self::actor_key(actor_id);
+
+        Ok(data
+            .get(&actor_key)
+            .map(|actor_data| {
+                actor_data
+                    .iter()
+                    .filter(|(k, _)| k.starts_with(prefix))
+                    .map(|(k, v)| (k.clone(), Bytes::copy_from_slice(v)))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
     #[instrument(skip(self), fields(actor_id = %actor_id.qualified_name()))]
     async fn begin_transaction(&self, actor_id: &ActorId) -> Result<Box<dyn ActorTransaction>> {
         Ok(Box::new(MemoryTransaction::new(

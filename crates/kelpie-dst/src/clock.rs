@@ -1,8 +1,14 @@
 //! Deterministic clock for simulation
 //!
 //! TigerStyle: Explicit time control, no system time dependencies.
+//!
+//! SimClock implements the `TimeProvider` trait from kelpie-core, enabling
+//! the same business logic code to run with either wall clock (production)
+//! or simulated clock (DST).
 
+use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
+use kelpie_core::TimeProvider;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -117,6 +123,30 @@ impl Default for SimClock {
                 .unwrap()
                 .to_utc(),
         )
+    }
+}
+
+// ============================================================================
+// TimeProvider Implementation
+// ============================================================================
+
+/// SimClock implements TimeProvider for DST compatibility
+///
+/// This allows the same business logic code to use either:
+/// - `WallClockTime` (production)
+/// - `SimClock` (DST)
+#[async_trait]
+impl TimeProvider for SimClock {
+    fn now_ms(&self) -> u64 {
+        self.current_time_ms.load(Ordering::SeqCst)
+    }
+
+    async fn sleep_ms(&self, ms: u64) {
+        let target_ms = self.now_ms() + ms;
+
+        while self.now_ms() < target_ms {
+            self.notify.notified().await;
+        }
     }
 }
 

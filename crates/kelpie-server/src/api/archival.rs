@@ -35,6 +35,10 @@ pub struct ArchivalSearchQuery {
     #[serde(default)]
     #[allow(dead_code)]
     pub cursor: Option<String>,
+    /// Cursor for pagination (Letta SDK compatibility - alias for cursor)
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub after: Option<String>,
 }
 
 fn default_limit() -> usize {

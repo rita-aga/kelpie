@@ -58,9 +58,150 @@ kelpie/
 │   ├── kelpie-dst/       # Deterministic Simulation Testing
 │   ├── kelpie-server/    # Standalone server binary
 │   └── kelpie-cli/       # CLI tools
-├── docs/adr/             # Architecture Decision Records
+├── docs/                 # Documentation
+│   ├── adr/              # Architecture Decision Records
+│   ├── VISION.md         # Project goals and architecture (moved from root)
+│   └── LETTA_MIGRATION_GUIDE.md # Letta migration guide (moved from root)
+├── images/               # Base image build system
+│   ├── Dockerfile        # Alpine base image
+│   ├── build.sh          # Multi-arch build script
+│   ├── guest-agent/      # Rust guest agent
+│   ├── base/             # Init system and configs
+│   └── kernel/           # Kernel extraction
 └── tests/                # Integration tests
 ```
+
+## Base Images
+
+Kelpie agents run in lightweight Alpine Linux microVMs for isolation and teleportation. The base image system (Phases 5.1-5.6) provides:
+
+### Quick Reference
+
+```bash
+# Build images locally
+cd images && ./build.sh --arch arm64 --version 1.0.0
+
+# Extract kernel/initramfs
+cd images/kernel && ./extract-kernel.sh
+
+# Run tests
+cargo test -p kelpie-server --test version_validation_test
+```
+
+### Key Features
+
+1. **Alpine 3.19 Base** (~28.8MB)
+   - Essential packages: busybox, bash, coreutils, util-linux
+   - Multi-arch: ARM64 + x86_64
+   - VM-optimized kernel (linux-virt 6.6.x)
+
+2. **Guest Agent** (Rust)
+   - Unix socket communication (virtio-vsock in production)
+   - Command execution with stdin/stdout/stderr
+   - File operations (read, write, list)
+   - Health monitoring (ping/pong)
+
+3. **Custom Init System**
+   - Mounts essential filesystems (proc, sys, dev, tmp, run)
+   - Starts guest agent automatically
+   - Graceful shutdown handling
+   - Boot time: <1s
+
+4. **Version Compatibility**
+   - Format: `MAJOR.MINOR.PATCH[-prerelease]-DATE-GITSHA`
+   - MAJOR.MINOR must match for teleport compatibility
+   - PATCH differences allowed (with warning)
+   - Prerelease metadata ignored
+
+5. **CI/CD Pipeline**
+   - GitHub Actions with native ARM64 + x86_64 runners
+   - Automated builds on push/release
+   - Upload to GitHub Releases + Container Registry
+   - Multi-arch Docker manifests
+
+### Documentation
+
+See `images/README.md` for:
+- Build instructions
+- Image structure
+- Guest agent protocol
+- Troubleshooting
+- Development workflow
+
+### Status
+
+- ✅ Phase 5.1: Build System (complete)
+- ✅ Phase 5.2: Guest Agent (complete, 4 tests)
+- ✅ Phase 5.3: Init System (complete)
+- ✅ Phase 5.4: Kernel Extraction (complete)
+- ✅ Phase 5.5: Distribution (complete, GitHub Actions)
+- ✅ Phase 5.6: Version Validation (complete, 5 tests)
+- ✅ Phase 5.7: libkrun Integration (complete, testing/reference only)
+- ✅ Phase 5.9: VM Backends (complete, Apple Vz + Firecracker with DST coverage)
+
+## VM Backends & Hypervisors
+
+Kelpie uses a **multi-backend architecture** for VM management, allowing different hypervisors based on platform and use case.
+
+### Backend Selection Strategy
+
+| Backend | Platform | Use Case | Snapshot Support |
+|---------|----------|----------|------------------|
+| **MockVm** | All | Testing, DST, CI/CD | ✅ Simulated |
+| **Apple Vz** | macOS | Production (Mac dev) | ✅ Native API (macOS 14+) |
+| **Firecracker** | Linux | Production (cloud) | ✅ Production-proven |
+
+### Why Multiple Backends?
+
+1. **Platform-Native Performance**: Use native hypervisors for best performance
+2. **Testing Everywhere**: MockVm works without system dependencies
+3. **Production-Ready**: Apple Vz and Firecracker have mature snapshot APIs
+4. **Cross-Platform Development**: Mac devs use Apple Vz, Linux devs use Firecracker
+
+### Quick Testing Guide
+
+```bash
+# Default: MockVm (no system dependencies, works everywhere)
+cargo test -p kelpie-vm
+
+# Apple Vz backend (macOS only)
+cargo test -p kelpie-vm --features vz
+
+# Firecracker backend (Linux only)
+cargo test -p kelpie-vm --features firecracker
+```
+
+### Platform-Specific Commands
+
+```bash
+# macOS Development
+cargo test -p kelpie-vm --features vz
+cargo run -p kelpie-server --features vz
+
+# Linux Development
+cargo test -p kelpie-vm --features firecracker
+cargo run -p kelpie-server --features firecracker
+
+# Testing (all platforms)
+cargo test -p kelpie-vm  # Uses MockVm by default
+DST_SEED=12345 cargo test -p kelpie-dst
+```
+
+### Architecture Compatibility
+
+**Same-Architecture Teleport** (VM Snapshot):
+- ✅ Mac ARM64 → AWS Graviton ARM64
+- ✅ Linux x86_64 → Linux x86_64
+- ✅ Full VM memory state preserved
+- ✅ Fast restore (~125-500ms)
+
+**Cross-Architecture Migration** (Checkpoint):
+- ✅ Mac ARM64 → Linux x86_64 (agent state only)
+- ✅ Linux x86_64 → Mac ARM64 (agent state only)
+- ❌ VM memory cannot be transferred (CPU incompatibility)
+- ⚠️ Slower (VM restarts fresh, agent state reloaded)
+
+**Implementation Plan**: See `.progress/016_20260115_121324_teleport-dual-backend-implementation.md`
 
 ## TigerStyle Engineering Principles
 
@@ -240,7 +381,7 @@ fn test_actor_under_faults() {
 #### 1. Check for Vision Files
 
 - **Read `.vision/CONSTRAINTS.md`** - Non-negotiable rules and principles
-- **Read `VISION.md`** - Project goals and architecture
+- **Read `VISION.md`** - Project goals and architecture (in root)
 - **Read existing `.progress/` plans** - Understand current state
 
 #### 2. Create a Numbered Plan File

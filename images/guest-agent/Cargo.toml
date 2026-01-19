@@ -1,0 +1,38 @@
+[package]
+name = "kelpie-guest"
+version = "0.1.0"
+edition = "2021"
+description = "Guest agent for Kelpie sandboxes (runs inside VM)"
+license = "Apache-2.0"
+
+# TigerStyle: Static linking, minimal dependencies
+[profile.release]
+opt-level = "z"  # Optimize for size
+lto = true       # Link-time optimization
+codegen-units = 1
+panic = "abort"  # No unwinding
+strip = true     # Strip symbols
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.42", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time", "signal", "fs", "process"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# For virtio-vsock communication
+# We'll use tokio UnixStream for now (vsock sockets work like Unix sockets)
+# In production with real libkrun, we'd use tokio-vsock or similar
+
+[target.'cfg(target_env = "musl")'.dependencies]
+# Ensure static linking with musl
+libc = { version = "0.2", features = ["extra_traits"] }

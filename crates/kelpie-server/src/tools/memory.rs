@@ -29,10 +29,13 @@ pub async fn register_memory_tools(registry: &UnifiedToolRegistry, state: AppSta
     register_archival_memory_search(registry, state.clone()).await;
 
     // conversation_search
-    register_conversation_search(registry, state).await;
+    register_conversation_search(registry, state.clone()).await;
+
+    // conversation_search_date
+    register_conversation_search_date(registry, state).await;
 
     tracing::info!(
-        "Registered memory tools: core_memory_append, core_memory_replace, archival_memory_insert, archival_memory_search, conversation_search"
+        "Registered memory tools: core_memory_append, core_memory_replace, archival_memory_insert, archival_memory_search, conversation_search, conversation_search_date"
     );
 }
 
@@ -379,7 +382,192 @@ async fn register_conversation_search(registry: &UnifiedToolRegistry, state: App
         .await;
 }
 
+async fn register_conversation_search_date(registry: &UnifiedToolRegistry, state: AppState) {
+    let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
+        let state = state.clone();
+        let input = input.clone();
+        Box::pin(async move {
+            let agent_id = match input.get("agent_id").and_then(|v| v.as_str()) {
+                Some(id) => id.to_string(),
+                None => return "Error: missing required parameter 'agent_id'".to_string(),
+            };
+
+            let query = match input.get("query").and_then(|v| v.as_str()) {
+                Some(q) => q.to_string(),
+                None => return "Error: missing required parameter 'query'".to_string(),
+            };
+
+            // Parse start_date (optional)
+            let start_date = match input.get("start_date") {
+                Some(val) => match parse_date_param(val) {
+                    Ok(dt) => Some(dt),
+                    Err(e) => return format!("Error parsing start_date: {}", e),
+                },
+                None => None,
+            };
+
+            // Parse end_date (optional)
+            let end_date = match input.get("end_date") {
+                Some(val) => match parse_date_param(val) {
+                    Ok(dt) => Some(dt),
+                    Err(e) => return format!("Error parsing end_date: {}", e),
+                },
+                None => None,
+            };
+
+            // Validate date range
+            if let (Some(start), Some(end)) = (start_date, end_date) {
+                if start > end {
+                    return "Error: start_date must be before end_date".to_string();
+                }
+            }
+
+            let page = input.get("page").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
+            let page_size = 10;
+
+            // Get all messages and filter
+            match state.list_messages(&agent_id, 1000, None) {
+                Ok(messages) => {
+                    let query_lower = query.to_lowercase();
+                    let matching: Vec<_> = messages
+                        .iter()
+                        .filter(|m| {
+                            // Text filter
+                            let matches_query = m.content.to_lowercase().contains(&query_lower);
+
+                            // Date filter
+                            let matches_dates = match (start_date, end_date) {
+                                (Some(start), Some(end)) => {
+                                    m.created_at >= start && m.created_at <= end
+                                }
+                                (Some(start), None) => m.created_at >= start,
+                                (None, Some(end)) => m.created_at <= end,
+                                (None, None) => true,
+                            };
+
+                            matches_query && matches_dates
+                        })
+                        .skip(page * page_size)
+                        .take(page_size)
+                        .collect();
+
+                    if matching.is_empty() {
+                        "No matching conversations found in date range".to_string()
+                    } else {
+                        let results: Vec<String> = matching
+                            .iter()
+                            .map(|m| {
+                                format!(
+                                    "[{:?}] [{}]: {}",
+                                    m.role,
+                                    m.created_at.to_rfc3339(),
+                                    m.content
+                                )
+                            })
+                            .collect();
+                        format!(
+                            "Found {} results (page {}):\n{}",
+                            results.len(),
+                            page,
+                            results.join("\n---\n")
+                        )
+                    }
+                }
+                Err(e) => format!("Error: {}", e),
+            }
+        })
+    });
+
+    registry
+        .register_builtin(
+            "conversation_search_date",
+            "Search past conversation messages with date filtering. Returns paginated results matching the query within the specified date range. Supports ISO 8601, RFC 3339, and Unix timestamps.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "The agent ID whose conversations to search"
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Search query"
+                    },
+                    "start_date": {
+                        "type": ["string", "integer"],
+                        "description": "Start date (ISO 8601/RFC 3339 string or Unix timestamp). Messages on or after this date will be included."
+                    },
+                    "end_date": {
+                        "type": ["string", "integer"],
+                        "description": "End date (ISO 8601/RFC 3339 string or Unix timestamp). Messages on or before this date will be included."
+                    },
+                    "page": {
+                        "type": "integer",
+                        "description": "Page number (0-indexed)",
+                        "default": 0
+                    }
+                },
+                "required": ["agent_id", "query"]
+            }),
+            handler,
+        )
+        .await;
+}
+
+/// Parse date parameter from JSON value
+///
+/// Supports:
+/// - ISO 8601: "2024-01-15T10:00:00Z"
+/// - RFC 3339: "2024-01-15T10:00:00+00:00"
+/// - Unix timestamp: 1705315200 (seconds since epoch)
+fn parse_date_param(val: &Value) -> Result<chrono::DateTime<chrono::Utc>, String> {
+    use chrono::{DateTime, TimeZone, Utc};
+
+    match val {
+        // String: try ISO 8601 / RFC 3339
+        Value::String(s) => {
+            DateTime::parse_from_rfc3339(s)
+                .map(|dt| dt.with_timezone(&Utc))
+                .or_else(|_| {
+                    // Try ISO 8601 without timezone (assume UTC)
+                    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S")
+                        .map(|ndt| Utc.from_utc_datetime(&ndt))
+                })
+                .or_else(|_| {
+                    // Try date only (assume start of day UTC)
+                    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").map(|nd| {
+                        Utc.from_utc_datetime(
+                            &nd.and_hms_opt(0, 0, 0)
+                                .expect("00:00:00 is always a valid time"),
+                        )
+                    })
+                })
+                .map_err(|e| {
+                    format!(
+                        "Invalid date format '{}'. Expected ISO 8601/RFC 3339 or Unix timestamp. Error: {}",
+                        s, e
+                    )
+                })
+        }
+        // Number: treat as Unix timestamp (seconds)
+        Value::Number(n) => {
+            if let Some(ts) = n.as_i64() {
+                Utc.timestamp_opt(ts, 0)
+                    .single()
+                    .ok_or_else(|| format!("Invalid Unix timestamp: {} (out of range)", ts))
+            } else {
+                Err(format!("Invalid timestamp: {}", n))
+            }
+        }
+        _ => Err(format!(
+            "Invalid date type: expected string or number, got {:?}",
+            val
+        )),
+    }
+}
+
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::models::{AgentState, AgentType, CreateAgentRequest, CreateBlockRequest};
@@ -389,6 +577,7 @@ mod tests {
             name: name.to_string(),
             agent_type: AgentType::default(),
             model: None,
+            embedding: None,
             system: None,
             description: None,
             memory_blocks: vec![CreateBlockRequest {
@@ -401,6 +590,7 @@ mod tests {
             tool_ids: vec![],
             tags: vec![],
             metadata: json!({}),
+            project_id: None,
         })
     }
 
@@ -530,5 +720,217 @@ mod tests {
 
         assert!(result.success, "Search failed: {}", result.output);
         assert!(result.output.contains("blue") || result.output.contains("Found"));
+    }
+
+    #[test]
+    fn test_parse_date_iso8601() {
+        // RFC 3339 with timezone
+        let val = json!("2024-01-15T10:00:00Z");
+        let dt = parse_date_param(&val).unwrap();
+        assert_eq!(dt.timestamp(), 1705312800);
+
+        // RFC 3339 with offset
+        let val = json!("2024-01-15T10:00:00+00:00");
+        let dt = parse_date_param(&val).unwrap();
+        assert_eq!(dt.timestamp(), 1705312800);
+    }
+
+    #[test]
+    fn test_parse_date_unix_timestamp() {
+        use chrono::Datelike;
+        // Unix timestamp (seconds)
+        let val = json!(1705315200);
+        let dt = parse_date_param(&val).unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 1);
+        assert_eq!(dt.day(), 15);
+    }
+
+    #[test]
+    fn test_parse_date_date_only() {
+        use chrono::{Datelike, Timelike};
+        // Date only (assumes 00:00:00 UTC)
+        let val = json!("2024-01-15");
+        let dt = parse_date_param(&val).unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 1);
+        assert_eq!(dt.day(), 15);
+        assert_eq!(dt.hour(), 0);
+        assert_eq!(dt.minute(), 0);
+    }
+
+    #[test]
+    fn test_parse_date_invalid() {
+        // Invalid format
+        let val = json!("not-a-date");
+        assert!(parse_date_param(&val).is_err());
+
+        // Invalid type
+        let val = json!(true);
+        assert!(parse_date_param(&val).is_err());
+
+        // Invalid timestamp (too large)
+        let val = json!(99999999999999i64);
+        assert!(parse_date_param(&val).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_conversation_search_date() {
+        let state = AppState::new();
+
+        // Create agent
+        let agent = create_test_agent("test-agent");
+        let agent_id = agent.id.clone();
+        state.create_agent(agent).unwrap();
+
+        // Register memory tools
+        let registry = state.tool_registry();
+        register_memory_tools(registry, state.clone()).await;
+
+        // Add test message (via send_message endpoint simulation)
+        // Note: In real usage, messages are added through handle_message
+        // For testing, we'll verify the tool executes without error
+
+        // Search with valid date range
+        let result = registry
+            .execute(
+                "conversation_search_date",
+                &json!({
+                    "agent_id": agent_id,
+                    "query": "test",
+                    "start_date": "2024-01-01T00:00:00Z",
+                    "end_date": "2024-12-31T23:59:59Z"
+                }),
+            )
+            .await;
+
+        assert!(result.success, "Search failed: {}", result.output);
+        // Since agent has no messages yet, expect "No matching conversations"
+        assert!(result.output.contains("No matching conversations"));
+    }
+
+    #[tokio::test]
+    async fn test_conversation_search_date_unix_timestamp() {
+        let state = AppState::new();
+
+        // Create agent
+        let agent = create_test_agent("test-agent");
+        let agent_id = agent.id.clone();
+        state.create_agent(agent).unwrap();
+
+        // Register memory tools
+        let registry = state.tool_registry();
+        register_memory_tools(registry, state.clone()).await;
+
+        // Search with Unix timestamps
+        let result = registry
+            .execute(
+                "conversation_search_date",
+                &json!({
+                    "agent_id": agent_id,
+                    "query": "test",
+                    "start_date": 1704067200, // 2024-01-01
+                    "end_date": 1735689599   // 2024-12-31
+                }),
+            )
+            .await;
+
+        assert!(result.success, "Search failed: {}", result.output);
+    }
+
+    #[tokio::test]
+    async fn test_conversation_search_date_invalid_range() {
+        let state = AppState::new();
+
+        // Create agent
+        let agent = create_test_agent("test-agent");
+        let agent_id = agent.id.clone();
+        state.create_agent(agent).unwrap();
+
+        // Register memory tools
+        let registry = state.tool_registry();
+        register_memory_tools(registry, state.clone()).await;
+
+        // Search with invalid range (start > end)
+        let result = registry
+            .execute(
+                "conversation_search_date",
+                &json!({
+                    "agent_id": agent_id,
+                    "query": "test",
+                    "start_date": "2024-12-31T00:00:00Z",
+                    "end_date": "2024-01-01T00:00:00Z"
+                }),
+            )
+            .await;
+
+        // Should fail with error message
+        assert!(result
+            .output
+            .contains("Error: start_date must be before end_date"));
+    }
+
+    #[tokio::test]
+    async fn test_conversation_search_date_invalid_format() {
+        let state = AppState::new();
+
+        // Create agent
+        let agent = create_test_agent("test-agent");
+        let agent_id = agent.id.clone();
+        state.create_agent(agent).unwrap();
+
+        // Register memory tools
+        let registry = state.tool_registry();
+        register_memory_tools(registry, state.clone()).await;
+
+        // Search with invalid date format
+        let result = registry
+            .execute(
+                "conversation_search_date",
+                &json!({
+                    "agent_id": agent_id,
+                    "query": "test",
+                    "start_date": "not-a-date"
+                }),
+            )
+            .await;
+
+        // Should fail with error message
+        assert!(result.output.contains("Error parsing start_date"));
+    }
+
+    #[tokio::test]
+    async fn test_conversation_search_date_missing_params() {
+        let state = AppState::new();
+        let registry = state.tool_registry();
+        register_memory_tools(registry, state.clone()).await;
+
+        // Missing agent_id
+        let result = registry
+            .execute(
+                "conversation_search_date",
+                &json!({
+                    "query": "test"
+                }),
+            )
+            .await;
+
+        assert!(result
+            .output
+            .contains("Error: missing required parameter 'agent_id'"));
+
+        // Missing query
+        let result = registry
+            .execute(
+                "conversation_search_date",
+                &json!({
+                    "agent_id": "test-id"
+                }),
+            )
+            .await;
+
+        assert!(result
+            .output
+            .contains("Error: missing required parameter 'query'"));
     }
 }

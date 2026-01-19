@@ -37,6 +37,7 @@
 mod config;
 mod error;
 mod exec;
+pub mod io;
 mod mock;
 mod pool;
 mod process;
@@ -49,11 +50,18 @@ mod firecracker;
 pub use config::{ResourceLimits, SandboxConfig};
 pub use error::{SandboxError, SandboxResult};
 pub use exec::{ExecOptions, ExecOutput, ExitStatus};
-pub use mock::MockSandbox;
+pub use mock::{MockSandbox, MockSandboxFactory};
 pub use pool::{PoolConfig, SandboxPool};
 pub use process::{ProcessSandbox, ProcessSandboxFactory};
-pub use snapshot::{Snapshot, SnapshotMetadata};
-pub use traits::{Sandbox, SandboxFactory, SandboxState};
+pub use snapshot::{
+    Architecture, Snapshot, SnapshotKind, SnapshotMetadata, SnapshotValidationError,
+    SNAPSHOT_CHECKPOINT_SIZE_BYTES_MAX, SNAPSHOT_FORMAT_VERSION, SNAPSHOT_SUSPEND_SIZE_BYTES_MAX,
+    SNAPSHOT_TELEPORT_SIZE_BYTES_MAX,
+};
+pub use traits::{Sandbox, SandboxFactory, SandboxState, SandboxStats};
+
+// I/O Abstraction for DST
+pub use io::{GenericSandbox, SandboxIO, SnapshotData};
 
 #[cfg(feature = "firecracker")]
 pub use firecracker::{

@@ -42,6 +42,11 @@ struct Cli {
     /// Enable verbose logging
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
+
+    /// FoundationDB cluster file path (enables FDB storage)
+    #[cfg(feature = "fdb")]
+    #[arg(long)]
+    fdb_cluster_file: Option<String>,
 }
 
 #[tokio::main]
@@ -79,12 +84,48 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid bind address '{}': {}", cli.bind, e))?;
 
-    // Create application state with Prometheus registry (if available)
+    // Initialize storage backend (if configured)
+    #[cfg(feature = "fdb")]
+    let storage = if let Some(ref cluster_file) = cli.fdb_cluster_file {
+        use kelpie_server::storage::FdbAgentRegistry;
+        use kelpie_storage::FdbKV;
+
+        tracing::info!("Connecting to FoundationDB: {}", cluster_file);
+        let fdb_kv = FdbKV::connect(Some(cluster_file))
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to FDB: {}", e))?;
+
+        let registry = FdbAgentRegistry::new(Arc::new(fdb_kv));
+        tracing::info!("FDB storage initialized");
+        Some(Arc::new(registry) as Arc<dyn kelpie_server::storage::AgentStorage>)
+    } else {
+        tracing::info!("Running in-memory mode (no persistence)");
+        None
+    };
+
+    #[cfg(not(feature = "fdb"))]
+    let storage: Option<Arc<dyn kelpie_server::storage::AgentStorage>> = {
+        tracing::info!("Running in-memory mode (no persistence)");
+        None
+    };
+
+    // Create application state
     #[cfg(feature = "otel")]
-    let state = AppState::with_registry(_telemetry_guard.registry());
+    let state = if let Some(storage) = storage {
+        AppState::with_storage_and_registry(
+            storage,
+            _telemetry_guard.registry().cloned(),
+        )
+    } else {
+        AppState::with_registry(_telemetry_guard.registry())
+    };
 
     #[cfg(not(feature = "otel"))]
-    let state = AppState::new();
+    let state = if let Some(storage) = storage {
+        AppState::with_storage(storage)
+    } else {
+        AppState::new()
+    };
 
     // Register builtin tools
     register_builtin_tools(&state).await;
@@ -94,6 +135,25 @@ async fn main() -> anyhow::Result<()> {
 
     // Register heartbeat tools
     register_heartbeat_tools(state.tool_registry()).await;
+
+    // Register messaging tools
+    tools::register_messaging_tools(state.tool_registry()).await;
+
+    // Register web search tool
+    tools::register_web_search_tool(state.tool_registry()).await;
+
+    // Register code execution tool
+    tools::register_run_code_tool(state.tool_registry()).await;
+
+    // Load custom tools from storage (if configured)
+    if let Err(err) = state.load_custom_tools().await {
+        tracing::warn!(error = %err, "Failed to load custom tools from storage");
+    }
+
+    // Load agents from storage (if configured)
+    if let Err(err) = state.load_agents_from_storage().await {
+        tracing::warn!(error = %err, "Failed to load agents from storage");
+    }
 
     // Create router
     let app = api::router(state);

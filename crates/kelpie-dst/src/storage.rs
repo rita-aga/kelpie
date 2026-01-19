@@ -63,6 +63,11 @@ impl SimStorage {
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     // Fall through to actual read
                 }
+                // Crash faults are write-specific - ignore during reads
+                // This allows tests to register crash faults globally without breaking reads
+                FaultType::CrashBeforeWrite | FaultType::CrashAfterWrite => {
+                    // Fall through to actual read - these faults don't affect reads
+                }
                 _ => {
                     return self.handle_read_fault(fault, key);
                 }
@@ -75,9 +80,32 @@ impl SimStorage {
 
     /// Write a value to storage
     pub async fn write(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        // Check for fault injection
-        if let Some(fault) = self.fault_injector.should_inject("storage_write") {
-            return self.handle_write_fault(fault, key);
+        // Check for fault injection (pre-write faults)
+        let fault = self.fault_injector.should_inject("storage_write");
+
+        // Handle pre-write faults (CrashBeforeWrite, StorageWriteFail, etc.)
+        if let Some(ref f) = fault {
+            match f {
+                FaultType::CrashBeforeWrite => {
+                    return Err(Error::Internal {
+                        message: "crash before write (injected)".into(),
+                    });
+                }
+                FaultType::StorageWriteFail => {
+                    return Err(Error::StorageWriteFailed {
+                        key: String::from_utf8_lossy(key).to_string(),
+                        reason: "injected fault".into(),
+                    });
+                }
+                FaultType::DiskFull => {
+                    return Err(Error::StorageWriteFailed {
+                        key: String::from_utf8_lossy(key).to_string(),
+                        reason: "disk full (injected)".into(),
+                    });
+                }
+                // CrashAfterWrite and other faults are handled after the write
+                _ => {}
+            }
         }
 
         // Check size limit
@@ -109,6 +137,16 @@ impl SimStorage {
         } else {
             self.current_size_bytes
                 .fetch_sub((-size_delta) as usize, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        // Handle post-write faults (CrashAfterWrite)
+        // Write succeeded, but then we "crash" - data is persisted but caller sees error
+        if let Some(f) = fault {
+            if matches!(f, FaultType::CrashAfterWrite) {
+                return Err(Error::Internal {
+                    message: "crash after write (injected) - data was written".into(),
+                });
+            }
         }
 
         Ok(())
@@ -162,6 +200,10 @@ impl SimStorage {
     }
 
     /// Handle read faults
+    ///
+    /// TigerStyle: Only apply faults that make sense for read operations.
+    /// Crash faults (CrashBeforeWrite, CrashAfterWrite) are write-specific
+    /// and should be ignored during reads.
     fn handle_read_fault(&self, fault: FaultType, key: &[u8]) -> Result<Option<Bytes>> {
         match fault {
             FaultType::StorageReadFail => Err(Error::StorageReadFailed {
@@ -184,6 +226,16 @@ impl SimStorage {
                 Err(Error::Internal {
                     message: "StorageLatency fault should not be handled in handle_read_fault"
                         .into(),
+                })
+            }
+            // Crash faults are write-specific - ignore during reads
+            // This allows tests to register crash faults globally without breaking reads
+            FaultType::CrashBeforeWrite | FaultType::CrashAfterWrite => {
+                // These faults don't affect reads - continue with normal read
+                // We return a special marker to indicate "no fault applied"
+                // The caller should proceed with the actual read operation
+                Err(Error::Internal {
+                    message: "SKIP_FAULT".into(), // Special marker
                 })
             }
             _ => {
@@ -268,6 +320,29 @@ impl ActorKV for SimStorage {
             .into_iter()
             .map(|k| k[actor_prefix.len()..].to_vec())
             .collect())
+    }
+
+    async fn scan_prefix(
+        &self,
+        actor_id: &ActorId,
+        prefix: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Bytes)>> {
+        let scoped_prefix = Self::scoped_key(actor_id, prefix);
+        let actor_prefix = Self::scoped_key(actor_id, b"");
+
+        // Get all keys with the scoped prefix
+        let keys = SimStorage::list_keys(self, &scoped_prefix).await?;
+
+        // Read each key and return (key, value) pairs
+        let mut results = Vec::new();
+        for scoped_key in keys {
+            if let Some(value) = self.read(&scoped_key).await? {
+                // Remove the actor prefix to return only the user's key portion
+                let user_key = scoped_key[actor_prefix.len()..].to_vec();
+                results.push((user_key, value));
+            }
+        }
+        Ok(results)
     }
 
     async fn begin_transaction(&self, actor_id: &ActorId) -> Result<Box<dyn ActorTransaction>> {

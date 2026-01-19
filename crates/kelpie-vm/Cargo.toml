@@ -1,0 +1,32 @@
+[package]
+name = "kelpie-vm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "VM core types and backend implementations for Kelpie"
+
+[features]
+default = []
+firecracker = ["dep:kelpie-sandbox"]
+vz = []
+
+[dependencies]
+async-trait = { workspace = true }
+bytes = { workspace = true }
+crc32fast = { workspace = true }
+libc = "0.2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+kelpie-core = { workspace = true }
+kelpie-sandbox = { workspace = true, optional = true, features = ["firecracker"] }
+
+[build-dependencies]
+cc = "1.0"

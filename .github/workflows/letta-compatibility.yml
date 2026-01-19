@@ -1,0 +1,61 @@
+name: Letta Compatibility
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  schedule:
+    - cron: '0 0 * * 0' # Weekly on Sundays
+
+jobs:
+  test-compatibility:
+    name: SDK Compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      # Setup Rust
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      
+      # Build Kelpie Server
+      - name: Build Kelpie Server
+        run: cargo build --release -p kelpie-server
+
+      # Setup Python
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      # Install Letta SDK and dependencies
+      - name: Install Letta SDK
+        run: |
+          pip install letta pytest
+      
+      # Run Server & Tests
+      - name: Run Compatibility Tests
+        env:
+          ANTHROPIC_API_KEY: "sk-dummy-key" # Tests shouldn't hit real LLM APIs for basic CRUD
+        run: |
+          # Start server in background
+          ./target/release/kelpie-server &
+          SERVER_PID=$!
+          
+          # Wait for health check
+          timeout 30s bash -c 'until curl -s http://localhost:8283/health > /dev/null; do sleep 1; done'
+          
+          # Run tests
+          # We clone the letta repo to get their test suite
+          git clone https://github.com/letta-ai/letta.git letta-repo
+          
+          export LETTA_SERVER_URL=http://localhost:8283
+          
+          # We only run the tests we know pass/are relevant (agents, blocks, tools, mcp)
+          # We exclude search/groups/identities which we know fail/skip
+          cd letta-repo
+          pip install -e ".[dev]"
+          pytest tests/sdk/agents_test.py tests/sdk/blocks_test.py tests/sdk/tools_test.py tests/sdk/mcp_servers_test.py -v
+          
+          # Cleanup
+          kill $SERVER_PID

@@ -7,6 +7,7 @@
 //! - pause_heartbeats tool (from heartbeat.rs)
 //! - ClockSource abstraction
 //! - ToolSignal mechanism
+#![cfg(feature = "dst")]
 
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
 use kelpie_server::state::AppState;

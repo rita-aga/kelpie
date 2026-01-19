@@ -4,6 +4,7 @@
 //!
 //! These tests define the expected behavior of the heartbeat mechanism.
 //! They will fail initially until the implementation is complete.
+#![cfg(feature = "dst")]
 
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
 use serde_json::json;
@@ -42,15 +43,13 @@ enum ToolSignal {
 /// Simulated tool execution result with signal support
 #[derive(Debug, Clone)]
 struct SimToolResult {
-    output: String,
     success: bool,
     signal: ToolSignal,
 }
 
 impl SimToolResult {
-    fn success(output: impl Into<String>) -> Self {
+    fn success(_output: impl Into<String>) -> Self {
         Self {
-            output: output.into(),
             success: true,
             signal: ToolSignal::None,
         }
@@ -753,7 +752,6 @@ fn test_pause_with_time_advancement_stress() {
 #[derive(Debug, Clone, PartialEq)]
 enum StopReason {
     EndTurn,
-    MaxIterations,
     PauseHeartbeats { pause_until_ms: u64 },
 }
 

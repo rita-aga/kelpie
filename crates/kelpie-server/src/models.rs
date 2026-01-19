@@ -103,10 +103,15 @@ pub struct CreateAgentRequest {
     pub agent_type: AgentType,
     /// Model to use (e.g., "openai/gpt-4o")
     pub model: Option<String>,
+    /// Embedding model to use (e.g., "openai/text-embedding-3-small")
+    #[serde(default = "default_embedding_model")]
+    pub embedding: Option<String>,
     /// System prompt
     pub system: Option<String>,
     /// Description of the agent
     pub description: Option<String>,
+    /// Optional project ID (Phase 6: Projects)
+    pub project_id: Option<String>,
     /// Initial memory blocks (inline creation)
     #[serde(default)]
     pub memory_blocks: Vec<CreateBlockRequest>,
@@ -128,11 +133,17 @@ fn default_agent_name() -> String {
     "Nameless Agent".to_string()
 }
 
+fn default_embedding_model() -> Option<String> {
+    Some("openai/text-embedding-3-small".to_string())
+}
+
 /// Request to update an agent
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UpdateAgentRequest {
     /// New name
     pub name: Option<String>,
+    /// New embedding model
+    pub embedding: Option<String>,
     /// New system prompt
     pub system: Option<String>,
     /// New description
@@ -141,6 +152,8 @@ pub struct UpdateAgentRequest {
     pub tags: Option<Vec<String>>,
     /// New metadata
     pub metadata: Option<serde_json::Value>,
+    /// New tool IDs (replaces existing)
+    pub tool_ids: Option<Vec<String>>,
 }
 
 /// Agent state response
@@ -154,10 +167,14 @@ pub struct AgentState {
     pub agent_type: AgentType,
     /// Model being used
     pub model: Option<String>,
+    /// Embedding model being used
+    pub embedding: Option<String>,
     /// System prompt
     pub system: Option<String>,
     /// Description
     pub description: Option<String>,
+    /// Optional project ID (Phase 6: Projects)
+    pub project_id: Option<String>,
     /// Memory blocks
     pub blocks: Vec<Block>,
     /// Attached tool IDs
@@ -189,8 +206,10 @@ impl AgentState {
             name: request.name,
             agent_type: request.agent_type,
             model: request.model,
+            embedding: request.embedding,
             system: request.system,
             description: request.description,
+            project_id: request.project_id,
             blocks,
             tool_ids: request.tool_ids,
             tags: request.tags,
@@ -205,6 +224,9 @@ impl AgentState {
         if let Some(name) = update.name {
             self.name = name;
         }
+        if let Some(embedding) = update.embedding {
+            self.embedding = Some(embedding);
+        }
         if let Some(system) = update.system {
             self.system = Some(system);
         }
@@ -216,6 +238,9 @@ impl AgentState {
         }
         if let Some(metadata) = update.metadata {
             self.metadata = metadata;
+        }
+        if let Some(tool_ids) = update.tool_ids {
+            self.tool_ids = tool_ids;
         }
         self.updated_at = Utc::now();
     }
@@ -277,7 +302,7 @@ impl Block {
             label: label.into(),
             value: value.into(),
             description: None,
-            limit: None,
+            limit: Some(20000), // Default for Letta compatibility
             created_at: now,
             updated_at: now,
         }
@@ -286,12 +311,14 @@ impl Block {
     /// Create a block from a create request
     pub fn from_request(request: CreateBlockRequest) -> Self {
         let now = Utc::now();
+        // Default limit to 20000 if not specified (Letta compatibility)
+        let limit = request.limit.or(Some(20000));
         Self {
             id: Uuid::new_v4().to_string(),
             label: request.label,
             value: request.value,
             description: request.description,
-            limit: request.limit,
+            limit,
             created_at: now,
             updated_at: now,
         }
@@ -344,6 +371,44 @@ pub struct CreateMessageRequest {
     /// Optional message field (another letta-code format)
     #[serde(alias = "message")]
     pub msg: Option<String>,
+    /// Enable streaming response
+    #[serde(default)]
+    pub streaming: bool,
+    /// Stream individual tokens (not just message chunks)
+    #[serde(default)]
+    pub stream_tokens: bool,
+    /// Client-side tools that require approval before execution
+    #[serde(default)]
+    pub client_tools: Vec<ClientTool>,
+}
+
+/// Client-side tool definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientTool {
+    /// Tool name
+    pub name: String,
+    /// Whether tool requires approval
+    #[serde(default)]
+    pub requires_approval: bool,
+}
+
+/// Approval response for client-side tools
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolApproval {
+    /// Tool call ID being approved/rejected
+    pub tool_call_id: String,
+    /// Tool return value (result of client-side execution)
+    pub tool_return: String,
+    /// Status: "success" or "error"
+    pub status: String,
+}
+
+/// Approval message type
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ApprovalMessage {
+    #[serde(rename = "approval")]
+    Approval { approvals: Vec<ToolApproval> },
 }
 
 fn default_role() -> MessageRole {
@@ -361,6 +426,12 @@ pub struct LettaMessage {
     pub content: Option<String>,
     /// Alternative text field
     pub text: Option<String>,
+    /// Message type for special messages (e.g., "approval")
+    #[serde(rename = "type")]
+    pub message_type: Option<String>,
+    /// Approvals for client-side tool execution results
+    #[serde(default)]
+    pub approvals: Vec<ToolApproval>,
 }
 
 /// Deserialize content that can be either a string or an array of content blocks
@@ -511,6 +582,17 @@ pub struct ToolCall {
     pub arguments: serde_json::Value,
 }
 
+/// Tool that requires client-side execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRequest {
+    /// Tool call ID
+    pub tool_call_id: String,
+    /// Tool name
+    pub tool_name: String,
+    /// Tool arguments as JSON
+    pub tool_arguments: serde_json::Value,
+}
+
 /// Response from sending a message
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageResponse {
@@ -521,6 +603,9 @@ pub struct MessageResponse {
     /// Stop reason (for letta-code compatibility)
     #[serde(default = "default_stop_reason")]
     pub stop_reason: String,
+    /// Tools that need client-side execution (when stop_reason is "requires_approval")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_requests: Option<Vec<ApprovalRequest>>,
 }
 
 fn default_stop_reason() -> String {
@@ -533,6 +618,38 @@ pub struct UsageStats {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
+}
+
+// =============================================================================
+// Batch Message Models
+// =============================================================================
+
+/// Request to send a batch of messages
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchMessagesRequest {
+    pub messages: Vec<CreateMessageRequest>,
+}
+
+/// Result for a single message in a batch
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchMessageResult {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response: Option<MessageResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Batch execution status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchStatus {
+    pub id: String,
+    pub agent_id: String,
+    pub total: usize,
+    pub completed: usize,
+    pub results: Vec<BatchMessageResult>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 // =============================================================================
@@ -636,6 +753,505 @@ pub struct HealthResponse {
     pub uptime_seconds: u64,
 }
 
+// =============================================================================
+// Import/Export Models
+// =============================================================================
+
+/// Request to import an agent from external source
+///
+/// TigerStyle: Explicit structure for agent import with validation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportAgentRequest {
+    /// Agent configuration to import
+    pub agent: AgentImportData,
+    /// Optional messages to import (conversation history)
+    #[serde(default)]
+    pub messages: Vec<MessageImportData>,
+}
+
+/// Agent data for import (similar to AgentState but without generated fields)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentImportData {
+    /// Agent name (required)
+    pub name: String,
+    /// Agent type
+    #[serde(default)]
+    pub agent_type: AgentType,
+    /// Model being used
+    pub model: Option<String>,
+    /// Embedding model
+    pub embedding: Option<String>,
+    /// System prompt
+    pub system: Option<String>,
+    /// Description
+    pub description: Option<String>,
+    /// Memory blocks
+    #[serde(default)]
+    pub blocks: Vec<BlockImportData>,
+    /// Attached tool IDs
+    #[serde(default)]
+    pub tool_ids: Vec<String>,
+    /// Tags
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Metadata
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+    /// Project ID
+    #[serde(default)]
+    pub project_id: Option<String>,
+}
+
+/// Block data for import
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockImportData {
+    /// Block label
+    pub label: String,
+    /// Current value
+    pub value: String,
+    /// Description
+    pub description: Option<String>,
+    /// Size limit
+    pub limit: Option<usize>,
+}
+
+/// Message data for import
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageImportData {
+    /// Message role
+    pub role: MessageRole,
+    /// Message content
+    pub content: String,
+    /// Tool call ID if this is a tool response
+    pub tool_call_id: Option<String>,
+    /// Tool calls made by assistant
+    pub tool_calls: Option<Vec<ToolCall>>,
+}
+
+/// Response from exporting an agent
+///
+/// TigerStyle: Complete agent state for portability.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportAgentResponse {
+    /// Agent configuration
+    pub agent: AgentState,
+    /// Optional messages (conversation history)
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub messages: Vec<Message>,
+}
+
+/// Streaming event emitted during agent message processing
+///
+/// Phase 7: Letta-compatible SSE events for real-time message streaming
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StreamEvent {
+    /// LLM thinking (assistant message chunk)
+    MessageChunk { content: String },
+
+    /// Tool call starting
+    ToolCallStart {
+        tool_call_id: String,
+        tool_name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        input: Option<serde_json::Value>,
+    },
+
+    /// Tool call completed
+    ToolCallComplete {
+        tool_call_id: String,
+        result: String,
+    },
+
+    /// Message processing complete
+    MessageComplete { message_id: String },
+
+    /// Error occurred during streaming
+    Error { message: String },
+}
+
+impl StreamEvent {
+    /// Get the SSE event name for this event type
+    ///
+    /// Used to set the "event:" field in Server-Sent Events
+    pub fn event_name(&self) -> &'static str {
+        match self {
+            StreamEvent::MessageChunk { .. } => "message_chunk",
+            StreamEvent::ToolCallStart { .. } => "tool_call_start",
+            StreamEvent::ToolCallComplete { .. } => "tool_call_complete",
+            StreamEvent::MessageComplete { .. } => "message_complete",
+            StreamEvent::Error { .. } => "error",
+        }
+    }
+}
+
+// =========================================================================
+// Scheduling models (Phase 5)
+// =========================================================================
+
+/// Job schedule type
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduleType {
+    /// Cron expression (e.g., "0 0 * * *" for daily at midnight)
+    Cron,
+    /// Interval in seconds
+    Interval,
+    /// One-time execution at specific time
+    Once,
+}
+
+/// Job action type (what the job does)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JobAction {
+    /// Send a message to the agent
+    SendMessage,
+    /// Summarize agent's conversation
+    SummarizeConversation,
+    /// Summarize agent's memory
+    SummarizeMemory,
+    /// Export agent state
+    ExportAgent,
+    /// Custom action (for extensibility)
+    Custom,
+}
+
+/// Job status
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JobStatus {
+    /// Job is active and will run
+    Active,
+    /// Job is paused (won't run)
+    Paused,
+    /// Job completed (for one-time jobs)
+    Completed,
+    /// Job failed
+    Failed,
+}
+
+/// Request to create a scheduled job
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateJobRequest {
+    /// Agent ID this job is for
+    pub agent_id: String,
+    /// Schedule type
+    pub schedule_type: ScheduleType,
+    /// Schedule pattern (cron expression, interval seconds, or ISO timestamp)
+    pub schedule: String,
+    /// Action to perform
+    pub action: JobAction,
+    /// Optional action parameters (JSON)
+    #[serde(default)]
+    pub action_params: serde_json::Value,
+    /// Job description
+    pub description: Option<String>,
+}
+
+/// Request to update a scheduled job
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpdateJobRequest {
+    /// New status
+    pub status: Option<JobStatus>,
+    /// New schedule pattern
+    pub schedule: Option<String>,
+    /// New action parameters
+    pub action_params: Option<serde_json::Value>,
+    /// New description
+    pub description: Option<String>,
+}
+
+/// Scheduled job response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Job {
+    /// Unique identifier
+    pub id: String,
+    /// Agent ID
+    pub agent_id: String,
+    /// Schedule type
+    pub schedule_type: ScheduleType,
+    /// Schedule pattern
+    pub schedule: String,
+    /// Action to perform
+    pub action: JobAction,
+    /// Action parameters
+    pub action_params: serde_json::Value,
+    /// Job description
+    pub description: Option<String>,
+    /// Job status
+    pub status: JobStatus,
+    /// Creation timestamp
+    pub created_at: DateTime<Utc>,
+    /// Last execution timestamp
+    pub last_run: Option<DateTime<Utc>>,
+    /// Next scheduled execution
+    pub next_run: Option<DateTime<Utc>>,
+    /// Execution count
+    pub run_count: u64,
+}
+
+impl Job {
+    /// Create a new job from request
+    pub fn from_request(request: CreateJobRequest) -> Self {
+        let now = Utc::now();
+        let next_run = calculate_next_run(&request.schedule_type, &request.schedule, now);
+
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            agent_id: request.agent_id,
+            schedule_type: request.schedule_type,
+            schedule: request.schedule,
+            action: request.action,
+            action_params: request.action_params,
+            description: request.description,
+            status: JobStatus::Active,
+            created_at: now,
+            last_run: None,
+            next_run,
+            run_count: 0,
+        }
+    }
+
+    /// Apply an update to the job
+    pub fn apply_update(&mut self, update: UpdateJobRequest) {
+        if let Some(status) = update.status {
+            self.status = status;
+        }
+        if let Some(schedule) = update.schedule {
+            self.schedule = schedule.clone();
+            // Recalculate next_run if schedule changed
+            self.next_run = calculate_next_run(&self.schedule_type, &schedule, Utc::now());
+        }
+        if let Some(params) = update.action_params {
+            self.action_params = params;
+        }
+        if let Some(description) = update.description {
+            self.description = Some(description);
+        }
+    }
+}
+
+/// Calculate next run time based on schedule
+///
+/// TigerStyle: Deterministic calculation with explicit error handling.
+fn calculate_next_run(
+    schedule_type: &ScheduleType,
+    schedule: &str,
+    from: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    match schedule_type {
+        ScheduleType::Interval => {
+            // Parse interval in seconds
+            if let Ok(seconds) = schedule.parse::<i64>() {
+                Some(from + chrono::Duration::seconds(seconds))
+            } else {
+                None
+            }
+        }
+        ScheduleType::Once => {
+            // Parse ISO timestamp
+            DateTime::parse_from_rfc3339(schedule)
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc))
+        }
+        ScheduleType::Cron => {
+            // For now, return None (cron parsing would require cron library)
+            // Production implementation would use a cron parser
+            None
+        }
+    }
+}
+
+// =========================================================================
+// Project models (Phase 6)
+// =========================================================================
+
+/// Request to create a project
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateProjectRequest {
+    /// Project name
+    pub name: String,
+    /// Optional description
+    pub description: Option<String>,
+    /// Optional tags
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Optional metadata
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+}
+
+/// Request to update a project
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpdateProjectRequest {
+    /// New name
+    pub name: Option<String>,
+    /// New description
+    pub description: Option<String>,
+    /// New tags
+    pub tags: Option<Vec<String>>,
+    /// New metadata
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Project response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Project {
+    /// Unique identifier
+    pub id: String,
+    /// Project name
+    pub name: String,
+    /// Project description
+    pub description: Option<String>,
+    /// Tags
+    pub tags: Vec<String>,
+    /// Metadata
+    pub metadata: serde_json::Value,
+    /// Creation timestamp
+    pub created_at: DateTime<Utc>,
+    /// Last update timestamp
+    pub updated_at: DateTime<Utc>,
+}
+
+impl Project {
+    /// Create a new project from request
+    pub fn from_request(request: CreateProjectRequest) -> Self {
+        let now = Utc::now();
+
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: request.name,
+            description: request.description,
+            tags: request.tags,
+            metadata: request.metadata,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    /// Apply an update to the project
+    pub fn apply_update(&mut self, update: UpdateProjectRequest) {
+        if let Some(name) = update.name {
+            self.name = name;
+        }
+        if let Some(description) = update.description {
+            self.description = Some(description);
+        }
+        if let Some(tags) = update.tags {
+            self.tags = tags;
+        }
+        if let Some(metadata) = update.metadata {
+            self.metadata = metadata;
+        }
+        self.updated_at = Utc::now();
+    }
+}
+
+// =========================================================================
+// Agent Group models (Phase 8)
+// =========================================================================
+
+/// Routing policy for agent groups
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutingPolicy {
+    RoundRobin,
+    Broadcast,
+    Intelligent,
+}
+
+impl Default for RoutingPolicy {
+    fn default() -> Self {
+        Self::RoundRobin
+    }
+}
+
+/// Request to create an agent group
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateAgentGroupRequest {
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub agent_ids: Vec<String>,
+    #[serde(default)]
+    pub routing_policy: RoutingPolicy,
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+}
+
+/// Request to update an agent group
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpdateAgentGroupRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub routing_policy: Option<RoutingPolicy>,
+    #[serde(default)]
+    pub add_agent_ids: Vec<String>,
+    #[serde(default)]
+    pub remove_agent_ids: Vec<String>,
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Agent group response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentGroup {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub agent_ids: Vec<String>,
+    pub routing_policy: RoutingPolicy,
+    pub shared_state: serde_json::Value,
+    pub metadata: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(skip)]
+    pub last_routed_index: usize,
+}
+
+impl AgentGroup {
+    pub fn from_request(request: CreateAgentGroupRequest) -> Self {
+        let now = Utc::now();
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: request.name,
+            description: request.description,
+            agent_ids: request.agent_ids,
+            routing_policy: request.routing_policy,
+            shared_state: serde_json::json!([]),
+            metadata: request.metadata,
+            created_at: now,
+            updated_at: now,
+            last_routed_index: 0,
+        }
+    }
+
+    pub fn apply_update(&mut self, update: UpdateAgentGroupRequest) {
+        if let Some(name) = update.name {
+            self.name = name;
+        }
+        if let Some(description) = update.description {
+            self.description = Some(description);
+        }
+        if let Some(routing_policy) = update.routing_policy {
+            self.routing_policy = routing_policy;
+        }
+        for agent_id in update.add_agent_ids {
+            if !self.agent_ids.contains(&agent_id) {
+                self.agent_ids.push(agent_id);
+            }
+        }
+        if !update.remove_agent_ids.is_empty() {
+            self.agent_ids
+                .retain(|id| !update.remove_agent_ids.contains(id));
+        }
+        if let Some(metadata) = update.metadata {
+            self.metadata = metadata;
+        }
+        self.updated_at = Utc::now();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -646,8 +1262,10 @@ mod tests {
             name: "test-agent".to_string(),
             agent_type: AgentType::LettaV1Agent,
             model: Some("openai/gpt-4o".to_string()),
-            system: Some("You are a helpful assistant.".to_string()),
+            embedding: None,
+            system: Some("You are a helpful assistant".to_string()),
             description: Some("A test agent".to_string()),
+            project_id: None,
             memory_blocks: vec![CreateBlockRequest {
                 label: "persona".to_string(),
                 value: "I am a helpful AI.".to_string(),
@@ -672,8 +1290,10 @@ mod tests {
             name: "test-agent".to_string(),
             agent_type: AgentType::default(),
             model: None,
+            embedding: None,
             system: None,
             description: None,
+            project_id: None,
             memory_blocks: vec![],
             block_ids: vec![],
             tool_ids: vec![],
@@ -703,5 +1323,72 @@ mod tests {
         let err = ErrorResponse::not_found("Agent", "abc123");
         assert_eq!(err.code, "not_found");
         assert!(err.message.contains("abc123"));
+    }
+}
+
+// =============================================================================
+// MCP Server Models
+// =============================================================================
+
+/// MCP Server configuration types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "mcp_server_type")]
+pub enum MCPServerConfig {
+    #[serde(rename = "stdio")]
+    Stdio {
+        command: String,
+        args: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        env: Option<serde_json::Map<String, serde_json::Value>>,
+    },
+    #[serde(rename = "sse")]
+    Sse {
+        server_url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        auth_header: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        auth_token: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        custom_headers: Option<serde_json::Map<String, serde_json::Value>>,
+    },
+    #[serde(rename = "streamable_http")]
+    StreamableHttp {
+        server_url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        auth_header: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        auth_token: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        custom_headers: Option<serde_json::Map<String, serde_json::Value>>,
+    },
+}
+
+/// MCP Server state
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MCPServer {
+    /// Unique identifier
+    pub id: String,
+    /// Server name (user-assigned)
+    pub server_name: String,
+    /// Server configuration (type-specific)
+    #[serde(flatten)]
+    pub config: MCPServerConfig,
+    /// Creation timestamp
+    pub created_at: DateTime<Utc>,
+    /// Last update timestamp
+    pub updated_at: DateTime<Utc>,
+}
+
+impl MCPServer {
+    /// Create a new MCP server
+    pub fn new(server_name: impl Into<String>, config: MCPServerConfig) -> Self {
+        let now = Utc::now();
+        Self {
+            id: format!("mcp_server-{}", Uuid::new_v4()),
+            server_name: server_name.into(),
+            config,
+            created_at: now,
+            updated_at: now,
+        }
     }
 }

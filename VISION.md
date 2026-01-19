@@ -1,321 +1,275 @@
-# Kelpie Vision
+# Kelpie: The Open-Source Agent Runtime
 
-## What is Kelpie?
+## Revised Vision (January 2025)
 
-Kelpie is an **open-source agent runtime** that provides stateful, sandboxed execution for AI agents. It combines the virtual actor model with a hierarchical memory system, enabling agents that persist state, execute tools safely, and coordinate with other agents.
+**Kelpie** has evolved from a generic virtual actor system to an **open-source agent runtime** - the infrastructure layer for building production-grade AI agent systems.
 
-## Core Principles
+### Core Insight
 
-### 1. Stateful by Default
+Research into Letta.ai, E2B, and the agent infrastructure landscape revealed:
 
-Unlike stateless function-as-a-service platforms, Kelpie treats state as a first-class concern:
+1. **Letta hits a wall at 10K agents** - PostgreSQL connection exhaustion, eager state loading, no connection multiplexing
+2. **Sandbox providers are stateless** - E2B/Modal don't integrate with agent memory
+3. **No unified open-source alternative** to cloud agent services (AWS AgentCore, Azure AI Foundry)
 
-- **Per-agent state** persists automatically across invocations
-- **Memory hierarchy** provides in-context, working, and archival storage tiers
-- **Checkpointing** enables pause/resume of agent execution
+### The Opportunity
 
-### 2. Safety First (TigerStyle)
-
-Following TigerBeetle's engineering philosophy: **Safety > Performance > Developer Experience**
-
-- Explicit limits with units in names (`MEMORY_BYTES_MAX`, `TIMEOUT_MS`)
-- 2+ assertions per non-trivial function
-- No silent truncation or implicit conversions
-- Deterministic simulation testing for all critical paths
-
-### 3. MCP-Native Tool Ecosystem
-
-The Model Context Protocol (MCP) is the standard for tool integration:
-
-- All external tools are MCP servers (stdio, HTTP, or SSE transport)
-- Tool discovery, schema validation, and execution handled uniformly
-- No custom tool abstraction layer - MCP is the abstraction
-
-### 4. Progressive Isolation
-
-Sandbox isolation scales with trust requirements:
-
-| Level | Implementation | Use Case |
-|-------|---------------|----------|
-| None | Direct execution | Trusted internal tools |
-| Process | OS process isolation | Semi-trusted code |
-| VM | Firecracker microVM | Untrusted user code |
+Position Kelpie as the **open-source agent runtime** that provides:
+- **Scalable backend for Letta** (and other agent frameworks)
+- **Integrated sandbox execution** (like E2B but with state continuity)
+- **Linearizable multi-agent coordination**
 
 ---
 
-## Architecture
+## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                           Client SDKs                               │
-│                    (Python, TypeScript, REST)                       │
-└─────────────────────────────────┬───────────────────────────────────┘
-                                  │
-┌─────────────────────────────────┴───────────────────────────────────┐
-│                         Kelpie Server                               │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐  │
-│  │  REST API    │  │  LLM Client  │  │  Tool Registry (MCP)     │  │
-│  │  (Axum)      │  │  (Claude/GPT)│  │  (stdio, HTTP, SSE)      │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────────┬───────────────┘  │
-│         │                 │                      │                  │
-│  ┌──────┴─────────────────┴──────────────────────┴───────────────┐  │
-│  │                      Agent Runtime                             │  │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐    │  │
-│  │  │  Dispatcher │  │  Registry   │  │  Sandbox Pool       │    │  │
-│  │  │  (actors)   │  │  (placement)│  │  (Process/Firecracker)   │  │
-│  │  └─────────────┘  └─────────────┘  └─────────────────────┘    │  │
-│  └───────────────────────────┬───────────────────────────────────┘  │
-│                              │                                      │
-│  ┌───────────────────────────┴───────────────────────────────────┐  │
-│  │                     Memory System                              │  │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐    │  │
-│  │  │ Core Memory │  │  Working    │  │  Archival Memory    │    │  │
-│  │  │ (32KB ctx)  │  │  Memory(KV) │  │  (Vector Search)    │    │  │
-│  │  └─────────────┘  └─────────────┘  └─────────────────────┘    │  │
-│  └───────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────┬───────────────────────────────────┘
-                                  │
-┌─────────────────────────────────┴───────────────────────────────────┐
-│                        Storage Backend                              │
-│           (In-Memory / FoundationDB / PostgreSQL)                   │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           Kelpie Runtime                                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Agent Layer: Virtual actors with memory hierarchy                       │
+│  - On-demand activation (lazy, not eager)                               │
+│  - Connection multiplexing (not per-agent connections)                   │
+│  - Linearizable state (single activation guarantee)                      │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Memory Layer: Hierarchical context management                           │
+│  - Core Memory (~32KB in-context, always loaded)                        │
+│  - Working Memory (Redis-like fast KV)                                   │
+│  - Archival Memory (Vector + Graph, semantic search)                     │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Sandbox Layer: Secure tool execution                                    │
+│  - Firecracker microVMs (~125ms boot, <5MB overhead)                    │
+│  - Pre-warmed pools (<50ms assignment)                                   │
+│  - MCP tool integration                                                  │
+│  - Pause/resume with full state                                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Persistence Layer: FoundationDB                                         │
+│  - Actor state, memory blocks, sandbox snapshots                         │
+│  - Linearizable transactions                                             │
+│  - Automatic sharding                                                    │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
-
----
-
-## Memory Hierarchy
-
-Kelpie implements a three-tier memory system inspired by Letta/MemGPT:
-
-### Core Memory (~32KB)
-- Always included in LLM context window
-- Contains: system prompt, persona, user info, key facts
-- Structured as labeled blocks with size limits
-- Agent can read/write via memory tools
-
-### Working Memory (Unbounded KV)
-- Fast key-value store for session state
-- Redis-like operations: get, set, delete, incr, append
-- TTL support for temporary data
-- Not included in LLM context (must be explicitly retrieved)
-
-### Archival Memory (Vector Store)
-- Long-term storage with semantic search
-- Embeddings generated locally or via API
-- Used for: conversation history, learned facts, documents
-- Pagination for large result sets
-
----
-
-## What Kelpie Is NOT
-
-### Not a Model Router
-Kelpie doesn't route between LLM providers or manage model selection. Use LiteLLM, OpenRouter, or similar for that.
-
-### Not a Prompt Framework
-Kelpie doesn't provide prompt templates, chains, or DAGs. Use LangChain, DSPy, or similar for that.
-
-### Not a Vector Database
-Kelpie's archival memory is for agent state, not general-purpose vector search. Use Pinecone, Weaviate, or similar for that.
-
-### Not a Workflow Engine
-Kelpie doesn't orchestrate multi-step workflows with branches and conditions. Use Temporal, Prefect, or similar for that.
-
----
-
-## Target Use Cases
-
-### 1. Letta-Compatible Backend
-Drop-in replacement for Letta server with:
-- Same REST API endpoints
-- Same memory block semantics
-- Compatible Python/TypeScript SDKs
-
-### 2. Agent Sandbox Platform
-Like E2B or Modal, but stateful:
-- Agents can pause/resume execution
-- State persists across sandbox restarts
-- Secure isolation via Firecracker VMs
-
-### 3. Multi-Agent Coordination
-Agents that work together:
-- Message passing between agents
-- Shared archival memory
-- Consistent state via linearizable storage
-
-### 4. Persistent Tool Execution
-Long-running tool operations:
-- Python REPL that persists between calls
-- Browser sessions that survive agent restarts
-- File system state that accumulates
 
 ---
 
 ## Implementation Status
 
-### Complete
+### Phase 0: Bootstrap [COMPLETE]
+- [x] Create GitHub repo nerdsane/kelpie
+- [x] Initialize Cargo workspace
+- [x] Create kelpie-core with types and constants
+- [x] Create kelpie-dst with DST framework
+- [x] Create kelpie-storage with KV abstraction
+- [x] Set up CI (GitHub Actions)
+- [x] Create ADRs and documentation
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| Actor Runtime | Complete | Dispatcher, single-activation, state persistence |
-| Core Memory | Complete | Blocks, labels, size limits, rendering |
-| Working Memory | Complete | KV store with TTL, transactions |
-| Process Sandbox | Complete | OS isolation, exec, environment |
-| Firecracker Sandbox | Complete | VM lifecycle, snapshots, vsock |
-| MCP Client | Complete | stdio, HTTP, SSE transports |
-| Tool Registry | Complete | Registration, discovery, execution |
-| REST API | Complete | Agents, blocks, messages endpoints |
-| LLM Integration | Complete | Anthropic, OpenAI support |
-| TCP Transport | Complete | Cluster node communication |
-| OpenTelemetry | Complete | OTLP export, tracing |
-| Vector Search | Complete | Cosine similarity, semantic queries |
-| DST Framework | Complete | Fault injection, deterministic replay |
-| Local Embeddings | Complete | Fastembed integration (optional feature) |
-| Server Wire-up | Complete | Tools, archival memory, capabilities endpoints |
-| Letta Adapter | Complete | letta-code compatible (ADR-006) |
+### Phase 1: Actor Runtime [COMPLETE]
+- [x] Actor trait with invoke/on_activate/on_deactivate hooks
+- [x] Dispatcher with single-threaded per-actor execution
+- [x] Activation/deactivation with state persistence via ScopedKV
+- [x] Connection multiplexing via bounded mailbox
+- [x] DST tests for actor lifecycle (7+ tests)
 
-### Implemented but Not Integrated
+**Acceptance Criteria Met:**
+- `cargo test -p kelpie-runtime` passes all tests
+- Actors can be invoked, state persists across deactivation/reactivation
+- Single-threaded guarantee verified via dispatcher tests
 
-| Component | Priority | Notes |
-|-----------|----------|-------|
-| FoundationDB Backend | P0 | Backend code complete (`kelpie-storage/src/fdb.rs`, 1000 LOC), **server integration pending** |
+### Phase 2: Memory Hierarchy [COMPLETE]
+- [x] Core Memory (in-context blocks, 32KB default, capacity enforced)
+- [x] Working Memory (Redis-like KV with TTL, expiration cleanup)
+- [x] Memory checkpointing (serialize/deserialize full state)
+- [x] Block management (System, Persona, Human, Facts, Scratch, Custom)
+- [x] Text + metadata search with temporal/tag filters
 
-### Not Started
+**Acceptance Criteria Met:**
+- `cargo test -p kelpie-memory` passes all tests (30+)
+- Memory blocks render to XML for LLM context
+- Checkpoint roundtrip preserves all state
 
-| Component | Priority | Notes |
-|-----------|----------|-------|
-| FDB Server Integration | P0 | Wire `kelpie-storage` to `kelpie-server` |
-| Agent Framework | P0 | Critical for SDK usability |
-| Authentication | P1 | Required for production |
-| PostgreSQL Backend | P2 | Alternative to FDB |
-| WASM Actors | P3 | Nice-to-have |
+**Gap:** Semantic/vector search not implemented (text only)
 
----
+### Phase 3: Sandbox Integration [PARTIAL]
+- [x] Sandbox trait with full lifecycle (start/stop/pause/resume/exec)
+- [x] MockSandbox for testing (in-memory, configurable handlers)
+- [x] ProcessSandbox for real execution (OS process with isolation)
+- [x] SandboxPool with pre-warming and acquire/release
+- [x] ExecOptions (timeout, workdir, env, output limits)
+- [ ] **FirecrackerSandbox** (VM-level isolation) - NOT IMPLEMENTED
+- [ ] **VM snapshotting** (pause/resume with memory) - NOT IMPLEMENTED
 
-## Design Decisions
+**Acceptance Criteria NOT Met:**
+- ProcessSandbox provides basic isolation but NOT security boundary
+- No VM-level isolation for untrusted code
+- Snapshot/restore returns error (not implemented)
 
-### Why Virtual Actors?
+**To Complete:**
+1. Implement FirecrackerSandbox with real VM management
+2. Add VM snapshot/restore for pause/resume
+3. Verify via: spawn VM, execute code, snapshot, restore, verify state
 
-The virtual actor model (Orleans, NOLA) provides:
-- **Location transparency**: Call any actor without knowing its location
-- **Single activation**: At most one instance exists at any time
-- **Automatic lifecycle**: Actors activate on demand, deactivate when idle
+### Phase 4: Tool Integration [PARTIAL]
+- [x] Tool trait with validation, execution, metadata
+- [x] ToolRegistry for registration and discovery
+- [x] Built-in ShellTool (working with ProcessSandbox)
+- [x] Built-in FilesystemTool (read/write/list)
+- [x] MCP types and message structures
+- [ ] **MCP Client** - STUB (connect/discover/execute are simulated)
 
-This maps perfectly to AI agents: each agent is an actor with identity, state, and message handling.
+**Acceptance Criteria NOT Met:**
+- MCP client `connect()` logs "Would connect" but doesn't actually connect
+- `discover_tools()` returns cached mock data
+- `execute_tool()` returns hardcoded "Mock result"
 
-### Why MCP for Tools?
+**To Complete:**
+1. Implement real stdio transport (spawn MCP server process)
+2. Implement JSON-RPC over stdin/stdout
+3. Verify via: connect to real MCP server, discover tools, execute tool
 
-Model Context Protocol provides:
-- **Standard schema**: JSON Schema for inputs, structured outputs
-- **Multiple transports**: stdio for local, HTTP/SSE for remote
-- **Discovery**: List available tools without hardcoding
-- **Ecosystem**: Growing library of MCP servers
+### Phase 5: Cluster Mode [PARTIAL]
+- [x] ClusterState lifecycle (Stopped/Starting/Running/Stopping)
+- [x] Heartbeat protocol with sequence and timestamps
+- [x] Migration protocol (3-phase: Prepare/Transfer/Complete)
+- [x] RPC message types (15+ variants)
+- [x] MemoryTransport for in-process testing
+- [ ] **TCP Transport** - NOT IMPLEMENTED (only in-memory)
+- [ ] **Consensus/Leader Election** - NOT IMPLEMENTED
 
-Custom tool abstractions add complexity without benefit.
+**Acceptance Criteria NOT Met:**
+- Cannot run actual multi-node cluster over network
+- No leader election or split-brain handling
 
-### Why Firecracker?
+**To Complete:**
+1. Implement TCP-based RpcTransport
+2. Test with actual network (2+ processes)
+3. Consider Raft for consensus (or document single-leader assumption)
 
-Firecracker microVMs provide:
-- **Strong isolation**: Hardware-level separation via KVM
-- **Fast boot**: ~125ms cold start
-- **Snapshots**: Pause/resume VM state instantly
-- **Minimal footprint**: <5MB memory overhead
+### Phase 6: Framework Adapters [PARTIAL]
+- [x] REST API (kelpie-server with full Letta-compatible endpoints)
+- [x] Python SDK (full client with agents/blocks/messages)
+- [x] TypeScript SDK (full client with types)
+- [x] LLM integration (Anthropic/OpenAI with tool calling)
+- [ ] **Letta Backend Adapter** - NOT IMPLEMENTED
 
-For untrusted agent code, process isolation isn't sufficient.
+**Acceptance Criteria NOT Met:**
+- SDKs are clients TO Kelpie, not backends FOR Letta
+- Cannot run Letta with Kelpie as storage backend
 
-### Why Not Kubernetes?
+**To Complete:**
+1. Create `adapters/letta/` that implements Letta's storage interface
+2. Verify via: run Letta, configure Kelpie backend, create agent, send message
 
-Kubernetes is designed for stateless microservices. Kelpie needs:
-- **Sub-second activation**: K8s pod startup is too slow
-- **Fine-grained state**: Per-actor, not per-pod
-- **Deterministic testing**: K8s adds non-determinism
+### Phase 7: Production Hardening [NOT STARTED]
+- [ ] **OpenTelemetry** - NOT IMPLEMENTED
+- [ ] **Security audit** - NOT DONE
+- [ ] **Performance benchmarks** - NOT DONE
+- [x] Documentation (CLAUDE.md with acceptance criteria)
 
-Kelpie can run ON Kubernetes, but doesn't use it for actor scheduling.
+**Acceptance Criteria NOT Met:**
+- No tracing/metrics infrastructure
+- Performance claims (1M agents, <1ms invocation) unverified
 
----
-
-## Performance Targets
-
-| Metric | Target | Current |
-|--------|--------|---------|
-| Agent activation | <10ms | ~5ms (in-memory) |
-| Message latency | <100ms | ~50ms (LLM call excluded) |
-| Memory block read | <1ms | <1ms |
-| Sandbox exec | <50ms | ~30ms (process) |
-| Snapshot/restore | <500ms | Implemented (Firecracker) |
-| Vector search (1M) | <100ms | ~10ms (in-memory) |
-| Local embedding | <50ms | ~30ms (all-MiniLM-L6-v2) |
-
-## Test Coverage
-
-| Category | Test Count | Status |
-|----------|------------|--------|
-| Core types | 25 | ✅ Passing |
-| Runtime | 29 | ✅ Passing |
-| Memory | 81 | ✅ Passing |
-| Storage | 43 | ✅ Passing |
-| DST Framework | 49 | ✅ Passing |
-| Server API | 22 | ✅ Passing |
-| Tools | 23 | ✅ Passing |
-| **Total** | **520+** | ✅ All Passing |
-
-> **Note:** Run tests with `cargo test --workspace --features dst` for full coverage.
-
----
-
-## Roadmap
-
-### Phase 1: Production Foundation (Current)
-- [x] Wire new features to REST API (tools, archival, capabilities)
-- [x] Local embeddings via fastembed (optional feature)
-- [x] Letta API compatibility layer
-- [x] FoundationDB backend implementation (`kelpie-storage/src/fdb.rs`)
-- [ ] Wire FDB backend to server (currently uses in-memory HashMap) **(P0 - Critical)**
-- [ ] Agent framework abstraction (kelpie-agent) **(P0 - Critical)**
-- [ ] Authentication and rate limiting **(P1)**
-
-> **Current limitation:** Server uses in-memory storage. Data is lost on restart until FDB integration is wired.
-
-### Phase 2: Framework Integration
-- [ ] Letta runtime adapter (full integration, not just API compat)
-- [ ] LangGraph state backend
-- [ ] CrewAI agent backend
-- [ ] PostgreSQL backend alternative **(P2)**
-
-### Phase 3: Scale
-- [ ] Multi-node cluster with consensus
-- [ ] Actor migration and rebalancing
-- [ ] Geo-distributed deployment
-- [ ] WASM actor support **(P3)**
-
-### Phase 4: Enterprise
-- [ ] Audit logging
-- [ ] Role-based access control
-- [ ] SOC 2 compliance
+**To Complete:**
+1. Add tracing spans to all async operations
+2. Add metrics (agent count, invocation latency, memory usage)
+3. Run benchmarks and document results
+4. Security review of sandbox isolation
 
 ---
 
-## Inspiration
+## What "FULL Implementation" Means
 
-- **[NOLA](https://github.com/richardartoul/nola)**: Go virtual actors with linearizability
-- **[Orleans](https://github.com/dotnet/orleans)**: .NET virtual actor framework
-- **[Letta](https://github.com/letta-ai/letta)**: Stateful agents with memory hierarchy
-- **[FoundationDB](https://www.foundationdb.org/)**: Simulation testing pioneer
-- **[TigerBeetle](https://github.com/tigerbeetle/tigerbeetle)**: TigerStyle engineering
-- **[Firecracker](https://github.com/firecracker-microvm/firecracker)**: Lightweight VMs
+Each phase is COMPLETE when:
+
+### General Criteria (All Phases)
+- [ ] All code compiles with `cargo build`
+- [ ] All tests pass with `cargo test`
+- [ ] No stubs, TODOs, or "not implemented" in code
+- [ ] Feature works end-to-end (manually verified)
+- [ ] Edge cases tested (empty input, large input, errors)
+
+### Phase-Specific Acceptance
+
+**Phase 3 - Sandbox: FULL means**
+```bash
+# This must work:
+cargo run --example firecracker_sandbox
+# 1. Spawns Firecracker VM
+# 2. Executes untrusted code in VM
+# 3. Snapshots VM state
+# 4. Restores from snapshot
+# 5. Verifies state preserved
+```
+
+**Phase 4 - Tools: FULL means**
+```bash
+# This must work:
+cargo run --example mcp_client
+# 1. Connects to real MCP server (e.g., filesystem server)
+# 2. Discovers available tools
+# 3. Executes a tool
+# 4. Returns real result
+```
+
+**Phase 5 - Cluster: FULL means**
+```bash
+# This must work (two terminals):
+# Terminal 1:
+KELPIE_NODE=node1 cargo run -p kelpie-server -- --port 8283
+# Terminal 2:
+KELPIE_NODE=node2 cargo run -p kelpie-server -- --port 8284 --join node1:8283
+
+# Verify:
+# - Nodes discover each other
+# - Actor created on node1 can be invoked from node2
+# - Kill node1, actor migrates to node2
+```
+
+**Phase 6 - Letta Adapter: FULL means**
+```bash
+# This must work:
+pip install letta
+letta configure --backend kelpie --url http://localhost:8283
+letta run
+# Agent created in Letta uses Kelpie for storage
+```
+
+**Phase 7 - Production: FULL means**
+- Grafana dashboard showing Kelpie metrics
+- Benchmark results documented (agents/sec, latency percentiles)
+- Security model documented with threat analysis
 
 ---
 
-## Contributing
+## Priority Order for Completion
 
-See [CLAUDE.md](./CLAUDE.md) for development guidelines.
+1. **MCP Client** (Phase 4) - Highest value, enables tool ecosystem
+2. **TCP Transport** (Phase 5) - Enables real distributed deployment
+3. **Letta Adapter** (Phase 6) - Key differentiator per vision
+4. **FirecrackerSandbox** (Phase 3) - Production security requirement
+5. **OpenTelemetry** (Phase 7) - Production observability
+6. **Benchmarks** (Phase 7) - Validate performance claims
 
-Key principles:
-1. No stubs in main branch - features are complete or not merged
-2. Tests must pass before commit
-3. TigerStyle naming and assertions
-4. DST coverage for critical paths
+---
 
-## License
+## Success Metrics
 
-Apache-2.0
+| Metric | Target | Current Status |
+|--------|--------|----------------|
+| Concurrent agents | 1M+ | Unverified |
+| Hot actor invocation | <1ms p99 | Unverified |
+| Cold actor activation | <200ms p99 | Unverified |
+| Sandbox cold start | <150ms | N/A (no Firecracker) |
+| Sandbox warm start | <50ms | ProcessSandbox ~10ms |
+| Memory checkpoint | <10ms | Unverified |
+| DST coverage | 100% critical paths | Partial |
+
+---
+
+## References
+
+- [CLAUDE.md](../CLAUDE.md) - Development guide with acceptance criteria
+- [TigerStyle](https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md)
+- [Letta Architecture](https://github.com/letta-ai/letta)
+- [Firecracker](https://github.com/firecracker-microvm/firecracker)
+- [MCP Specification](https://modelcontextprotocol.io/)

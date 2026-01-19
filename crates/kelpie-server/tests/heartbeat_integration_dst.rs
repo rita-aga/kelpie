@@ -9,6 +9,8 @@
 //! - Agent state updates (agent_write)
 //!
 //! Run with: cargo test -p kelpie-server --features dst --test heartbeat_integration_dst
+#![cfg(feature = "dst")]
+#![allow(deprecated)]
 
 use kelpie_dst::fault::FaultConfig;
 use kelpie_dst::{FaultType, SimConfig, Simulation};
@@ -27,6 +29,7 @@ fn create_test_agent(name: &str) -> AgentState {
         name: name.to_string(),
         agent_type: AgentType::MemgptAgent,
         model: None,
+        embedding: None,
         system: None,
         description: None,
         memory_blocks: vec![CreateBlockRequest {
@@ -39,6 +42,7 @@ fn create_test_agent(name: &str) -> AgentState {
         tool_ids: vec![],
         tags: vec![],
         metadata: serde_json::json!({}),
+        project_id: None,
     })
 }
 

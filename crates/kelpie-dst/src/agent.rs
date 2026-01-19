@@ -20,12 +20,12 @@ pub struct SimAgentEnv {
     pub storage: SimStorage,
     /// Simulated LLM client
     pub llm: Arc<SimLlmClient>,
-    /// Simulated clock
-    pub clock: SimClock,
+    /// Simulated clock (shared for DST)
+    pub clock: Arc<SimClock>,
     /// Fault injector
     pub faults: Arc<FaultInjector>,
-    /// Deterministic RNG
-    pub rng: DeterministicRng,
+    /// Deterministic RNG (shared for DST)
+    pub rng: Arc<DeterministicRng>,
     /// Agent metadata cache (for test assertions)
     agents: HashMap<String, AgentTestState>,
 }
@@ -87,9 +87,9 @@ impl SimAgentEnv {
     pub fn new(
         storage: SimStorage,
         llm: Arc<SimLlmClient>,
-        clock: SimClock,
+        clock: Arc<SimClock>,
         faults: Arc<FaultInjector>,
-        rng: DeterministicRng,
+        rng: Arc<DeterministicRng>,
     ) -> Self {
         Self {
             storage,
@@ -107,7 +107,7 @@ impl SimAgentEnv {
     /// For now, it just stores the config in memory for test assertions.
     pub fn create_agent(&mut self, config: AgentTestConfig) -> Result<String> {
         // Generate deterministic agent ID
-        let agent_id = format!("agent-{}", self.rng.next_u64());
+        let agent_id = format!("agent-{}", self.rng.fork().next_u64());
 
         // Store agent state
         let state = AgentTestState {
@@ -239,11 +239,11 @@ mod tests {
     use crate::fault::FaultInjectorBuilder;
 
     fn create_test_env() -> SimAgentEnv {
-        let rng = DeterministicRng::new(42);
+        let rng = Arc::new(DeterministicRng::new(42));
         let faults = Arc::new(FaultInjectorBuilder::new(rng.fork()).build());
         let storage = SimStorage::new(rng.fork(), faults.clone());
         let llm = Arc::new(SimLlmClient::new(rng.fork(), faults.clone()));
-        let clock = SimClock::default();
+        let clock = Arc::new(SimClock::default());
 
         SimAgentEnv::new(storage, llm, clock, faults, rng)
     }
@@ -357,11 +357,11 @@ mod tests {
         let seed = 12345;
 
         let create_and_run = || {
-            let rng = DeterministicRng::new(seed);
+            let rng = Arc::new(DeterministicRng::new(seed));
             let faults = Arc::new(FaultInjectorBuilder::new(rng.fork()).build());
             let storage = SimStorage::new(rng.fork(), faults.clone());
             let llm = Arc::new(SimLlmClient::new(rng.fork(), faults.clone()));
-            let clock = SimClock::default();
+            let clock = Arc::new(SimClock::default());
 
             let mut env = SimAgentEnv::new(storage, llm, clock, faults, rng);
 

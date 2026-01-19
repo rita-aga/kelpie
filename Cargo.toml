@@ -12,8 +12,12 @@ members = [
     "crates/kelpie-cluster",
     "crates/kelpie-agent",
     "crates/kelpie-dst",
+    "crates/kelpie-vm",
     "crates/kelpie-server",
     "crates/kelpie-cli",
+]
+exclude = [
+    "images/guest-agent",  # Built inside Docker, not part of main workspace
 ]
 
 [workspace.package]
@@ -85,14 +89,14 @@ reqwest = { version = "0.12", features = ["json"] }
 tokio-stream = "0.1"
 
 # UUID generation
-uuid = { version = "1.6", features = ["v4", "serde"] }
+uuid = { version = "1.6", features = ["v4", "v5", "serde"] }
 
 # WASM runtime
 wasmtime = "16"
 wasmtime-wasi = "16"
 
 # FoundationDB (optional, feature-gated)
-foundationdb = "0.9"
+foundationdb = { version = "0.10", features = ["fdb-7_3"] }
 
 # Formal verification
 stateright = "0.30"
@@ -116,6 +120,7 @@ kelpie-dst = { path = "crates/kelpie-dst" }
 kelpie-memory = { path = "crates/kelpie-memory" }
 kelpie-sandbox = { path = "crates/kelpie-sandbox" }
 kelpie-tools = { path = "crates/kelpie-tools" }
+kelpie-vm = { path = "crates/kelpie-vm" }
 
 # External memory library
 umi-memory = { git = "https://github.com/rita-aga/umi", package = "umi-memory" }

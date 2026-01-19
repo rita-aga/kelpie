@@ -78,6 +78,13 @@ pub trait ActorKV: Send + Sync {
     /// List keys with a prefix
     async fn list_keys(&self, actor_id: &ActorId, prefix: &[u8]) -> Result<Vec<Vec<u8>>>;
 
+    /// Scan keys with a prefix, returning both keys and values
+    ///
+    /// This is useful when you need both keys and values in a single query.
+    /// For just keys, use `list_keys`.
+    async fn scan_prefix(&self, actor_id: &ActorId, prefix: &[u8])
+        -> Result<Vec<(Vec<u8>, Bytes)>>;
+
     /// Begin a new transaction for an actor
     ///
     /// Returns a transaction handle that buffers writes until commit.

@@ -15,24 +15,40 @@ use kelpie_dst::fault::FaultInjector;
 use crate::models::{Block, Message};
 
 use super::traits::{AgentStorage, StorageError};
-use super::types::{AgentMetadata, SessionState};
+use super::types::{AgentMetadata, CustomToolRecord, SessionState};
+
+/// Shared storage state for crash recovery simulation
+///
+/// Multiple SimStorage instances can share the same underlying data
+/// to simulate process restarts in DST tests.
+#[derive(Clone)]
+struct SharedState {
+    agents: Arc<RwLock<HashMap<String, AgentMetadata>>>,
+    blocks: Arc<RwLock<HashMap<String, Vec<Block>>>>,
+    sessions: Arc<RwLock<HashMap<(String, String), SessionState>>>,
+    messages: Arc<RwLock<HashMap<String, Vec<Message>>>>,
+    custom_tools: Arc<RwLock<HashMap<String, CustomToolRecord>>>,
+}
+
+impl SharedState {
+    fn new() -> Self {
+        Self {
+            agents: Arc::new(RwLock::new(HashMap::new())),
+            blocks: Arc::new(RwLock::new(HashMap::new())),
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            messages: Arc::new(RwLock::new(HashMap::new())),
+            custom_tools: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+}
 
 /// Simulated storage backend with fault injection
 ///
-/// TigerStyle: All state in RwLock-protected HashMaps.
+/// TigerStyle: All state in RwLock-protected HashMaps wrapped in Arc for sharing.
 /// FaultInjector determines when operations fail.
 pub struct SimStorage {
-    /// Agent metadata by ID
-    agents: RwLock<HashMap<String, AgentMetadata>>,
-
-    /// Core blocks by agent ID
-    blocks: RwLock<HashMap<String, Vec<Block>>>,
-
-    /// Sessions by (agent_id, session_id)
-    sessions: RwLock<HashMap<(String, String), SessionState>>,
-
-    /// Messages by agent ID (ordered by timestamp)
-    messages: RwLock<HashMap<String, Vec<Message>>>,
+    /// Shared state (supports crash recovery tests)
+    state: SharedState,
 
     /// Fault injector for DST
     fault_injector: Option<Arc<FaultInjector>>,
@@ -42,10 +58,7 @@ impl SimStorage {
     /// Create a new SimStorage without fault injection
     pub fn new() -> Self {
         Self {
-            agents: RwLock::new(HashMap::new()),
-            blocks: RwLock::new(HashMap::new()),
-            sessions: RwLock::new(HashMap::new()),
-            messages: RwLock::new(HashMap::new()),
+            state: SharedState::new(),
             fault_injector: None,
         }
     }
@@ -53,11 +66,19 @@ impl SimStorage {
     /// Create a new SimStorage with fault injection
     pub fn with_fault_injector(injector: Arc<FaultInjector>) -> Self {
         Self {
-            agents: RwLock::new(HashMap::new()),
-            blocks: RwLock::new(HashMap::new()),
-            sessions: RwLock::new(HashMap::new()),
-            messages: RwLock::new(HashMap::new()),
+            state: SharedState::new(),
             fault_injector: Some(injector),
+        }
+    }
+
+    /// Create a new SimStorage sharing state with another instance
+    ///
+    /// This allows crash recovery tests to simulate process restart
+    /// while maintaining persistent data.
+    pub fn with_shared_state(other: &SimStorage) -> Self {
+        Self {
+            state: other.state.clone(),
+            fault_injector: other.fault_injector.clone(),
         }
     }
 
@@ -96,21 +117,33 @@ impl AgentStorage for SimStorage {
     async fn save_agent(&self, agent: &AgentMetadata) -> Result<(), StorageError> {
         self.maybe_fail("agent_write")?;
 
-        let mut agents = self.agents.write().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let mut agents = self
+            .state
+            .agents
+            .write()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
 
         agents.insert(agent.id.clone(), agent.clone());
 
         // Initialize empty blocks and messages for new agent
-        let mut blocks = self.blocks.write().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let mut blocks = self
+            .state
+            .blocks
+            .write()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
         blocks.entry(agent.id.clone()).or_insert_with(Vec::new);
 
-        let mut messages = self.messages.write().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let mut messages = self
+            .state
+            .messages
+            .write()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
         messages.entry(agent.id.clone()).or_insert_with(Vec::new);
 
         Ok(())
@@ -119,9 +152,13 @@ impl AgentStorage for SimStorage {
     async fn load_agent(&self, id: &str) -> Result<Option<AgentMetadata>, StorageError> {
         self.maybe_fail("agent_read")?;
 
-        let agents = self.agents.read().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let agents = self
+            .state
+            .agents
+            .read()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
 
         Ok(agents.get(id).cloned())
     }
@@ -129,9 +166,13 @@ impl AgentStorage for SimStorage {
     async fn delete_agent(&self, id: &str) -> Result<(), StorageError> {
         self.maybe_fail("agent_write")?;
 
-        let mut agents = self.agents.write().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let mut agents = self
+            .state
+            .agents
+            .write()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
 
         if agents.remove(id).is_none() {
             return Err(StorageError::NotFound {
@@ -141,19 +182,31 @@ impl AgentStorage for SimStorage {
         }
 
         // Also delete associated data
-        let mut blocks = self.blocks.write().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let mut blocks = self
+            .state
+            .blocks
+            .write()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
         blocks.remove(id);
 
-        let mut messages = self.messages.write().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let mut messages = self
+            .state
+            .messages
+            .write()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
         messages.remove(id);
 
-        let mut sessions = self.sessions.write().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let mut sessions = self
+            .state
+            .sessions
+            .write()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
         sessions.retain(|(agent_id, _), _| agent_id != id);
 
         Ok(())
@@ -162,9 +215,13 @@ impl AgentStorage for SimStorage {
     async fn list_agents(&self) -> Result<Vec<AgentMetadata>, StorageError> {
         self.maybe_fail("agent_read")?;
 
-        let agents = self.agents.read().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let agents = self
+            .state
+            .agents
+            .read()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
 
         Ok(agents.values().cloned().collect())
     }
@@ -177,9 +234,13 @@ impl AgentStorage for SimStorage {
         self.maybe_fail("block_write")?;
 
         // Verify agent exists
-        let agents = self.agents.read().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let agents = self
+            .state
+            .agents
+            .read()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
         if !agents.contains_key(agent_id) {
             return Err(StorageError::NotFound {
                 resource: "agent",
@@ -188,9 +249,13 @@ impl AgentStorage for SimStorage {
         }
         drop(agents);
 
-        let mut all_blocks = self.blocks.write().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let mut all_blocks = self
+            .state
+            .blocks
+            .write()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
 
         all_blocks.insert(agent_id.to_string(), blocks.to_vec());
 
@@ -200,9 +265,13 @@ impl AgentStorage for SimStorage {
     async fn load_blocks(&self, agent_id: &str) -> Result<Vec<Block>, StorageError> {
         self.maybe_fail("block_read")?;
 
-        let blocks = self.blocks.read().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let blocks = self
+            .state
+            .blocks
+            .read()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
 
         Ok(blocks.get(agent_id).cloned().unwrap_or_default())
     }
@@ -215,9 +284,13 @@ impl AgentStorage for SimStorage {
     ) -> Result<Block, StorageError> {
         self.maybe_fail("block_write")?;
 
-        let mut all_blocks = self.blocks.write().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let mut all_blocks = self
+            .state
+            .blocks
+            .write()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
 
         let blocks = all_blocks
             .get_mut(agent_id)
@@ -249,9 +322,13 @@ impl AgentStorage for SimStorage {
     ) -> Result<Block, StorageError> {
         self.maybe_fail("block_write")?;
 
-        let mut all_blocks = self.blocks.write().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let mut all_blocks = self
+            .state
+            .blocks
+            .write()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
 
         let blocks = all_blocks
             .get_mut(agent_id)
@@ -282,9 +359,13 @@ impl AgentStorage for SimStorage {
     async fn save_session(&self, state: &SessionState) -> Result<(), StorageError> {
         self.maybe_fail("session_write")?;
 
-        let mut sessions = self.sessions.write().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let mut sessions = self
+            .state
+            .sessions
+            .write()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
 
         let key = (state.agent_id.clone(), state.session_id.clone());
         sessions.insert(key, state.clone());
@@ -299,9 +380,13 @@ impl AgentStorage for SimStorage {
     ) -> Result<Option<SessionState>, StorageError> {
         self.maybe_fail("session_read")?;
 
-        let sessions = self.sessions.read().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let sessions = self
+            .state
+            .sessions
+            .read()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
 
         let key = (agent_id.to_string(), session_id.to_string());
         Ok(sessions.get(&key).cloned())
@@ -310,9 +395,13 @@ impl AgentStorage for SimStorage {
     async fn delete_session(&self, agent_id: &str, session_id: &str) -> Result<(), StorageError> {
         self.maybe_fail("session_write")?;
 
-        let mut sessions = self.sessions.write().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let mut sessions = self
+            .state
+            .sessions
+            .write()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
 
         let key = (agent_id.to_string(), session_id.to_string());
         if sessions.remove(&key).is_none() {
@@ -328,9 +417,13 @@ impl AgentStorage for SimStorage {
     async fn list_sessions(&self, agent_id: &str) -> Result<Vec<SessionState>, StorageError> {
         self.maybe_fail("session_read")?;
 
-        let sessions = self.sessions.read().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let sessions = self
+            .state
+            .sessions
+            .read()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
 
         Ok(sessions
             .iter()
@@ -346,9 +439,13 @@ impl AgentStorage for SimStorage {
     async fn append_message(&self, agent_id: &str, message: &Message) -> Result<(), StorageError> {
         self.maybe_fail("message_write")?;
 
-        let mut all_messages = self.messages.write().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let mut all_messages = self
+            .state
+            .messages
+            .write()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
 
         let messages = all_messages
             .get_mut(agent_id)
@@ -369,9 +466,13 @@ impl AgentStorage for SimStorage {
     ) -> Result<Vec<Message>, StorageError> {
         self.maybe_fail("message_read")?;
 
-        let all_messages = self.messages.read().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let all_messages = self
+            .state
+            .messages
+            .read()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
 
         let messages = all_messages.get(agent_id).cloned().unwrap_or_default();
 
@@ -387,9 +488,13 @@ impl AgentStorage for SimStorage {
     ) -> Result<Vec<Message>, StorageError> {
         self.maybe_fail("message_read")?;
 
-        let all_messages = self.messages.read().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let all_messages = self
+            .state
+            .messages
+            .read()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
 
         let messages = all_messages.get(agent_id).cloned().unwrap_or_default();
 
@@ -403,9 +508,13 @@ impl AgentStorage for SimStorage {
     async fn count_messages(&self, agent_id: &str) -> Result<usize, StorageError> {
         self.maybe_fail("message_read")?;
 
-        let all_messages = self.messages.read().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let all_messages = self
+            .state
+            .messages
+            .read()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
 
         Ok(all_messages.get(agent_id).map(|m| m.len()).unwrap_or(0))
     }
@@ -413,15 +522,87 @@ impl AgentStorage for SimStorage {
     async fn delete_messages(&self, agent_id: &str) -> Result<(), StorageError> {
         self.maybe_fail("message_write")?;
 
-        let mut all_messages = self.messages.write().map_err(|_| StorageError::Internal {
-            message: "lock poisoned".to_string(),
-        })?;
+        let mut all_messages = self
+            .state
+            .messages
+            .write()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
 
         if let Some(messages) = all_messages.get_mut(agent_id) {
             messages.clear();
         }
 
         Ok(())
+    }
+
+    // =========================================================================
+    // Custom Tool Operations
+    // =========================================================================
+
+    async fn save_custom_tool(&self, tool: &CustomToolRecord) -> Result<(), StorageError> {
+        self.maybe_fail("tool_write")?;
+
+        let mut tools = self
+            .state
+            .custom_tools
+            .write()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
+
+        tools.insert(tool.name.clone(), tool.clone());
+        Ok(())
+    }
+
+    async fn load_custom_tool(&self, name: &str) -> Result<Option<CustomToolRecord>, StorageError> {
+        self.maybe_fail("tool_read")?;
+
+        let tools = self
+            .state
+            .custom_tools
+            .read()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
+
+        Ok(tools.get(name).cloned())
+    }
+
+    async fn delete_custom_tool(&self, name: &str) -> Result<(), StorageError> {
+        self.maybe_fail("tool_write")?;
+
+        let mut tools = self
+            .state
+            .custom_tools
+            .write()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
+
+        if tools.remove(name).is_none() {
+            return Err(StorageError::NotFound {
+                resource: "tool",
+                id: name.to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn list_custom_tools(&self) -> Result<Vec<CustomToolRecord>, StorageError> {
+        self.maybe_fail("tool_read")?;
+
+        let tools = self
+            .state
+            .custom_tools
+            .read()
+            .map_err(|_| StorageError::Internal {
+                message: "lock poisoned".to_string(),
+            })?;
+
+        Ok(tools.values().cloned().collect())
     }
 
     // =========================================================================

@@ -5,6 +5,7 @@
 //!
 //! Run with: `cargo test -p kelpie-server --test umi_integration_dst`
 //! Reproduce failures: `DST_SEED=<seed> cargo test -p kelpie-server --test umi_integration_dst`
+#![cfg(feature = "dst")]
 
 use anyhow::Result;
 use std::sync::atomic::{AtomicUsize, Ordering};

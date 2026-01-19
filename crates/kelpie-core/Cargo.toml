@@ -16,6 +16,7 @@ chrono = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 
 # OpenTelemetry (optional, enabled with "otel" feature)
 opentelemetry = { workspace = true, optional = true }
@@ -25,12 +26,11 @@ opentelemetry-prometheus = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 prometheus = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
 once_cell = { workspace = true, optional = true }
 
 [features]
 default = []
-otel = ["opentelemetry", "opentelemetry-otlp", "opentelemetry_sdk", "opentelemetry-prometheus", "prometheus", "tracing-opentelemetry", "tracing-subscriber", "tokio", "once_cell"]
+otel = ["opentelemetry", "opentelemetry-otlp", "opentelemetry_sdk", "opentelemetry-prometheus", "prometheus", "tracing-opentelemetry", "tracing-subscriber", "once_cell"]
 
 [dev-dependencies]
 proptest = { workspace = true }

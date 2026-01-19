@@ -1,0 +1,24 @@
+# Build artifacts
+build-metadata.json
+*.tar
+*.tar.gz
+*.ext4
+*.img
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+README.md
+*.md
+
+# Temporary files
+*.tmp
+*.bak
+*~
+.DS_Store
+
+# Build cache
+.cache/
+target/
