@@ -18,6 +18,7 @@
 //! 2. **Separate concerns** - Agent metadata vs session state vs messages
 //! 3. **DST-first** - All operations can have faults injected
 
+mod adapter;
 mod teleport;
 mod traits;
 mod types;
@@ -30,6 +31,7 @@ mod sim;
 
 #[cfg(feature = "fdb")]
 pub use fdb::FdbAgentRegistry;
+pub use adapter::KvAdapter;
 pub use kelpie_core::teleport::{
     Architecture, SnapshotKind, TeleportPackage, TeleportStorage, TeleportStorageError,
     TeleportStorageResult, TELEPORT_ID_LENGTH_BYTES_MAX,
