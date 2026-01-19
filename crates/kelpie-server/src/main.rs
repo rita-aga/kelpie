@@ -112,9 +112,10 @@ async fn main() -> anyhow::Result<()> {
     // Create application state
     #[cfg(feature = "otel")]
     let state = if let Some(storage) = storage {
-        let mut state = AppState::with_storage(storage);
-        state.set_prometheus_registry(_telemetry_guard.registry().cloned());
-        state
+        AppState::with_storage_and_registry(
+            storage,
+            _telemetry_guard.registry().cloned(),
+        )
     } else {
         AppState::with_registry(_telemetry_guard.registry())
     };

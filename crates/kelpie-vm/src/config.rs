@@ -71,6 +71,7 @@ impl VmConfig {
     }
 
     /// Validate the configuration
+    #[allow(clippy::assertions_on_constants)] // TigerStyle: validate constants
     pub fn validate(&self) -> VmResult<()> {
         // Preconditions
         assert!(VM_VCPU_COUNT_MAX >= 1);

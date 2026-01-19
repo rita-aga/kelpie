@@ -561,8 +561,8 @@ fn parse_sse_stream(
                             // Remove processed line from buffer
                             buffer.drain(..=newline_idx);
 
-                            if line.starts_with("data: ") {
-                                let data = &line[6..]; // Skip "data: "
+                            if let Some(data) = line.strip_prefix("data: ") {
+                                // Skip "data: "
 
                                 // Parse JSON
                                 if let Ok(event) = serde_json::from_str::<Value>(data) {

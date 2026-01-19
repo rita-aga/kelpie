@@ -21,6 +21,7 @@ pub use crate::backends::vz::VzConfig;
 use crate::backends::vz::{VzVm, VzVmFactory};
 /// VM backend variants
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // Different backends have different sizes
 pub enum VmBackend {
     /// Mock VM backend (testing)
     Mock(MockVm),
@@ -216,6 +217,7 @@ impl VmBackendFactory {
     }
 
     /// Create a factory that chooses the native backend for the host
+    #[allow(unreachable_code)] // False positive with conditional compilation
     pub fn for_host() -> Self {
         #[cfg(all(feature = "vz", target_os = "macos"))]
         {

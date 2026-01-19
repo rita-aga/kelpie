@@ -745,7 +745,7 @@ fn run_single_exploration(seed: u64, ops_count: u32) -> std::result::Result<(), 
             0.05,
         ))
         .run(|env| async move {
-            let actor_id = ActorId::new("dst-explore", &format!("ledger-{}", seed))?;
+            let actor_id = ActorId::new("dst-explore", format!("ledger-{}", seed))?;
             let storage = Arc::new(env.storage);
 
             // Track successful operations for invariant checking

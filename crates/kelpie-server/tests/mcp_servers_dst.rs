@@ -14,7 +14,6 @@ use kelpie_dst::simulation::{SimConfig, Simulation};
 use kelpie_server::models::MCPServerConfig;
 use kelpie_server::state::AppState;
 use serde_json::json;
-use std::sync::Arc;
 
 // =============================================================================
 // Test Helpers
@@ -69,12 +68,13 @@ async fn test_dst_mcp_server_create_basic() {
             assert!(server.id.starts_with("mcp_server-"));
 
             // Verify we can retrieve it
-            let retrieved = state
-                .get_mcp_server(&server.id)
-                .await
-                .ok_or_else(|| CoreError::Internal {
-                    message: "server not found".to_string(),
-                })?;
+            let retrieved =
+                state
+                    .get_mcp_server(&server.id)
+                    .await
+                    .ok_or_else(|| CoreError::Internal {
+                        message: "server not found".to_string(),
+                    })?;
 
             assert_eq!(retrieved.id, server.id);
             assert_eq!(retrieved.server_name, "test-server");
@@ -286,11 +286,7 @@ async fn test_dst_mcp_server_update_with_faults() {
             let mut update_succeeded = false;
             for i in 0..10 {
                 if let Ok(updated) = state
-                    .update_mcp_server(
-                        &server.id,
-                        Some(format!("updated-{}", i)),
-                        None,
-                    )
+                    .update_mcp_server(&server.id, Some(format!("updated-{}", i)), None)
                     .await
                 {
                     assert_eq!(updated.id, server.id);
@@ -406,7 +402,10 @@ async fn test_dst_mcp_server_update_nonexistent() {
                 .update_mcp_server("nonexistent-id", Some("new-name".to_string()), None)
                 .await;
 
-            assert!(result.is_err(), "Update should fail for non-existent server");
+            assert!(
+                result.is_err(),
+                "Update should fail for non-existent server"
+            );
 
             Ok::<(), CoreError>(())
         })

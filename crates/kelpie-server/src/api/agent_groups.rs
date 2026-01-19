@@ -286,7 +286,7 @@ fn apply_group_context(shared_state: &Value, content: &str) -> String {
         return content.to_string();
     }
 
-    format!("Group context: {}\n\n{}", shared_state.to_string(), content)
+    format!("Group context: {}\n\n{}", shared_state, content)
 }
 
 fn append_shared_state(group: &mut AgentGroup, agent_id: &str, response: &Value) {

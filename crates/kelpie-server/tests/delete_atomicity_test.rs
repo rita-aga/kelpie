@@ -145,8 +145,8 @@ async fn test_delete_then_recreate() {
                     agent_type: AgentType::LettaV1Agent,
                     model: None,
                     embedding: None,
-                    system: Some(format!("Version 1")),
-                    description: Some(format!("First version")),
+                    system: Some("Version 1".to_string()),
+                    description: Some("First version".to_string()),
                     memory_blocks: vec![],
                     block_ids: vec![],
                     tool_ids: vec![],
@@ -193,8 +193,8 @@ async fn test_delete_then_recreate() {
                     agent_type: AgentType::ReactAgent, // Different type
                     model: None,
                     embedding: None,
-                    system: Some(format!("Version 2")), // Different system
-                    description: Some(format!("Second version")),
+                    system: Some("Version 2".to_string()), // Different system
+                    description: Some("Second version".to_string()),
                     memory_blocks: vec![],
                     block_ids: vec![],
                     tool_ids: vec![],

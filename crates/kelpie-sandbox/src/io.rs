@@ -128,7 +128,7 @@ pub trait SandboxIO: Send + Sync + std::fmt::Debug {
 ///
 /// This is the I/O-level representation of a snapshot.
 /// The higher-level Snapshot type includes metadata and validation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SnapshotData {
     /// Memory state (for Suspend/Teleport)
     pub memory: Option<Bytes>,
@@ -138,17 +138,6 @@ pub struct SnapshotData {
     pub filesystem: Option<Bytes>,
     /// Environment variables
     pub env_vars: Vec<(String, String)>,
-}
-
-impl Default for SnapshotData {
-    fn default() -> Self {
-        Self {
-            memory: None,
-            cpu_state: None,
-            filesystem: None,
-            env_vars: Vec::new(),
-        }
-    }
 }
 
 // ============================================================================

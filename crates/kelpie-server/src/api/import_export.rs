@@ -310,7 +310,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri(&format!("/v1/agents/{}/export", agent.id))
+                    .uri(format!("/v1/agents/{}/export", agent.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -465,7 +465,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri(&format!("/v1/agents/{}/export", original.id))
+                    .uri(format!("/v1/agents/{}/export", original.id))
                     .body(Body::empty())
                     .unwrap(),
             )

@@ -12,7 +12,7 @@ use kelpie_core::teleport::VmSnapshotBlob;
 pub use kelpie_sandbox::FirecrackerConfig;
 use kelpie_sandbox::{
     ExecOptions as SandboxExecOptions, ExecOutput as SandboxExecOutput, FirecrackerSandbox,
-    ResourceLimits, SandboxConfig, SandboxError,
+    ResourceLimits, Sandbox, SandboxConfig, SandboxError,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -53,6 +53,17 @@ pub struct FirecrackerVm {
     snapshot_dir: PathBuf,
 }
 
+impl std::fmt::Debug for FirecrackerVm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FirecrackerVm")
+            .field("id", &self.id)
+            .field("config", &self.config)
+            .field("state", &self.state)
+            .field("snapshot_dir", &self.snapshot_dir)
+            .finish_non_exhaustive()
+    }
+}
+
 impl FirecrackerVm {
     async fn new(config: VmConfig, base_config: &FirecrackerConfig) -> VmResult<Self> {
         if !cfg!(target_os = "linux") {
@@ -89,7 +100,7 @@ impl FirecrackerVm {
             fc_config.kernel_args = args.clone();
         }
 
-        fc_config.validate().map_err(|err| map_sandbox_error(err))?;
+        fc_config.validate().map_err(map_sandbox_error)?;
 
         let limits = ResourceLimits::default()
             .with_vcpus(config.vcpu_count)
@@ -393,12 +404,13 @@ impl VmInstance for FirecrackerVm {
 }
 
 fn to_sandbox_exec_options(options: VmExecOptions) -> SandboxExecOptions {
-    let mut sandbox_options = SandboxExecOptions::default();
-    sandbox_options.timeout_ms = options.timeout_ms;
-    sandbox_options.workdir = options.workdir;
-    sandbox_options.env = options.env;
-    sandbox_options.stdin = options.stdin;
-    sandbox_options
+    SandboxExecOptions {
+        timeout_ms: options.timeout_ms,
+        workdir: options.workdir,
+        env: options.env,
+        stdin: options.stdin,
+        ..Default::default()
+    }
 }
 
 fn map_exec_output(output: SandboxExecOutput) -> VmExecOutput {
@@ -412,7 +424,7 @@ fn map_sandbox_error(err: SandboxError) -> VmError {
         SandboxError::ExecFailed { reason, .. } => VmError::ExecFailed { reason },
         SandboxError::ExecTimeout { timeout_ms, .. } => VmError::ExecTimeout { timeout_ms },
         SandboxError::SnapshotFailed { reason, .. } => VmError::SnapshotFailed { reason },
-        SandboxError::RestoreFailed { reason } => VmError::RestoreFailed { reason },
+        SandboxError::RestoreFailed { reason, .. } => VmError::RestoreFailed { reason },
         SandboxError::IoError { reason } => VmError::Internal { reason },
         SandboxError::Internal { message } => VmError::Internal { reason: message },
         other => VmError::Internal {

@@ -263,6 +263,7 @@ impl VmInstance for SimVm {
         Ok(ExecOutput::new(0, stdout, stderr))
     }
 
+    #[allow(clippy::assertions_on_constants)] // TigerStyle: validate constants
     async fn snapshot(&self) -> VmResult<VmSnapshot> {
         assert!(!self.id.is_empty());
         assert!(VM_SNAPSHOT_SIZE_BYTES_MAX > 0);

@@ -133,10 +133,11 @@ impl VmSnapshotBlob {
         let total_len =
             TELEPORT_SNAPSHOT_HEADER_BYTES as u64 + metadata_len + snapshot_len + memory_len;
 
-        assert!(metadata_len <= u64::MAX);
-        assert!(snapshot_len <= u64::MAX);
-        assert!(memory_len <= u64::MAX);
-        assert!(total_len <= u64::MAX);
+        // TigerStyle: Verify total size doesn't overflow when cast to usize
+        assert!(
+            total_len <= usize::MAX as u64,
+            "snapshot blob too large for usize"
+        );
 
         let mut data = Vec::with_capacity(total_len as usize);
         data.extend_from_slice(&TELEPORT_SNAPSHOT_MAGIC_BYTES);

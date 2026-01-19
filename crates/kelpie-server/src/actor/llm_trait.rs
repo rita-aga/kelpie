@@ -257,25 +257,25 @@ impl LlmClient for RealLlmAdapter {
                 .map_err(|e| kelpie_core::Error::Internal {
                     message: format!("Stream error: {}", e),
                 })
-                .and_then(|delta| match delta {
+                .map(|delta| match delta {
                     crate::llm::StreamDelta::ContentDelta { text } => {
-                        Ok(StreamChunk::ContentDelta { delta: text })
+                        StreamChunk::ContentDelta { delta: text }
                     }
                     crate::llm::StreamDelta::ToolCallStart { id, name } => {
-                        Ok(StreamChunk::ToolCallStart {
+                        StreamChunk::ToolCallStart {
                             id,
                             name,
                             input: serde_json::Value::Null, // Will be filled by deltas
-                        })
+                        }
                     }
                     crate::llm::StreamDelta::ToolCallDelta { delta } => {
-                        Ok(StreamChunk::ToolCallDelta {
+                        StreamChunk::ToolCallDelta {
                             id: "".to_string(), // TODO: track tool call ID across deltas
                             delta,
-                        })
+                        }
                     }
                     crate::llm::StreamDelta::Done { stop_reason } => {
-                        Ok(StreamChunk::Done { stop_reason })
+                        StreamChunk::Done { stop_reason }
                     }
                 })
         });

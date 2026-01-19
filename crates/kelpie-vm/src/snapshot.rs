@@ -95,6 +95,7 @@ pub struct VmSnapshot {
 
 impl VmSnapshot {
     /// Create a new snapshot
+    #[allow(clippy::assertions_on_constants)] // TigerStyle: validate constants
     pub fn new(metadata: VmSnapshotMetadata, data: Bytes) -> VmResult<Self> {
         // Preconditions
         assert!(VM_SNAPSHOT_SIZE_BYTES_MAX > 0);

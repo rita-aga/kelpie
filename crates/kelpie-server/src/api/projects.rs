@@ -391,7 +391,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("DELETE")
-                    .uri(&format!("/v1/projects/{}", project.id))
+                    .uri(format!("/v1/projects/{}", project.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -438,7 +438,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("PATCH")
-                    .uri(&format!("/v1/projects/{}", project.id))
+                    .uri(format!("/v1/projects/{}", project.id))
                     .header("content-type", "application/json")
                     .body(Body::from(serde_json::to_vec(&update_request).unwrap()))
                     .unwrap(),

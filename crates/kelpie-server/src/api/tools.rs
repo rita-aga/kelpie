@@ -21,6 +21,8 @@ pub struct ListToolsQuery {
     pub name: Option<String>,
     /// Filter by tool ID
     pub id: Option<String>,
+    /// Cursor for pagination - return tools after this ID
+    pub after: Option<String>,
 }
 
 /// Tool definition for API responses (Letta-compatible)
@@ -36,7 +38,11 @@ pub struct ToolResponse {
     #[serde(alias = "json_schema")]
     pub input_schema: serde_json::Value,
     /// Source code (for custom tools) - serialize as source_code for Letta compatibility
-    #[serde(skip_serializing_if = "Option::is_none", rename = "source_code", alias = "source")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        rename = "source_code",
+        alias = "source"
+    )]
     pub source: Option<String>,
     /// Whether tool requires user approval before execution
     #[serde(default)]
@@ -185,7 +191,7 @@ async fn list_tools(
     );
 
     // Apply filters
-    let filtered: Vec<ToolResponse> = tools
+    let mut filtered: Vec<ToolResponse> = tools
         .into_iter()
         .map(ToolResponse::from)
         .filter(|t| {
@@ -204,6 +210,18 @@ async fn list_tools(
             true
         })
         .collect();
+
+    // Apply cursor-based pagination if 'after' is specified
+    if let Some(ref after_id) = query.after {
+        // Find the position of the cursor ID
+        if let Some(cursor_pos) = filtered.iter().position(|t| &t.id == after_id) {
+            // Return only tools after the cursor
+            filtered = filtered.into_iter().skip(cursor_pos + 1).collect();
+        } else {
+            // Cursor not found - return empty list (already paginated past end)
+            filtered.clear();
+        }
+    }
 
     let count = filtered.len();
     Json(ToolListResponse {

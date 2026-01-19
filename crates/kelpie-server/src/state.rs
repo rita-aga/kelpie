@@ -304,6 +304,41 @@ impl AppState {
         }
     }
 
+    /// Create server state with persistent storage and prometheus registry
+    #[cfg(feature = "otel")]
+    pub fn with_storage_and_registry(
+        storage: Arc<dyn AgentStorage>,
+        registry: Option<prometheus::Registry>,
+    ) -> Self {
+        let llm = LlmClient::from_env();
+        let tool_registry = Arc::new(UnifiedToolRegistry::new());
+
+        Self {
+            inner: Arc::new(AppStateInner {
+                agent_service: None,
+                dispatcher: None,
+                shutdown_tx: None,
+                agents: RwLock::new(HashMap::new()),
+                messages: RwLock::new(HashMap::new()),
+                tool_registry,
+                client_tools: RwLock::new(HashMap::new()),
+                archival: RwLock::new(HashMap::new()),
+                blocks: RwLock::new(HashMap::new()),
+                mcp_servers: RwLock::new(HashMap::new()),
+                jobs: RwLock::new(HashMap::new()),
+                projects: RwLock::new(HashMap::new()),
+                batches: RwLock::new(HashMap::new()),
+                agent_groups: RwLock::new(HashMap::new()),
+                start_time: Instant::now(),
+                llm,
+                storage: Some(storage),
+                prometheus_registry: registry.map(Arc::new),
+                #[cfg(feature = "dst")]
+                fault_injector: None,
+            }),
+        }
+    }
+
     /// Create server state with an explicit LLM client (test helper)
     pub fn with_llm(llm: LlmClient) -> Self {
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
@@ -2478,12 +2513,7 @@ impl AppState {
 
     /// Get an MCP server by ID
     pub async fn get_mcp_server(&self, server_id: &str) -> Option<crate::models::MCPServer> {
-        self.inner
-            .mcp_servers
-            .read()
-            .ok()?
-            .get(server_id)
-            .cloned()
+        self.inner.mcp_servers.read().ok()?.get(server_id).cloned()
     }
 
     /// List all MCP servers
@@ -2549,15 +2579,21 @@ impl AppState {
     /// List tools provided by an MCP server
     ///
     /// Returns JSON Value array to avoid type conflicts from multiple compilations
-    pub async fn list_mcp_server_tools(&self, server_id: &str) -> Result<Vec<serde_json::Value>, StateError> {
+    pub async fn list_mcp_server_tools(
+        &self,
+        server_id: &str,
+    ) -> Result<Vec<serde_json::Value>, StateError> {
         use kelpie_tools::mcp::{McpClient, McpConfig};
         use std::sync::Arc;
 
         // Get the MCP server
-        let server = self.get_mcp_server(server_id).await.ok_or_else(|| StateError::NotFound {
-            resource: "MCP server",
-            id: server_id.to_string(),
-        })?;
+        let server = self
+            .get_mcp_server(server_id)
+            .await
+            .ok_or_else(|| StateError::NotFound {
+                resource: "MCP server",
+                id: server_id.to_string(),
+            })?;
 
         // Convert MCPServerConfig to McpConfig
         let mcp_config = match &server.config {
@@ -2589,11 +2625,12 @@ impl AppState {
         })?;
 
         // Discover tools
-        let tools = client.discover_tools().await.map_err(|e| {
-            StateError::Internal {
+        let tools = client
+            .discover_tools()
+            .await
+            .map_err(|e| StateError::Internal {
                 message: format!("Failed to discover tools from MCP server: {}", e),
-            }
-        })?;
+            })?;
 
         // Disconnect
         let _ = client.disconnect().await;
@@ -2601,15 +2638,17 @@ impl AppState {
         // Convert McpToolDefinition to JSON Value to avoid type conflicts
         let tool_responses: Vec<serde_json::Value> = tools
             .into_iter()
-            .map(|tool| serde_json::json!({
-                "id": format!("mcp_{}_{}", server_id, tool.name),
-                "name": tool.name,
-                "description": tool.description,
-                "input_schema": tool.input_schema,
-                "source": serde_json::Value::Null,
-                "default_requires_approval": false,
-                "tool_type": "mcp",
-            }))
+            .map(|tool| {
+                serde_json::json!({
+                    "id": format!("mcp_{}_{}", server_id, tool.name),
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.input_schema,
+                    "source": serde_json::Value::Null,
+                    "default_requires_approval": false,
+                    "tool_type": "mcp",
+                })
+            })
             .collect();
 
         Ok(tool_responses)

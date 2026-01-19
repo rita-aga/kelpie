@@ -243,7 +243,7 @@ async fn test_dst_agent_actor_activation_with_storage_fail() {
             let mut failure_count = 0;
 
             for i in 0..10 {
-                let actor_id = ActorId::new("agents", &format!("agent-test-{:03}", i))?;
+                let actor_id = ActorId::new("agents", format!("agent-test-{:03}", i))?;
                 let request = CreateAgentRequest {
                     name: format!("agent-{}", i),
                     agent_type: AgentType::LettaV1Agent,
@@ -365,7 +365,7 @@ async fn test_dst_agent_actor_deactivation_with_storage_fail() {
             let mut failure_count = 0;
 
             for i in 0..10 {
-                let actor_id = ActorId::new("agents", &format!("agent-test-{:03}", i))?;
+                let actor_id = ActorId::new("agents", format!("agent-test-{:03}", i))?;
                 let request = CreateAgentRequest {
                     name: format!("agent-{}", i),
                     agent_type: AgentType::LettaV1Agent,

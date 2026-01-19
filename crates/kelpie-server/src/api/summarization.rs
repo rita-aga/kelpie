@@ -347,7 +347,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/v1/agents/{}/messages/summarize", agent_id))
+                    .uri(format!("/v1/agents/{}/messages/summarize", agent_id))
                     .header("content-type", "application/json")
                     .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
                     .unwrap(),
@@ -372,7 +372,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/v1/agents/{}/memory/summarize", agent_id))
+                    .uri(format!("/v1/agents/{}/memory/summarize", agent_id))
                     .header("content-type", "application/json")
                     .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
                     .unwrap(),
@@ -421,7 +421,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/v1/agents/{}/memory/summarize", agent.id))
+                    .uri(format!("/v1/agents/{}/memory/summarize", agent.id))
                     .header("content-type", "application/json")
                     .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
                     .unwrap(),
@@ -446,7 +446,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/v1/agents/{}/memory/summarize", agent_id))
+                    .uri(format!("/v1/agents/{}/memory/summarize", agent_id))
                     .header("content-type", "application/json")
                     .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
                     .unwrap(),

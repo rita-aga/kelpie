@@ -6,7 +6,7 @@
 use super::ApiError;
 use axum::{
     extract::{Path, State},
-    routing::{delete, get, patch, post, put},
+    routing::get,
     Json, Router,
 };
 use kelpie_server::models::{MCPServer, MCPServerConfig};
@@ -57,7 +57,13 @@ impl From<MCPServer> for MCPServerResponse {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_servers).post(create_server))
-        .route("/:server_id", get(get_server).put(update_server).patch(update_server).delete(delete_server))
+        .route(
+            "/:server_id",
+            get(get_server)
+                .put(update_server)
+                .patch(update_server)
+                .delete(delete_server),
+        )
         .route("/:server_id/tools", get(list_server_tools))
 }
 
@@ -174,7 +180,9 @@ async fn list_server_tools(
         .list_mcp_server_tools(&server_id)
         .await
         .map_err(|e| match e {
-            kelpie_server::state::StateError::NotFound { resource, id } => ApiError::not_found(&resource, &id),
+            kelpie_server::state::StateError::NotFound { resource, id } => {
+                ApiError::not_found(resource, &id)
+            }
             _ => ApiError::internal(format!("Failed to discover MCP server tools: {}", e)),
         })?;
 
@@ -191,8 +199,8 @@ async fn list_server_tools(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::router as api_router;
+    
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;

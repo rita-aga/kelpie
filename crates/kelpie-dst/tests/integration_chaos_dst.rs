@@ -150,7 +150,7 @@ async fn run_teleport_workflow(
     new_sandbox.start().await?;
 
     // Create snapshot from downloaded data
-    let restored_snapshot = Snapshot::teleport(&format!("restored-{}", iteration));
+    let restored_snapshot = Snapshot::teleport(format!("restored-{}", iteration));
     new_sandbox.restore(&restored_snapshot).await?;
 
     // 8. Verify restored sandbox works

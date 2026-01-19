@@ -23,7 +23,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use foundationdb::api::{FdbApiBuilder, NetworkAutoStop};
-use foundationdb::tuple::{pack, unpack, Subspace};
+use foundationdb::tuple::Subspace;
 use foundationdb::{Database, RangeOption, Transaction as FdbTransaction};
 use kelpie_core::constants::{
     ACTOR_KV_KEY_SIZE_BYTES_MAX, ACTOR_KV_VALUE_SIZE_BYTES_MAX, TRANSACTION_TIMEOUT_MS_DEFAULT,
@@ -87,11 +87,7 @@ impl FdbKV {
                 .expect("FDB API build failed");
 
             // Start network thread - must keep the guard alive for operations to work
-            unsafe {
-                network_builder
-                    .boot()
-                    .expect("FDB network boot failed")
-            }
+            unsafe { network_builder.boot().expect("FDB network boot failed") }
         });
 
         // Open database
@@ -153,7 +149,7 @@ impl FdbKV {
     /// NOTE: For prefix matching to work correctly, we need to use the subspace
     /// bytes directly instead of tuple packing. The FDB tuple layer encoding
     /// adds type markers and length encoding that prevent simple prefix matching.
-    fn encode_prefix(&self, actor_id: &ActorId, prefix: &[u8]) -> Vec<u8> {
+    fn encode_prefix(&self, actor_id: &ActorId, _prefix: &[u8]) -> Vec<u8> {
         // Preconditions
         assert!(
             !actor_id.namespace().is_empty(),
