@@ -9,7 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-default = []
+default = ["fdb"]
 otel = ["kelpie-core/otel", "prometheus"]
 dst = ["kelpie-tools/dst", "dep:kelpie-dst"]
 fdb = ["dep:foundationdb", "kelpie-storage/fdb"]

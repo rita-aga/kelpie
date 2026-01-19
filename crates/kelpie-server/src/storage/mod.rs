@@ -22,15 +22,12 @@ mod adapter;
 mod teleport;
 mod traits;
 mod types;
-
-#[cfg(feature = "fdb")]
 mod fdb;
 
 #[cfg(feature = "dst")]
 mod sim;
 
 pub use adapter::KvAdapter;
-#[cfg(feature = "fdb")]
 pub use fdb::FdbAgentRegistry;
 pub use kelpie_core::teleport::{
     Architecture, SnapshotKind, TeleportPackage, TeleportStorage, TeleportStorageError,
