@@ -5,7 +5,7 @@
 #![cfg(feature = "dst")]
 
 use async_trait::async_trait;
-use kelpie_core::Result;
+use kelpie_core::{Result, TimeProvider};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -300,6 +300,7 @@ async fn test_dst_streaming_cancellation() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
+            let time = sim_env.io_context.time.clone();
             let service = create_service(&sim_env)?;
 
             // Create agent
@@ -350,8 +351,8 @@ async fn test_dst_streaming_cancellation() {
             // Drop receiver - simulates client disconnect
             drop(rx);
 
-            // Give actor time to detect disconnection
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            // Give actor time to detect disconnection (deterministic sleep)
+            time.sleep_ms(100).await;
 
             // Assertions: Actor should handle cancellation gracefully
             // Note: May be 0 if method not implemented yet
@@ -391,6 +392,7 @@ async fn test_dst_streaming_backpressure() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
+            let time = sim_env.io_context.time.clone();
             let service = create_service(&sim_env)?;
 
             // Create agent
@@ -437,8 +439,8 @@ async fn test_dst_streaming_backpressure() {
                     Ok(Some(event)) => {
                         events.push(event.clone());
 
-                        // Slow consumer: 50ms delay between reads
-                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        // Slow consumer: 50ms delay between reads (deterministic sleep)
+                        time.sleep_ms(50).await;
 
                         if matches!(event, StreamEvent::MessageComplete { .. }) {
                             break;

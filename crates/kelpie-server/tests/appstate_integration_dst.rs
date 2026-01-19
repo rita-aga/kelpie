@@ -13,7 +13,7 @@
 #![cfg(feature = "dst")]
 
 use async_trait::async_trait;
-use kelpie_core::Result;
+use kelpie_core::{Result, TimeProvider};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -39,6 +39,7 @@ async fn test_appstate_init_crash() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::CrashDuringTransaction, 0.5))
         .run_async(|sim_env| async move {
+            let time = sim_env.io_context.time.clone();
             let mut success_count = 0;
             let mut failure_count = 0;
             let mut partial_state_count = 0;
@@ -61,8 +62,8 @@ async fn test_appstate_init_crash() {
                                     break;
                                 }
                                 Err(_) if retry < 2 => {
-                                    // Retry
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+                                    // Retry - use deterministic sleep
+                                    time.sleep_ms(5).await;
                                     continue;
                                 }
                                 Err(e) => {
@@ -260,6 +261,7 @@ async fn test_shutdown_with_inflight_requests() {
             0.5,
         ))
         .run_async(|sim_env| async move {
+            let time = sim_env.io_context.time.clone();
             let app_state = match create_appstate_with_service(&sim_env).await {
                 Ok(a) => a,
                 Err(e) => {
@@ -293,8 +295,8 @@ async fn test_shutdown_with_inflight_requests() {
                 handles.push((i, handle));
             }
 
-            // Give some time for requests to start
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            // Give some time for requests to start (deterministic sleep)
+            time.sleep_ms(50).await;
 
             // SHUTDOWN while requests are in-flight
             println!("Initiating shutdown with in-flight requests...");
@@ -370,6 +372,7 @@ async fn test_service_invoke_during_shutdown() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::CrashDuringTransaction, 0.4))
         .run_async(|sim_env| async move {
+            let time = sim_env.io_context.time.clone();
             let app_state = match create_appstate_with_service(&sim_env).await {
                 Ok(a) => a,
                 Err(e) => {
@@ -378,15 +381,16 @@ async fn test_service_invoke_during_shutdown() {
                 }
             };
 
-            // Start shutdown in background
+            // Start shutdown in background (deterministic sleep)
             let app_clone = app_state.clone();
+            let time_clone = time.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                time_clone.sleep_ms(10).await;
                 let _ = app_clone.shutdown(Duration::from_secs(2)).await;
             });
 
-            // Give shutdown a moment to start
-            tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+            // Give shutdown a moment to start (deterministic sleep)
+            time.sleep_ms(20).await;
 
             // Try to create agent AFTER shutdown started
             let request = CreateAgentRequest {
@@ -460,6 +464,7 @@ async fn test_first_invoke_after_creation() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::CrashDuringTransaction, 0.5))
         .run_async(|sim_env| async move {
+            let time = sim_env.io_context.time.clone();
             let app_state = match create_appstate_with_service(&sim_env).await {
                 Ok(a) => a,
                 Err(e) => {
@@ -544,8 +549,8 @@ async fn test_first_invoke_after_creation() {
                                     break;
                                 }
                                 Err(_) if retry < 2 => {
-                                    // Retry - might be transient read fault
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+                                    // Retry - might be transient read fault (deterministic sleep)
+                                    time.sleep_ms(5).await;
                                     continue;
                                 }
                                 Err(e) => {

@@ -6,6 +6,7 @@
 //! Tests WILL FAIL initially because RealLlmAdapter doesn't override stream_complete().
 #![cfg(feature = "dst")]
 
+use kelpie_core::TimeProvider;
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
 
 /// Test that RealLlmAdapter.stream_complete() produces incremental chunks
@@ -172,14 +173,17 @@ async fn test_dst_concurrent_streaming_with_faults() {
             },
             0.4, // 40% operations delayed
         ))
-        .run_async(|_sim_env| async move {
+        .run_async(|sim_env| async move {
+            let time = sim_env.io_context.time.clone();
+
             // Create 3 concurrent "streams"
             let mut handles = Vec::new();
 
             for i in 1..=3 {
+                let time_clone = time.clone();
                 let handle = tokio::spawn(async move {
-                    // Simulate stream processing
-                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                    // Simulate stream processing (deterministic sleep)
+                    time_clone.sleep_ms(10).await;
                     Ok::<i32, kelpie_core::Error>(i)
                 });
 
