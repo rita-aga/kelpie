@@ -372,6 +372,46 @@ fn test_actor_under_faults() {
 | Time | `ClockSkew`, `ClockJump` |
 | Resource | `OutOfMemory`, `CPUStarvation` |
 
+### Test Categories
+
+Kelpie has two types of tests with distinct purposes and characteristics:
+
+#### True DST Tests (`*_dst.rs`)
+
+**Characteristics:**
+- Fully deterministic (same seed = same result)
+- Use `Simulation` harness or DST components (SimStorage, SimClock, DeterministicRng)
+- No external dependencies or uncontrolled systems
+- Instant execution (virtual time, no real I/O)
+- Reproducible with `DST_SEED` environment variable
+
+**Examples:**
+- `actor_lifecycle_dst.rs` - Actor state machine tests
+- `memory_dst.rs` - Memory system tests
+- `integration_chaos_dst.rs` - Many faults simultaneously (still deterministic!)
+
+**When to use:** Testing distributed system logic, fault handling, race conditions, state machines
+
+#### Chaos Tests (`*_chaos.rs`)
+
+**Characteristics:**
+- Non-deterministic (depend on external system state)
+- Integrate with uncontrolled external systems
+- Real I/O (slower)
+- Harder to reproduce (external dependencies)
+- Provide value for integration testing
+
+**Examples:**
+- `vm_backend_firecracker_chaos.rs` - Real Firecracker VM integration
+- Tests using real network calls to external APIs
+- Tests spawning external processes (git, shell, etc.)
+
+**When to use:** Integration testing with real external systems that can't be fully mocked
+
+**Note:** "Chaos" in test names like `integration_chaos_dst.rs` refers to **chaos engineering** (many simultaneous faults), not non-deterministic execution. These are still TRUE DST tests!
+
+**Rule of thumb:** If it uses `Simulation` or DST components (SimStorage, SimClock, etc.), it's a DST test. If it requires real Firecracker, real network, or real external binaries, it's a Chaos test.
+
 ## Vision-Aligned Planning (MANDATORY)
 
 ### Before Starting ANY Non-Trivial Task
