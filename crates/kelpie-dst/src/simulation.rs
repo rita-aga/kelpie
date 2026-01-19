@@ -106,7 +106,7 @@ pub struct SimEnvironment {
     /// Simulated sandbox factory (for creating sandboxes with fault injection)
     /// DEPRECATED: Use sandbox_io_factory for proper DST
     pub sandbox_factory: SimSandboxFactory,
-    /// New sandbox factory using GenericSandbox<SimSandboxIO> for proper DST
+    /// New sandbox factory using `GenericSandbox`<`SimSandboxIO`> for proper DST
     /// This uses the SAME state machine code as production, only I/O differs
     pub sandbox_io_factory: SimSandboxIOFactory,
     /// Simulated teleport storage (for teleport package upload/download)
