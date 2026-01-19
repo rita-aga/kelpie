@@ -9,7 +9,7 @@ use kelpie_sandbox::{SandboxConfig, SandboxState};
 use std::sync::Arc;
 
 /// Test rapid state transitions under faults
-#[tokio::test]
+#[madsim::test]
 async fn test_rapid_state_transitions() {
     let rng = Arc::new(DeterministicRng::new(42));
     let mut fault_builder = FaultInjectorBuilder::new(rng.fork());
@@ -62,7 +62,7 @@ async fn test_rapid_state_transitions() {
 }
 
 /// Test double-start prevention
-#[tokio::test]
+#[madsim::test]
 async fn test_double_start_prevention() {
     let rng = Arc::new(DeterministicRng::new(123));
     let faults = Arc::new(FaultInjectorBuilder::new(rng.fork()).build());
@@ -85,7 +85,7 @@ async fn test_double_start_prevention() {
 }
 
 /// Test double-stop is safe
-#[tokio::test]
+#[madsim::test]
 async fn test_double_stop_safety() {
     let rng = Arc::new(DeterministicRng::new(456));
     let faults = Arc::new(FaultInjectorBuilder::new(rng.fork()).build());
@@ -110,7 +110,7 @@ async fn test_double_stop_safety() {
 }
 
 /// Test operations on stopped sandbox
-#[tokio::test]
+#[madsim::test]
 async fn test_operations_on_stopped_sandbox() {
     let rng = Arc::new(DeterministicRng::new(789));
     let faults = Arc::new(FaultInjectorBuilder::new(rng.fork()).build());
@@ -131,7 +131,7 @@ async fn test_operations_on_stopped_sandbox() {
 }
 
 /// Test snapshot during different states
-#[tokio::test]
+#[madsim::test]
 async fn test_snapshot_state_requirements() {
     let rng = Arc::new(DeterministicRng::new(999));
     let faults = Arc::new(FaultInjectorBuilder::new(rng.fork()).build());
@@ -160,7 +160,7 @@ async fn test_snapshot_state_requirements() {
 }
 
 /// Stress test: many sandboxes with high fault rate
-#[tokio::test]
+#[madsim::test]
 async fn test_stress_many_sandboxes_high_faults() {
     let rng = Arc::new(DeterministicRng::new(11111));
     let mut fault_builder = FaultInjectorBuilder::new(rng.fork());
@@ -224,7 +224,7 @@ async fn test_stress_many_sandboxes_high_faults() {
 }
 
 /// Test file operations consistency
-#[tokio::test]
+#[madsim::test]
 async fn test_file_operations_consistency() {
     let rng = Arc::new(DeterministicRng::new(22222));
     let faults = Arc::new(FaultInjectorBuilder::new(rng.fork()).build());
@@ -267,7 +267,7 @@ async fn test_file_operations_consistency() {
 }
 
 /// Test restore after failed operations
-#[tokio::test]
+#[madsim::test]
 async fn test_recovery_after_failures() {
     let rng = Arc::new(DeterministicRng::new(33333));
     let faults = Arc::new(FaultInjectorBuilder::new(rng.fork()).build());

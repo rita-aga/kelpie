@@ -8,7 +8,7 @@ use kelpie_dst::{
 };
 use std::sync::Arc;
 
-#[tokio::test]
+#[madsim::test]
 async fn test_agent_env_with_simulation_basic() {
     let config = SimConfig::new(42);
 
@@ -42,7 +42,7 @@ async fn test_agent_env_with_simulation_basic() {
     assert!(result.is_ok(), "Simulation failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[madsim::test]
 async fn test_agent_env_with_llm_faults() {
     let config = SimConfig::new(12345);
 
@@ -101,7 +101,7 @@ async fn test_agent_env_with_llm_faults() {
     assert!(result.is_ok(), "Simulation failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[madsim::test]
 async fn test_agent_env_with_storage_faults() {
     let config = SimConfig::new(54321);
 
@@ -151,7 +151,7 @@ async fn test_agent_env_with_storage_faults() {
     assert!(result.is_ok(), "Simulation failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[madsim::test]
 async fn test_agent_env_with_time_advancement() {
     let config = SimConfig::new(99999);
 
@@ -190,7 +190,7 @@ async fn test_agent_env_with_time_advancement() {
     assert!(result.is_ok(), "Simulation failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[madsim::test]
 async fn test_agent_env_determinism() {
     let seed = 77777;
 
@@ -229,7 +229,7 @@ async fn test_agent_env_determinism() {
     assert_eq!(result1.1, result2.1, "LLM responses should match");
 }
 
-#[tokio::test]
+#[madsim::test]
 async fn test_agent_env_multiple_agents_concurrent() {
     let config = SimConfig::new(11111);
 
@@ -282,7 +282,7 @@ async fn test_agent_env_multiple_agents_concurrent() {
     assert!(result.is_ok(), "Simulation failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[madsim::test]
 async fn test_agent_env_with_tools() {
     let config = SimConfig::new(22222);
 
@@ -325,7 +325,7 @@ async fn test_agent_env_with_tools() {
     assert!(result.is_ok(), "Simulation failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[madsim::test]
 async fn test_agent_env_stress_with_faults() {
     let config = SimConfig::new(33333);
 
@@ -399,7 +399,7 @@ async fn test_agent_env_stress_with_faults() {
     assert!(result.is_ok(), "Simulation failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[madsim::test]
 async fn test_llm_client_direct_with_simulation() {
     let config = SimConfig::new(44444);
 

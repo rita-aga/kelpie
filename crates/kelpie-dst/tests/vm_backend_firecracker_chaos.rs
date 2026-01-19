@@ -3,7 +3,7 @@ mod tests {
     use kelpie_vm::{FirecrackerConfig, VmBackendFactory};
     use kelpie_vm::{VmConfig, VmError, VmFactory};
 
-    #[tokio::test]
+    #[madsim::test]
     async fn test_firecracker_factory_create_missing_kernel() {
         let factory = VmBackendFactory::firecracker(FirecrackerConfig::default());
         let config = VmConfig::builder()

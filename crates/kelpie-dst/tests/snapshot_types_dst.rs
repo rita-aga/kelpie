@@ -53,7 +53,7 @@ fn create_no_fault_injector(rng: &DeterministicRng) -> Arc<FaultInjector> {
 
 /// Test: Suspend snapshot creation under no faults (baseline)
 /// Expected: Fast memory-only snapshot succeeds
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_suspend_snapshot_no_faults() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -124,7 +124,7 @@ async fn test_dst_suspend_snapshot_no_faults() {
 
 /// Test: Suspend snapshot with crash faults
 /// Expected: Crashes during suspend are detected and handled
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_suspend_snapshot_crash_faults() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -180,7 +180,7 @@ async fn test_dst_suspend_snapshot_crash_faults() {
 
 /// Test: Teleport snapshot creation under no faults (baseline)
 /// Expected: Full VM snapshot with memory + CPU + disk succeeds
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_teleport_snapshot_no_faults() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -255,7 +255,7 @@ async fn test_dst_teleport_snapshot_no_faults() {
 
 /// Test: Teleport snapshot with storage faults
 /// Expected: Upload/download failures handled gracefully
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_teleport_snapshot_storage_faults() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -311,7 +311,7 @@ async fn test_dst_teleport_snapshot_storage_faults() {
 
 /// Test: Teleport snapshot with corruption
 /// Expected: Corrupted snapshots detected on restore
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_teleport_snapshot_corruption() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -364,7 +364,7 @@ async fn test_dst_teleport_snapshot_corruption() {
 
 /// Test: Checkpoint snapshot creation under no faults (baseline)
 /// Expected: App-level checkpoint without VM state succeeds
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_checkpoint_snapshot_no_faults() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -423,7 +423,7 @@ async fn test_dst_checkpoint_snapshot_no_faults() {
 
 /// Test: Checkpoint with app state faults
 /// Expected: State serialization failures handled
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_checkpoint_snapshot_state_faults() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -474,7 +474,7 @@ async fn test_dst_checkpoint_snapshot_state_faults() {
 
 /// Test: Architecture validation for VM snapshots
 /// Expected: ARM64 snapshot fails on x86_64, Checkpoint succeeds
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_architecture_validation() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -544,7 +544,7 @@ async fn test_dst_architecture_validation() {
 
 /// Test: Architecture mismatch fault injection
 /// Expected: Injected arch mismatch faults are handled
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_architecture_mismatch_faults() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -611,7 +611,7 @@ async fn test_dst_architecture_mismatch_faults() {
 
 /// Test: Base image version validation
 /// Expected: Mismatched versions fail restoration
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_base_image_version_validation() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -679,7 +679,7 @@ async fn test_dst_base_image_version_validation() {
 
 /// Test: Base image version mismatch fault injection
 /// Expected: Injected version mismatch faults are handled
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_base_image_mismatch_faults() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -743,7 +743,7 @@ async fn test_dst_base_image_mismatch_faults() {
 
 /// Test: Same seed produces same snapshot behavior
 /// Critical: DST requires determinism for reproducibility
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_snapshot_types_determinism() {
     let seed = 42u64; // Fixed seed
 
@@ -812,7 +812,7 @@ async fn test_dst_snapshot_types_determinism() {
 
 /// Test: All snapshot types under chaos conditions
 /// Expected: System remains stable, no panics
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_snapshot_types_chaos() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -922,7 +922,7 @@ async fn test_dst_snapshot_types_chaos() {
 // ============================================================================
 
 /// Stress test: Many snapshot creations and restorations
-#[tokio::test]
+#[madsim::test]
 #[ignore]
 async fn stress_test_snapshot_types() {
     let seed = get_seed();

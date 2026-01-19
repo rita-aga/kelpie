@@ -56,7 +56,7 @@ fn test_config() -> SandboxConfig {
 /// - If upload/snapshot fails, original agent remains running
 /// - If download/restore fails, error returned but no partial state
 /// - If succeeds, new agent has identical state to original
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_teleport_roundtrip_under_faults() {
     let config = SimConfig::from_env_or_random();
 
@@ -197,7 +197,7 @@ async fn test_dst_teleport_roundtrip_under_faults() {
 /// - Failed uploads don't leave partial packages in storage
 /// - Failed downloads don't corrupt local state
 /// - Retry logic can recover from transient failures
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_teleport_with_storage_failures() {
     let config = SimConfig::from_env_or_random();
 
@@ -295,7 +295,7 @@ async fn test_dst_teleport_with_storage_failures() {
 /// - VM snapshots (Suspend/Teleport) require same architecture
 /// - Checkpoints work across architectures
 /// - Clear error messages when architecture mismatch occurs
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_teleport_architecture_validation() {
     let config = SimConfig::from_env_or_random();
 
@@ -388,7 +388,7 @@ async fn test_dst_teleport_architecture_validation() {
 /// - Concurrent operations are isolated
 /// - One agent's failure doesn't affect others
 /// - Storage handles concurrent access correctly
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_teleport_concurrent_operations() {
     let config = SimConfig::from_env_or_random();
 
@@ -505,7 +505,7 @@ async fn test_dst_teleport_concurrent_operations() {
 /// - Mid-upload crash: package may exist but incomplete (should be detectable)
 /// - Post-upload crash: package exists and is complete
 /// - Cleanup mechanisms can detect and remove orphaned packages
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_teleport_interrupted_midway() {
     let config = SimConfig::from_env_or_random();
 
@@ -615,7 +615,7 @@ async fn test_dst_teleport_interrupted_midway() {
 ///
 /// This is a long-running test that exercises the teleport system under stress.
 /// Run with: cargo test -p kelpie-dst --test teleport_service_dst stress -- --ignored
-#[tokio::test]
+#[madsim::test]
 #[ignore]
 async fn stress_test_teleport_operations() {
     let config = SimConfig::from_env_or_random();
