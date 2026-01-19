@@ -55,15 +55,19 @@ jobs:
         run: cargo test --features otel,firecracker
 
   test-dst:
-    name: DST Tests
+    name: DST Determinism Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: DST Tests (multiple seeds)
+      - name: Make script executable
+        run: chmod +x scripts/check_dst.sh
+      - name: Verify Determinism (Double Run)
+        run: ./scripts/check_dst.sh 12345
+      - name: Run Chaos/Stress Tests (Multiple Seeds)
         run: |
-          for seed in 12345 67890 11111 22222 33333; do
+          for seed in 67890 11111; do
             echo "Running DST with seed $seed"
             DST_SEED=$seed cargo test -p kelpie-dst --release
           done

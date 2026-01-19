@@ -1165,7 +1165,9 @@ pub enum RoutingPolicy {
 /// Request to create an agent group
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateAgentGroupRequest {
-    pub name: String,
+    /// Optional name (auto-generated if not provided, for Letta compatibility)
+    #[serde(default)]
+    pub name: Option<String>,
     pub description: Option<String>,
     #[serde(default)]
     pub agent_ids: Vec<String>,
@@ -1195,6 +1197,8 @@ pub struct AgentGroup {
     pub name: String,
     pub description: Option<String>,
     pub agent_ids: Vec<String>,
+    /// Routing policy (serialized as "manager_type" for Letta compatibility)
+    #[serde(rename = "manager_type")]
     pub routing_policy: RoutingPolicy,
     pub shared_state: serde_json::Value,
     pub metadata: serde_json::Value,
@@ -1207,9 +1211,13 @@ pub struct AgentGroup {
 impl AgentGroup {
     pub fn from_request(request: CreateAgentGroupRequest) -> Self {
         let now = Utc::now();
+        let id = uuid::Uuid::new_v4().to_string();
+        // Auto-generate name if not provided (Letta compatibility)
+        let name = request.name.unwrap_or_else(|| format!("group-{}", &id[..8]));
+
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: request.name,
+            id,
+            name,
             description: request.description,
             agent_ids: request.agent_ids,
             routing_policy: request.routing_policy,

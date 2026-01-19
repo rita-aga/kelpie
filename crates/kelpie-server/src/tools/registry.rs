@@ -697,7 +697,8 @@ impl UnifiedToolRegistry {
     pub async fn unregister(&self, name: &str) -> bool {
         let removed_tool = self.tools.write().await.remove(name).is_some();
         let removed_handler = self.builtin_handlers.write().await.remove(name).is_some();
-        removed_tool || removed_handler
+        let removed_custom = self.custom_tools.write().await.remove(name).is_some();
+        removed_tool || removed_handler || removed_custom
     }
 
     /// Clear all tools

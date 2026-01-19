@@ -62,13 +62,16 @@ pub fn router() -> Router<AppState> {
 }
 
 /// Create a new agent group
-#[instrument(skip(state, request), fields(name = %request.name), level = "info")]
+#[instrument(skip(state, request), level = "info")]
 pub async fn create_group(
     State(state): State<AppState>,
     Json(request): Json<CreateAgentGroupRequest>,
 ) -> Result<Json<AgentGroup>, ApiError> {
-    if request.name.trim().is_empty() {
-        return Err(ApiError::bad_request("group name cannot be empty"));
+    // Validate name if provided
+    if let Some(ref name) = request.name {
+        if name.trim().is_empty() {
+            return Err(ApiError::bad_request("group name cannot be empty"));
+        }
     }
 
     // Validate agent IDs
