@@ -1573,15 +1573,25 @@ impl AppState {
             }
         }
 
-        Ok(ToolInfo {
-            id,
-            name,
-            description,
-            input_schema,
-            source,
+        // Store the tool info in client_tools map for ID-based lookup
+        // This allows get_tool_by_id to work for all tool types
+        let tool_info = ToolInfo {
+            id: id.clone(),
+            name: name.clone(),
+            description: description.clone(),
+            input_schema: input_schema.clone(),
+            source: source.clone(),
             default_requires_approval,
-            tool_type,
-        })
+            tool_type: tool_type.clone(),
+        };
+
+        self.inner
+            .client_tools
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?
+            .insert(name.clone(), tool_info.clone());
+
+        Ok(tool_info)
     }
 
     /// Get a tool by name

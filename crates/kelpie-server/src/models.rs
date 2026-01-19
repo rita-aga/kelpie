@@ -104,6 +104,7 @@ pub struct CreateAgentRequest {
     /// Model to use (e.g., "openai/gpt-4o")
     pub model: Option<String>,
     /// Embedding model to use (e.g., "openai/text-embedding-3-small")
+    #[serde(default = "default_embedding_model")]
     pub embedding: Option<String>,
     /// System prompt
     pub system: Option<String>,
@@ -130,6 +131,10 @@ pub struct CreateAgentRequest {
 
 fn default_agent_name() -> String {
     "Nameless Agent".to_string()
+}
+
+fn default_embedding_model() -> Option<String> {
+    Some("openai/text-embedding-3-small".to_string())
 }
 
 /// Request to update an agent
@@ -297,7 +302,7 @@ impl Block {
             label: label.into(),
             value: value.into(),
             description: None,
-            limit: None,
+            limit: Some(20000), // Default for Letta compatibility
             created_at: now,
             updated_at: now,
         }

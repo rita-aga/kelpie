@@ -255,7 +255,7 @@ curl -X POST http://localhost:8283/v1/agents \
 ---
 
 ### Doesn't Work Yet
-**Status:** Phase 0 complete - 23+ tests failing
+**Status:** Phases 0-2 complete - 15/36 tests passing (42%), agents & blocks 100%
 
 **What's missing:**
 1. **MCP Server Endpoints** - `/v1/mcp-servers/` returns 404 (16 tests failing)

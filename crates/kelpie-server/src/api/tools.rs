@@ -35,8 +35,8 @@ pub struct ToolResponse {
     /// JSON schema for tool input
     #[serde(alias = "json_schema")]
     pub input_schema: serde_json::Value,
-    /// Source code (for custom tools)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Source code (for custom tools) - serialize as source_code for Letta compatibility
+    #[serde(skip_serializing_if = "Option::is_none", rename = "source_code", alias = "source")]
     pub source: Option<String>,
     /// Whether tool requires user approval before execution
     #[serde(default)]
@@ -74,13 +74,15 @@ pub struct ToolListResponse {
 /// Request to register a tool (POST)
 #[derive(Debug, Deserialize)]
 pub struct RegisterToolRequest {
-    /// Tool name
-    pub name: String,
-    /// Tool description
-    pub description: String,
-    /// JSON schema for input parameters
-    #[serde(alias = "json_schema")]
-    pub input_schema: serde_json::Value,
+    /// Tool name (optional - can be extracted from source_code)
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Tool description (optional - will generate default)
+    #[serde(default)]
+    pub description: Option<String>,
+    /// JSON schema for input parameters (optional - will use empty schema)
+    #[serde(default, alias = "json_schema")]
+    pub input_schema: Option<serde_json::Value>,
     /// Source code (optional for client-side tools)
     #[serde(default)]
     pub source: Option<String>,
@@ -155,8 +157,8 @@ pub struct ExecuteToolResponse {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_tools).post(register_tool).put(upsert_tool))
-        .route("/{name}", get(get_tool).delete(delete_tool))
-        .route("/{name}/execute", post(execute_tool))
+        .route("/:name_or_id", get(get_tool).delete(delete_tool))
+        .route("/:name/execute", post(execute_tool))
 }
 
 /// List all available tools with optional filtering
@@ -358,23 +360,52 @@ async fn upsert_tool(
 /// Register a new tool
 ///
 /// POST /v1/tools
-#[instrument(skip(state, request), fields(name = %request.name), level = "info")]
+#[instrument(skip(state, request), level = "info")]
 async fn register_tool(
     State(state): State<AppState>,
     Json(request): Json<RegisterToolRequest>,
 ) -> Result<Json<ToolResponse>, ApiError> {
+    let source_code = request.source_code.or(request.source);
+
+    // Extract tool name from request or source_code
+    let tool_name = if let Some(name) = request.name {
+        name
+    } else {
+        // Try to extract from source_code
+        source_code
+            .as_ref()
+            .and_then(|src| extract_function_name(src))
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "Tool name is required (either provide 'name' field or include 'def <name>(' in source_code)",
+                )
+            })?
+    };
+
     // Validate tool name
-    if request.name.is_empty() {
+    if tool_name.is_empty() {
         return Err(ApiError::bad_request("Tool name cannot be empty"));
     }
 
-    if request.name.len() > 64 {
+    if tool_name.len() > 64 {
         return Err(ApiError::bad_request(
             "Tool name too long (max 64 characters)",
         ));
     }
 
-    let source_code = request.source_code.or(request.source);
+    // Generate default description if not provided
+    let description = request
+        .description
+        .unwrap_or_else(|| format!("Custom tool: {}", tool_name));
+
+    // Generate default input schema if not provided
+    let input_schema = request.input_schema.unwrap_or_else(|| {
+        serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        })
+    });
 
     // Determine tool type
     let tool_type = request.tool_type.unwrap_or_else(|| {
@@ -404,8 +435,8 @@ async fn register_tool(
             )));
         }
 
-        let def_snippet = format!("def {}", request.name);
-        let async_def_snippet = format!("async def {}", request.name);
+        let def_snippet = format!("def {}", tool_name);
+        let async_def_snippet = format!("async def {}", tool_name);
         if !code.contains(&def_snippet) && !code.contains(&async_def_snippet) {
             return Err(ApiError::bad_request(
                 "source_code must define a function with the tool name",
@@ -419,9 +450,9 @@ async fn register_tool(
     let registered = state
         .upsert_tool(
             id,
-            request.name.clone(),
-            request.description.clone(),
-            request.input_schema.clone(),
+            tool_name.clone(),
+            description,
+            input_schema,
             source_code,
             request.default_requires_approval,
             tool_type,
@@ -429,36 +460,56 @@ async fn register_tool(
         .await
         .map_err(|e| ApiError::internal(format!("Failed to register tool: {}", e)))?;
 
-    tracing::info!(name = %request.name, "Registered tool");
+    tracing::info!(name = %tool_name, "Registered tool");
 
     Ok(Json(ToolResponse::from(registered)))
 }
 
-/// Get a specific tool
-#[instrument(skip(state), fields(name = %name), level = "info")]
+/// Get a specific tool by name or ID
+#[instrument(skip(state), fields(name_or_id = %name_or_id), level = "info")]
 async fn get_tool(
     State(state): State<AppState>,
-    Path(name): Path<String>,
+    Path(name_or_id): Path<String>,
 ) -> Result<Json<ToolResponse>, ApiError> {
+    // Try by ID first (if it looks like a UUID)
+    if name_or_id.contains('-') && name_or_id.len() == 36 {
+        if let Some(tool) = state.get_tool_by_id(&name_or_id).await {
+            return Ok(Json(ToolResponse::from(tool)));
+        }
+    }
+
+    // Fall back to name lookup
     let tool = state
-        .get_tool(&name)
+        .get_tool(&name_or_id)
         .await
-        .ok_or_else(|| ApiError::not_found("tool", &name))?;
+        .ok_or_else(|| ApiError::not_found("tool", &name_or_id))?;
 
     Ok(Json(ToolResponse::from(tool)))
 }
 
-/// Delete a tool
-#[instrument(skip(state), fields(name = %name), level = "info")]
+/// Delete a tool by name or ID
+#[instrument(skip(state), fields(name_or_id = %name_or_id), level = "info")]
 async fn delete_tool(
     State(state): State<AppState>,
-    Path(name): Path<String>,
+    Path(name_or_id): Path<String>,
 ) -> Result<(), ApiError> {
+    // Resolve ID to name if needed
+    let tool_name = if name_or_id.contains('-') && name_or_id.len() == 36 {
+        // Looks like a UUID - get tool by ID to find its name
+        if let Some(tool) = state.get_tool_by_id(&name_or_id).await {
+            tool.name
+        } else {
+            return Err(ApiError::not_found("tool", &name_or_id));
+        }
+    } else {
+        name_or_id
+    };
+
     state
-        .delete_tool(&name)
+        .delete_tool(&tool_name)
         .await
         .map_err(|e| ApiError::internal(format!("Failed to delete tool: {}", e)))?;
-    tracing::info!(name = %name, "Deleted tool");
+    tracing::info!(name = %tool_name, "Deleted tool");
     Ok(())
 }
 
