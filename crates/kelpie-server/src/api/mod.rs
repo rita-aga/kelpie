@@ -4,6 +4,7 @@
 
 pub mod agent_groups;
 pub mod agents;
+pub mod groups;
 pub mod archival;
 pub mod blocks;
 pub mod import_export;
@@ -58,6 +59,8 @@ pub fn router(state: AppState) -> Router {
         .nest("/v1/mcp-servers", mcp_servers::router())
         // Agent groups routes (Phase 8)
         .nest("/v1", agent_groups::router())
+        // Groups routes (Letta compatibility alias for agent_groups)
+        .nest("/v1", groups::router())
         // Teleport routes
         .nest("/v1/teleport", teleport::router())
         // Scheduling routes (Phase 5)

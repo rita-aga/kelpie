@@ -63,7 +63,7 @@ pub fn router() -> Router<AppState> {
 
 /// Create a new agent group
 #[instrument(skip(state, request), fields(name = %request.name), level = "info")]
-async fn create_group(
+pub async fn create_group(
     State(state): State<AppState>,
     Json(request): Json<CreateAgentGroupRequest>,
 ) -> Result<Json<AgentGroup>, ApiError> {
@@ -89,7 +89,7 @@ async fn create_group(
 
 /// List agent groups
 #[instrument(skip(state, query), level = "info")]
-async fn list_groups(
+pub async fn list_groups(
     State(state): State<AppState>,
     Query(query): Query<ListGroupsQuery>,
 ) -> Result<Json<ListGroupsResponse>, ApiError> {
@@ -128,7 +128,7 @@ async fn list_groups(
 
 /// Get agent group details
 #[instrument(skip(state), fields(group_id = %group_id), level = "info")]
-async fn get_group(
+pub async fn get_group(
     State(state): State<AppState>,
     Path(group_id): Path<String>,
 ) -> Result<Json<AgentGroup>, ApiError> {
@@ -140,7 +140,7 @@ async fn get_group(
 
 /// Update agent group
 #[instrument(skip(state, request), fields(group_id = %group_id), level = "info")]
-async fn update_group(
+pub async fn update_group(
     State(state): State<AppState>,
     Path(group_id): Path<String>,
     Json(request): Json<UpdateAgentGroupRequest>,
@@ -169,7 +169,7 @@ async fn update_group(
 
 /// Delete agent group
 #[instrument(skip(state), fields(group_id = %group_id), level = "info")]
-async fn delete_group(
+pub async fn delete_group(
     State(state): State<AppState>,
     Path(group_id): Path<String>,
 ) -> Result<(), ApiError> {
