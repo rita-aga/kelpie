@@ -10,6 +10,7 @@ use crate::sandbox::SimSandboxFactory;
 use crate::sandbox_io::SimSandboxIOFactory;
 use crate::storage::SimStorage;
 use crate::teleport::SimTeleportStorage;
+use crate::time::SimTime;
 use crate::vm::SimVmFactory;
 use kelpie_core::{IoContext, RngProvider, TimeProvider, DST_STEPS_COUNT_MAX, DST_TIME_MS_MAX};
 use std::future::Future;
@@ -191,9 +192,12 @@ impl Simulation {
         }
         let faults = Arc::new(fault_builder.build());
 
+        // Build SimTime (auto-advancing time provider for DST)
+        let sim_time = Arc::new(SimTime::new(clock.clone()));
+
         // Build IoContext (unified time/rng for DST)
         let io_context = IoContext {
-            time: clock.clone() as Arc<dyn TimeProvider>,
+            time: sim_time as Arc<dyn TimeProvider>,
             rng: rng.clone() as Arc<dyn RngProvider>,
         };
 
@@ -257,9 +261,12 @@ impl Simulation {
         }
         let faults = Arc::new(fault_builder.build());
 
+        // Build SimTime (auto-advancing time provider for DST)
+        let sim_time = Arc::new(SimTime::new(clock.clone()));
+
         // Build IoContext (unified time/rng for DST)
         let io_context = IoContext {
-            time: clock.clone() as Arc<dyn TimeProvider>,
+            time: sim_time as Arc<dyn TimeProvider>,
             rng: rng.clone() as Arc<dyn RngProvider>,
         };
 

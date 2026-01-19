@@ -10,7 +10,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::{self, StreamExt};
-use kelpie_core::RngProvider;
+use kelpie_core::{RngProvider, TimeProvider};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
 use kelpie_server::actor::{LlmClient, LlmMessage, RealLlmAdapter, StreamChunk};
 use kelpie_server::http::{HttpClient, HttpRequest, HttpResponse};
@@ -47,6 +47,7 @@ fn mock_sse_response() -> String {
 struct FaultInjectedHttpClient {
     faults: Arc<kelpie_dst::FaultInjector>,
     rng: Arc<kelpie_dst::DeterministicRng>,
+    time: Arc<dyn TimeProvider>,
     stream_body: String,
 }
 
@@ -63,7 +64,8 @@ impl FaultInjectedHttpClient {
                     } else {
                         self.rng.as_ref().gen_range(min_ms, max_ms)
                     };
-                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                    // Use TimeProvider for deterministic sleep (advances SimClock)
+                    self.time.sleep_ms(delay_ms).await;
                 }
                 _ => {}
             }
@@ -117,6 +119,7 @@ async fn test_dst_network_delay_actually_triggers() {
             let sim_http_client = Arc::new(FaultInjectedHttpClient {
                 faults: sim_env.faults.clone(),
                 rng: sim_env.rng.clone(),
+                time: sim_env.io_context.time.clone(),
                 stream_body: mock_sse_response(),
             });
 
@@ -162,9 +165,8 @@ async fn test_dst_network_delay_actually_triggers() {
             assert_eq!(content, "ABC", "Content should be complete");
 
             tracing::info!(chunk_count = chunk_count, "Test completed successfully");
-            // Note: Actual delays happened via tokio::time::sleep but aren't measurable
-            // with SimClock (which requires manual advancement). The fact that we got
-            // all chunks proves NetworkDelay faults didn't break the stream.
+            // Note: Delays now advance SimClock via TimeProvider (deterministic!)
+            // The fact that we got all chunks proves NetworkDelay faults didn't break the stream.
 
             Ok(())
         })
@@ -196,6 +198,7 @@ async fn test_dst_network_packet_loss_actually_triggers() {
             let sim_http_client = Arc::new(FaultInjectedHttpClient {
                 faults: sim_env.faults.clone(),
                 rng: sim_env.rng.clone(),
+                time: sim_env.io_context.time.clone(),
                 stream_body: mock_sse_response(),
             });
 
@@ -273,6 +276,7 @@ async fn test_dst_combined_network_faults() {
             let sim_http_client = Arc::new(FaultInjectedHttpClient {
                 faults: sim_env.faults.clone(),
                 rng: sim_env.rng.clone(),
+                time: sim_env.io_context.time.clone(),
                 stream_body: mock_sse_response(),
             });
 

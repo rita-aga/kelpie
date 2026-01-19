@@ -45,6 +45,7 @@ pub mod sandbox_io;
 pub mod simulation;
 pub mod storage;
 pub mod teleport;
+pub mod time;
 pub mod vm;
 
 pub use agent::{AgentTestConfig, AgentTestState, BlockTestState, SimAgentEnv};
@@ -61,4 +62,5 @@ pub use sandbox_io::{SimSandboxIO, SimSandboxIOFactory};
 pub use simulation::{SimConfig, SimEnvironment, Simulation};
 pub use storage::SimStorage;
 pub use teleport::SimTeleportStorage;
+pub use time::{RealTime, SimTime};
 pub use vm::{SimVm, SimVmFactory};
