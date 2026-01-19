@@ -193,15 +193,42 @@ impl KvAdapter {
     /// Map kelpie_core::Error to StorageError
     fn map_kv_error(operation: &str, err: kelpie_core::Error) -> StorageError {
         match err {
-            kelpie_core::Error::StorageReadFailed { key, reason } => StorageError::ReadFailed {
-                operation: format!("{}: {}", operation, key),
-                reason,
-            },
-            kelpie_core::Error::StorageWriteFailed { key, reason } => StorageError::WriteFailed {
-                operation: format!("{}: {}", operation, key),
-                reason,
-            },
-            kelpie_core::Error::Internal { message } => StorageError::Internal { message },
+            kelpie_core::Error::StorageReadFailed { key, reason } => {
+                // Check if this is a fault-injected error
+                #[cfg(feature = "dst")]
+                if reason.contains("(injected)") {
+                    return StorageError::FaultInjected {
+                        operation: format!("{}: read {}", operation, key),
+                    };
+                }
+                StorageError::ReadFailed {
+                    operation: format!("{}: {}", operation, key),
+                    reason,
+                }
+            }
+            kelpie_core::Error::StorageWriteFailed { key, reason } => {
+                // Check if this is a fault-injected error
+                #[cfg(feature = "dst")]
+                if reason.contains("(injected)") {
+                    return StorageError::FaultInjected {
+                        operation: format!("{}: write {}", operation, key),
+                    };
+                }
+                StorageError::WriteFailed {
+                    operation: format!("{}: {}", operation, key),
+                    reason,
+                }
+            }
+            kelpie_core::Error::Internal { message } => {
+                // Check if this is a fault-injected error
+                #[cfg(feature = "dst")]
+                if message.contains("(injected)") {
+                    return StorageError::FaultInjected {
+                        operation: operation.to_string(),
+                    };
+                }
+                StorageError::Internal { message }
+            }
             _ => StorageError::Internal {
                 message: format!("{}: {}", operation, err),
             },

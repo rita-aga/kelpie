@@ -16,7 +16,7 @@ use kelpie_server::http::{HttpClient, HttpRequest, HttpResponse};
 use kelpie_server::llm::{LlmClient, LlmConfig};
 use kelpie_server::models::{CreateAgentRequest, MessageRole};
 use kelpie_server::state::AppState;
-use kelpie_server::storage::SimStorage;
+use kelpie_server::storage::KvAdapter;
 use kelpie_server::tools::{
     register_memory_tools, register_run_code_tool, register_web_search_tool,
 };
@@ -344,7 +344,8 @@ async fn test_dst_custom_tool_storage_fault() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("tool_write"))
         .run_async(|sim_env| async move {
-            let storage = Arc::new(SimStorage::with_fault_injector(sim_env.faults.clone()));
+            let adapter = KvAdapter::with_dst_storage(sim_env.rng.fork(), sim_env.faults.clone());
+            let storage = Arc::new(adapter);
             let state = AppState::with_storage_and_faults(storage, sim_env.faults.clone());
 
             let result = state

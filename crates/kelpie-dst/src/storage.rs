@@ -63,9 +63,13 @@ impl SimStorage {
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     // Fall through to actual read
                 }
-                // Crash faults are write-specific - ignore during reads
-                // This allows tests to register crash faults globally without breaking reads
-                FaultType::CrashBeforeWrite | FaultType::CrashAfterWrite => {
+                // Write-specific faults - ignore during reads
+                // This allows tests to register these faults globally without breaking reads
+                FaultType::CrashBeforeWrite
+                | FaultType::CrashAfterWrite
+                | FaultType::CrashDuringTransaction
+                | FaultType::StorageWriteFail
+                | FaultType::DiskFull => {
                     // Fall through to actual read - these faults don't affect reads
                 }
                 _ => {

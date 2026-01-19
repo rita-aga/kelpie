@@ -24,9 +24,6 @@ mod traits;
 mod types;
 mod fdb;
 
-#[cfg(feature = "dst")]
-mod sim;
-
 pub use adapter::KvAdapter;
 pub use fdb::FdbAgentRegistry;
 pub use kelpie_core::teleport::{
@@ -36,6 +33,3 @@ pub use kelpie_core::teleport::{
 pub use teleport::{LocalTeleportStorage, TELEPORT_PACKAGE_SIZE_BYTES_DEFAULT_MAX};
 pub use traits::{AgentStorage, StorageError};
 pub use types::{AgentMetadata, CustomToolRecord, PendingToolCall, SessionState};
-
-#[cfg(feature = "dst")]
-pub use sim::SimStorage;

@@ -673,9 +673,11 @@ async fn test_dst_fdb_crash_recovery() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::CrashAfterWrite, 0.3))
         .run_async(|env| async move {
-            // Create first storage instance (use concrete type for crash recovery)
-            use kelpie_server::storage::SimStorage;
-            let storage1 = Arc::new(SimStorage::with_fault_injector(env.faults.clone()));
+            // Create first storage instance
+            // Use SimStorage from environment so state can be shared across "restarts"
+            let sim_storage = env.storage.clone();
+            let storage1: Arc<dyn AgentStorage> =
+                Arc::new(KvAdapter::new(Arc::new(sim_storage.clone())));
 
             // Create agent and session (with retries for transient faults)
             let agent = AgentMetadata::new(
@@ -735,8 +737,9 @@ async fn test_dst_fdb_crash_recovery() {
             );
 
             // Create NEW storage instance (simulates process restart)
-            // Use with_shared_state to maintain persistence across "restart"
-            let storage2 = Arc::new(SimStorage::with_shared_state(&storage1));
+            // Use same sim_storage to maintain persistence across "restart"
+            let storage2: Arc<dyn AgentStorage> =
+                Arc::new(KvAdapter::new(Arc::new(sim_storage.clone())));
 
             // Verify agent still exists (retry reads to handle transient faults)
             let storage2_ref = storage2.clone();
