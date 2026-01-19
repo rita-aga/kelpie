@@ -26,8 +26,7 @@ use kelpie_server::models::{AgentType, Message, MessageRole};
 use kelpie_server::storage::{AgentMetadata, AgentStorage, SessionState, StorageError};
 use std::sync::Arc;
 
-#[cfg(feature = "dst")]
-use kelpie_server::storage::SimStorage;
+use kelpie_server::storage::KvAdapter;
 
 // =============================================================================
 // Helper: Create FDB-compatible storage for DST
@@ -35,17 +34,11 @@ use kelpie_server::storage::SimStorage;
 
 /// Create storage backend for DST testing
 ///
-/// For now, uses SimStorage with fault injection.
-/// Later, this will use FdbStorage in test mode.
+/// Uses KvAdapter with proper DST infrastructure (kelpie-dst::SimStorage).
+/// This provides transaction support and sophisticated fault injection.
 fn create_storage(env: &SimEnvironment) -> Arc<dyn AgentStorage> {
-    #[cfg(feature = "dst")]
-    {
-        Arc::new(SimStorage::with_fault_injector(env.faults.clone()))
-    }
-    #[cfg(not(feature = "dst"))]
-    {
-        panic!("DST tests require 'dst' feature")
-    }
+    let adapter = KvAdapter::with_dst_storage(env.rng.fork(), env.faults.clone());
+    Arc::new(adapter)
 }
 
 /// Helper: Retry read operations for DST verification

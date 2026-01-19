@@ -1,4 +1,15 @@
-//! Simulated Storage Backend for DST
+//! Simulated Storage Backend for DST (DEPRECATED)
+//!
+//! **DEPRECATED:** Use `KvAdapter::with_dst_storage()` instead.
+//!
+//! This is the old SimStorage implementation that bypasses the proper DST infrastructure.
+//! It is kept for backward compatibility during migration but should not be used in new code.
+//!
+//! New code should use:
+//! ```ignore
+//! use kelpie_server::storage::KvAdapter;
+//! let adapter = KvAdapter::with_dst_storage(rng, fault_injector);
+//! ```
 //!
 //! TigerStyle: In-memory storage with fault injection for deterministic testing.
 //!
@@ -44,8 +55,14 @@ impl SharedState {
 
 /// Simulated storage backend with fault injection
 ///
+/// **DEPRECATED:** Use `KvAdapter::with_dst_storage()` instead.
+///
 /// TigerStyle: All state in RwLock-protected HashMaps wrapped in Arc for sharing.
 /// FaultInjector determines when operations fail.
+#[deprecated(
+    since = "0.1.0",
+    note = "Use KvAdapter::with_dst_storage() for proper DST infrastructure"
+)]
 pub struct SimStorage {
     /// Shared state (supports crash recovery tests)
     state: SharedState,

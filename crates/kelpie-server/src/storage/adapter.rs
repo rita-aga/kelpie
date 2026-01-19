@@ -193,18 +193,14 @@ impl KvAdapter {
     /// Map kelpie_core::Error to StorageError
     fn map_kv_error(operation: &str, err: kelpie_core::Error) -> StorageError {
         match err {
-            kelpie_core::Error::StorageReadFailed { key, reason } => {
-                StorageError::ReadFailed {
-                    operation: format!("{}: {}", operation, key),
-                    reason,
-                }
-            }
-            kelpie_core::Error::StorageWriteFailed { key, reason } => {
-                StorageError::WriteFailed {
-                    operation: format!("{}: {}", operation, key),
-                    reason,
-                }
-            }
+            kelpie_core::Error::StorageReadFailed { key, reason } => StorageError::ReadFailed {
+                operation: format!("{}: {}", operation, key),
+                reason,
+            },
+            kelpie_core::Error::StorageWriteFailed { key, reason } => StorageError::WriteFailed {
+                operation: format!("{}: {}", operation, key),
+                reason,
+            },
             kelpie_core::Error::Internal { message } => StorageError::Internal { message },
             _ => StorageError::Internal {
                 message: format!("{}: {}", operation, err),
@@ -490,9 +486,12 @@ impl AgentStorage for KvAdapter {
         let key = Self::session_key(agent_id, session_id);
 
         // Check if exists
-        if !self.kv.exists(&self.actor_id, &key).await.map_err(|e| {
-            Self::map_kv_error("delete_session_exists_check", e)
-        })? {
+        if !self
+            .kv
+            .exists(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("delete_session_exists_check", e))?
+        {
             return Err(StorageError::NotFound {
                 resource: "session",
                 id: session_id.to_string(),
@@ -690,9 +689,12 @@ impl AgentStorage for KvAdapter {
         let key = Self::tool_key(name);
 
         // Check if exists
-        if !self.kv.exists(&self.actor_id, &key).await.map_err(|e| {
-            Self::map_kv_error("delete_custom_tool_exists_check", e)
-        })? {
+        if !self
+            .kv
+            .exists(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("delete_custom_tool_exists_check", e))?
+        {
             return Err(StorageError::NotFound {
                 resource: "tool",
                 id: name.to_string(),
@@ -840,10 +842,7 @@ mod tests {
         adapter.save_session(&session).await.unwrap();
 
         // Load session
-        let loaded = adapter
-            .load_session("agent-1", "session-1")
-            .await
-            .unwrap();
+        let loaded = adapter.load_session("agent-1", "session-1").await.unwrap();
         assert!(loaded.is_some());
         assert_eq!(loaded.unwrap().iteration, 0);
 
@@ -853,20 +852,17 @@ mod tests {
         adapter.save_session(&updated).await.unwrap();
 
         // Verify update
-        let loaded = adapter
-            .load_session("agent-1", "session-1")
-            .await
-            .unwrap();
+        let loaded = adapter.load_session("agent-1", "session-1").await.unwrap();
         assert_eq!(loaded.unwrap().iteration, 1);
 
         // Delete session
-        adapter.delete_session("agent-1", "session-1").await.unwrap();
-
-        // Verify deleted
-        let loaded = adapter
-            .load_session("agent-1", "session-1")
+        adapter
+            .delete_session("agent-1", "session-1")
             .await
             .unwrap();
+
+        // Verify deleted
+        let loaded = adapter.load_session("agent-1", "session-1").await.unwrap();
         assert!(loaded.is_none());
     }
 
@@ -1030,16 +1026,10 @@ mod tests {
         };
 
         // Checkpoint atomically
-        adapter
-            .checkpoint(&session, Some(&message))
-            .await
-            .unwrap();
+        adapter.checkpoint(&session, Some(&message)).await.unwrap();
 
         // Verify both saved
-        let loaded_session = adapter
-            .load_session("agent-1", "session-1")
-            .await
-            .unwrap();
+        let loaded_session = adapter.load_session("agent-1", "session-1").await.unwrap();
         assert!(loaded_session.is_some());
 
         let messages = adapter.load_messages("agent-1", 10).await.unwrap();

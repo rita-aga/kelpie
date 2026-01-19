@@ -29,9 +29,9 @@ mod fdb;
 #[cfg(feature = "dst")]
 mod sim;
 
+pub use adapter::KvAdapter;
 #[cfg(feature = "fdb")]
 pub use fdb::FdbAgentRegistry;
-pub use adapter::KvAdapter;
 pub use kelpie_core::teleport::{
     Architecture, SnapshotKind, TeleportPackage, TeleportStorage, TeleportStorageError,
     TeleportStorageResult, TELEPORT_ID_LENGTH_BYTES_MAX,
