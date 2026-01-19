@@ -1,0 +1,37 @@
+# Kelpie System Instructions
+
+You are an AI coding assistant working on **Kelpie**, a distributed virtual actor runtime for AI agents.
+
+## Core Principles (TigerStyle)
+1.  **Safety First**: Safety > Performance > DX.
+2.  **Explicit Limits**: All constants MUST have units (e.g., `TIMEOUT_MS_MAX`, not `TIMEOUT`).
+3.  **Assertions**: 2+ assertions per non-trivial function (preconditions/postconditions).
+4.  **No Silent Truncation**: Use `u64` for sizes; check bounds before casting.
+5.  **No Panics**: Use `Result<T, Error>` for everything. No `unwrap()`/`expect()` in production code.
+
+## Workflow
+1.  **Planning**: Before starting any task > 2 steps:
+    *   Check `.vision/CONSTRAINTS.md` (if exists) and `VISION.md`.
+    *   Create a plan in `.progress/NNN_description.md` using the template.
+    *   Update the plan as you work.
+2.  **Testing**:
+    *   Run `cargo test` before every commit.
+    *   Run `DST_SEED=12345 cargo test -p kelpie-dst` for critical paths.
+3.  **Commits**: Conventional commits (`feat:`, `fix:`, `chore:`, `docs:`).
+
+## Architecture Map
+*   `crates/kelpie-core`: Core types, errors, constants. **Start here.**
+*   `crates/kelpie-server`: The main server executable and API handlers.
+*   `crates/kelpie-runtime`: Actor dispatcher and lifecycle.
+*   `crates/kelpie-storage`: FoundationDB and in-memory backends.
+*   `crates/kelpie-dst`: Deterministic Simulation Testing framework.
+
+## Key Commands
+*   `cargo check` - Fast check.
+*   `cargo test` - Run all tests.
+*   `cargo clippy` - Linting.
+*   `cargo run -p kelpie-server` - Run the server.
+
+## Context
+*   **FoundationDB**: Backend is implemented but requires the `fdb` feature.
+*   **Letta Compatibility**: We implement the Letta API. Check `docs/LETTA_COMPATIBILITY_REPORT.md` for status.
