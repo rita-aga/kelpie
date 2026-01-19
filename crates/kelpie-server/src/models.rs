@@ -1325,3 +1325,70 @@ mod tests {
         assert!(err.message.contains("abc123"));
     }
 }
+
+// =============================================================================
+// MCP Server Models
+// =============================================================================
+
+/// MCP Server configuration types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "mcp_server_type")]
+pub enum MCPServerConfig {
+    #[serde(rename = "stdio")]
+    Stdio {
+        command: String,
+        args: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        env: Option<serde_json::Map<String, serde_json::Value>>,
+    },
+    #[serde(rename = "sse")]
+    Sse {
+        server_url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        auth_header: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        auth_token: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        custom_headers: Option<serde_json::Map<String, serde_json::Value>>,
+    },
+    #[serde(rename = "streamable_http")]
+    StreamableHttp {
+        server_url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        auth_header: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        auth_token: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        custom_headers: Option<serde_json::Map<String, serde_json::Value>>,
+    },
+}
+
+/// MCP Server state
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MCPServer {
+    /// Unique identifier
+    pub id: String,
+    /// Server name (user-assigned)
+    pub server_name: String,
+    /// Server configuration (type-specific)
+    #[serde(flatten)]
+    pub config: MCPServerConfig,
+    /// Creation timestamp
+    pub created_at: DateTime<Utc>,
+    /// Last update timestamp
+    pub updated_at: DateTime<Utc>,
+}
+
+impl MCPServer {
+    /// Create a new MCP server
+    pub fn new(server_name: impl Into<String>, config: MCPServerConfig) -> Self {
+        let now = Utc::now();
+        Self {
+            id: format!("mcp_server-{}", Uuid::new_v4()),
+            server_name: server_name.into(),
+            config,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+}

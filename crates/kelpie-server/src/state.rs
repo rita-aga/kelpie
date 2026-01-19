@@ -84,6 +84,8 @@ struct AppStateInner {
     archival: RwLock<HashMap<String, Vec<ArchivalEntry>>>,
     /// Standalone blocks by ID (for letta-code compatibility)
     blocks: RwLock<HashMap<String, Block>>,
+    /// MCP servers by ID (Letta compatibility)
+    mcp_servers: RwLock<HashMap<String, crate::models::MCPServer>>,
     /// Scheduled jobs by ID (Phase 5: Scheduling)
     jobs: RwLock<HashMap<String, Job>>,
     /// Projects by ID (Phase 6: Projects)
@@ -176,6 +178,7 @@ impl AppState {
                 client_tools: RwLock::new(HashMap::new()),
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
+                mcp_servers: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
@@ -253,6 +256,7 @@ impl AppState {
                 client_tools: RwLock::new(HashMap::new()),
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
+                mcp_servers: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
@@ -284,6 +288,7 @@ impl AppState {
                 client_tools: RwLock::new(HashMap::new()),
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
+                mcp_servers: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
@@ -314,6 +319,7 @@ impl AppState {
                 client_tools: RwLock::new(HashMap::new()),
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
+                mcp_servers: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
@@ -345,6 +351,7 @@ impl AppState {
                 client_tools: RwLock::new(HashMap::new()),
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
+                mcp_servers: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
@@ -378,6 +385,7 @@ impl AppState {
                 client_tools: RwLock::new(HashMap::new()),
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
+                mcp_servers: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
@@ -417,6 +425,7 @@ impl AppState {
                 client_tools: RwLock::new(HashMap::new()),
                 archival: RwLock::new(HashMap::new()),
                 blocks: RwLock::new(HashMap::new()),
+                mcp_servers: RwLock::new(HashMap::new()),
                 jobs: RwLock::new(HashMap::new()),
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
@@ -2442,6 +2451,108 @@ impl std::fmt::Display for StateError {
 }
 
 impl std::error::Error for StateError {}
+
+// =============================================================================
+// MCP Server Management (Letta Compatibility)
+// =============================================================================
+
+impl AppState {
+    /// Create a new MCP server
+    pub async fn create_mcp_server(
+        &self,
+        server_name: impl Into<String>,
+        config: crate::models::MCPServerConfig,
+    ) -> Result<crate::models::MCPServer, StateError> {
+        let server = crate::models::MCPServer::new(server_name, config);
+
+        let server_id = server.id.clone();
+        self.inner
+            .mcp_servers
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?
+            .insert(server_id.clone(), server.clone());
+
+        tracing::debug!(server_id = %server_id, "Created MCP server");
+        Ok(server)
+    }
+
+    /// Get an MCP server by ID
+    pub async fn get_mcp_server(&self, server_id: &str) -> Option<crate::models::MCPServer> {
+        self.inner
+            .mcp_servers
+            .read()
+            .ok()?
+            .get(server_id)
+            .cloned()
+    }
+
+    /// List all MCP servers
+    pub async fn list_mcp_servers(&self) -> Vec<crate::models::MCPServer> {
+        self.inner
+            .mcp_servers
+            .read()
+            .map(|servers| servers.values().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Update an MCP server
+    pub async fn update_mcp_server(
+        &self,
+        server_id: &str,
+        server_name: Option<String>,
+        config: Option<crate::models::MCPServerConfig>,
+    ) -> Result<crate::models::MCPServer, StateError> {
+        let mut servers = self
+            .inner
+            .mcp_servers
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        let server = servers
+            .get_mut(server_id)
+            .ok_or_else(|| StateError::NotFound {
+                resource: "MCP server",
+                id: server_id.to_string(),
+            })?;
+
+        if let Some(name) = server_name {
+            server.server_name = name;
+        }
+        if let Some(cfg) = config {
+            server.config = cfg;
+        }
+        server.updated_at = chrono::Utc::now();
+
+        tracing::debug!(server_id = %server_id, "Updated MCP server");
+        Ok(server.clone())
+    }
+
+    /// Delete an MCP server
+    pub async fn delete_mcp_server(&self, server_id: &str) -> Result<(), StateError> {
+        let mut servers = self
+            .inner
+            .mcp_servers
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        servers
+            .remove(server_id)
+            .ok_or_else(|| StateError::NotFound {
+                resource: "MCP server",
+                id: server_id.to_string(),
+            })?;
+
+        tracing::debug!(server_id = %server_id, "Deleted MCP server");
+        Ok(())
+    }
+
+    /// List tools provided by an MCP server
+    pub async fn list_mcp_server_tools(&self, _server_id: &str) -> Vec<crate::api::tools::ToolResponse> {
+        // TODO: Implement actual tool discovery from MCP server connection
+        // For now, return empty list (basic compatibility)
+        vec![]
+    }
+}
 
 #[cfg(test)]
 #[allow(deprecated)]
