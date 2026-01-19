@@ -141,9 +141,9 @@ async fn test_delete_agent_atomicity_crash() {
                     metadata: serde_json::json!({}),
                 project_id: None,
                 };
-                match service.create_agent(request).await {
-                    Ok(agent) => agent_ids.push(agent.id),
-                    Err(_) => {} // Ignore creation failures
+                // Ignore creation failures
+                if let Ok(agent) = service.create_agent(request).await {
+                    agent_ids.push(agent.id);
                 }
             }
 
