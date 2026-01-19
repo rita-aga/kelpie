@@ -2547,10 +2547,72 @@ impl AppState {
     }
 
     /// List tools provided by an MCP server
-    pub async fn list_mcp_server_tools(&self, _server_id: &str) -> Vec<crate::api::tools::ToolResponse> {
-        // TODO: Implement actual tool discovery from MCP server connection
-        // For now, return empty list (basic compatibility)
-        vec![]
+    ///
+    /// Returns JSON Value array to avoid type conflicts from multiple compilations
+    pub async fn list_mcp_server_tools(&self, server_id: &str) -> Result<Vec<serde_json::Value>, StateError> {
+        use kelpie_tools::mcp::{McpClient, McpConfig};
+        use std::sync::Arc;
+
+        // Get the MCP server
+        let server = self.get_mcp_server(server_id).await.ok_or_else(|| StateError::NotFound {
+            resource: "MCP server",
+            id: server_id.to_string(),
+        })?;
+
+        // Convert MCPServerConfig to McpConfig
+        let mcp_config = match &server.config {
+            crate::models::MCPServerConfig::Stdio { command, args, env } => {
+                let mut config = McpConfig::stdio(&server.server_name, command, args.clone());
+                if let Some(env_map) = env {
+                    for (k, v) in env_map {
+                        if let Some(v_str) = v.as_str() {
+                            config = config.with_env(k.clone(), v_str.to_string());
+                        }
+                    }
+                }
+                config
+            }
+            crate::models::MCPServerConfig::Sse { server_url, .. } => {
+                McpConfig::sse(&server.server_name, server_url)
+            }
+            crate::models::MCPServerConfig::StreamableHttp { server_url, .. } => {
+                McpConfig::http(&server.server_name, server_url)
+            }
+        };
+
+        // Create MCP client
+        let client = Arc::new(McpClient::new(mcp_config));
+
+        // Connect to the server
+        client.connect().await.map_err(|e| StateError::Internal {
+            message: format!("Failed to connect to MCP server: {}", e),
+        })?;
+
+        // Discover tools
+        let tools = client.discover_tools().await.map_err(|e| {
+            StateError::Internal {
+                message: format!("Failed to discover tools from MCP server: {}", e),
+            }
+        })?;
+
+        // Disconnect
+        let _ = client.disconnect().await;
+
+        // Convert McpToolDefinition to JSON Value to avoid type conflicts
+        let tool_responses: Vec<serde_json::Value> = tools
+            .into_iter()
+            .map(|tool| serde_json::json!({
+                "id": format!("mcp_{}_{}", server_id, tool.name),
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.input_schema,
+                "source": serde_json::Value::Null,
+                "default_requires_approval": false,
+                "tool_type": "mcp",
+            }))
+            .collect();
+
+        Ok(tool_responses)
     }
 }
 

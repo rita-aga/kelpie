@@ -116,7 +116,7 @@ The agent framework is **~80% complete**. Core functionality works today:
 | `kelpie-core` | Types, errors, constants | Complete |
 | `kelpie-runtime` | Actor dispatcher | Complete |
 | `kelpie-memory` | Memory hierarchy | Complete |
-| `kelpie-storage` | KV storage (FDB backend) | Complete (not wired) |
+| `kelpie-storage` | KV storage (FDB backend) | Complete |
 | `kelpie-vm` | VM backends (Vz/Firecracker) | Complete |
 | `kelpie-sandbox` | Process isolation wrapper | Complete |
 | `kelpie-tools` | MCP client, tool registry | Complete |

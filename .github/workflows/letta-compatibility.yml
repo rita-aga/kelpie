@@ -32,32 +32,29 @@ jobs:
       - name: Install Letta SDK
         run: |
           pip install letta pytest
-          # We'll install the package in editable mode from the clone below for tests
       
       # Run Server & Tests
       - name: Run Compatibility Tests
         env:
-          ANTHROPIC_API_KEY: "sk-dummy-key"
+          ANTHROPIC_API_KEY: "sk-dummy-key" # Tests shouldn't hit real LLM APIs for basic CRUD
         run: |
           # Start server in background
-          ./target/release/kelpie-server > kelpie.log 2>&1 &
+          ./target/release/kelpie-server &
           SERVER_PID=$!
           
           # Wait for health check
-          echo "Waiting for Kelpie server..."
-          timeout 30s bash -c 'until curl -s http://localhost:8283/health > /dev/null; do sleep 1; done' || (cat kelpie.log && exit 1)
+          timeout 30s bash -c 'until curl -s http://localhost:8283/health > /dev/null; do sleep 1; done'
           
-          # Clone Letta repo to access its test suite
+          # Run tests
+          # We clone the letta repo to get their test suite
           git clone https://github.com/letta-ai/letta.git letta-repo
           
           export LETTA_SERVER_URL=http://localhost:8283
           
+          # We only run the tests we know pass/are relevant (agents, blocks, tools, mcp)
+          # We exclude search/groups/identities which we know fail/skip
           cd letta-repo
-          # Install test dependencies
           pip install -e ".[dev]"
-          
-          # Run the specific tests we know pass/are relevant
-          # Exclude search (needs external service), groups/identities (not implemented)
           pytest tests/sdk/agents_test.py tests/sdk/blocks_test.py tests/sdk/tools_test.py tests/sdk/mcp_servers_test.py -v
           
           # Cleanup

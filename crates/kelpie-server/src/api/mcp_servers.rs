@@ -169,15 +169,24 @@ async fn list_server_tools(
     State(state): State<AppState>,
     Path(server_id): Path<String>,
 ) -> Result<Json<Vec<super::tools::ToolResponse>>, ApiError> {
-    // Verify server exists
-    let _server = state
-        .get_mcp_server(&server_id)
+    // Discover tools from the MCP server (returns JSON Values)
+    let tool_values = state
+        .list_mcp_server_tools(&server_id)
         .await
-        .ok_or_else(|| ApiError::not_found("MCP server", &server_id))?;
+        .map_err(|e| match e {
+            kelpie_server::state::StateError::NotFound { resource, id } => ApiError::not_found(&resource, &id),
+            _ => ApiError::internal(format!("Failed to discover MCP server tools: {}", e)),
+        })?;
 
-    // TODO: Implement actual tool discovery from MCP server connection
-    // For now, return empty list (basic compatibility)
-    Ok(Json(vec![]))
+    // Convert JSON Values to ToolResponse
+    let tools: Vec<super::tools::ToolResponse> = tool_values
+        .into_iter()
+        .filter_map(|value| serde_json::from_value(value).ok())
+        .collect();
+
+    tracing::info!(server_id = %server_id, tool_count = tools.len(), "Discovered MCP server tools");
+
+    Ok(Json(tools))
 }
 
 #[cfg(test)]
