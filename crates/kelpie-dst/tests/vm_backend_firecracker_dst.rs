@@ -15,7 +15,8 @@ mod tests {
         let result = factory.create(config).await;
         match result {
             Err(VmError::ConfigInvalid { .. }) => {}
-            other => panic!("expected ConfigInvalid, got {:?}", other),
+            Ok(_) => panic!("expected ConfigInvalid error, but VM creation succeeded"),
+            Err(e) => panic!("expected ConfigInvalid, got different error: {}", e),
         }
     }
 }
