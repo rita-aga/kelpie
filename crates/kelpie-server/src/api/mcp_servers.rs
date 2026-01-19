@@ -6,7 +6,7 @@
 use super::ApiError;
 use axum::{
     extract::{Path, State},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use kelpie_server::models::{MCPServer, MCPServerConfig};
@@ -65,6 +65,8 @@ pub fn router() -> Router<AppState> {
                 .delete(delete_server),
         )
         .route("/:server_id/tools", get(list_server_tools))
+        .route("/:server_id/tools/:tool_id", get(get_server_tool))
+        .route("/:server_id/tools/:tool_id/run", post(run_server_tool))
 }
 
 /// List all MCP servers
@@ -195,6 +197,83 @@ async fn list_server_tools(
     tracing::info!(server_id = %server_id, tool_count = tools.len(), "Discovered MCP server tools");
 
     Ok(Json(tools))
+}
+
+/// Get a specific tool provided by an MCP server
+///
+/// GET /v1/mcp-servers/{server_id}/tools/{tool_id}
+#[instrument(skip(state), fields(server_id = %server_id, tool_id = %tool_id), level = "info")]
+async fn get_server_tool(
+    State(state): State<AppState>,
+    Path((server_id, tool_id)): Path<(String, String)>,
+) -> Result<Json<super::tools::ToolResponse>, ApiError> {
+    // Discover tools from the MCP server (returns JSON Values)
+    let tool_values = state
+        .list_mcp_server_tools(&server_id)
+        .await
+        .map_err(|e| match e {
+            kelpie_server::state::StateError::NotFound { resource, id } => {
+                ApiError::not_found(resource, &id)
+            }
+            _ => ApiError::internal(format!("Failed to discover MCP server tools: {}", e)),
+        })?;
+
+    // Convert JSON Values to ToolResponse and find the requested tool
+    let tools: Vec<super::tools::ToolResponse> = tool_values
+        .into_iter()
+        .filter_map(|value| serde_json::from_value(value).ok())
+        .collect();
+
+    let tool = tools
+        .into_iter()
+        .find(|t| t.id == tool_id)
+        .ok_or_else(|| ApiError::not_found("MCP server tool", &tool_id))?;
+
+    tracing::info!(server_id = %server_id, tool_id = %tool_id, "Retrieved MCP server tool");
+
+    Ok(Json(tool))
+}
+
+/// Request body for running an MCP server tool
+#[derive(Debug, Deserialize)]
+pub struct RunToolRequest {
+    #[serde(default = "default_arguments")]
+    pub arguments: serde_json::Value,
+}
+
+fn default_arguments() -> serde_json::Value {
+    serde_json::json!({})
+}
+
+/// Execute a tool on an MCP server
+///
+/// POST /v1/mcp-servers/{server_id}/tools/{tool_id}/run
+#[instrument(skip(state, request), fields(server_id = %server_id, tool_id = %tool_id), level = "info")]
+async fn run_server_tool(
+    State(state): State<AppState>,
+    Path((server_id, tool_id)): Path<(String, String)>,
+    Json(request): Json<RunToolRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Extract tool name from tool_id
+    // Tool ID format: mcp_{server_id}_{tool_name}
+    let tool_name = tool_id
+        .strip_prefix(&format!("mcp_{}_", server_id))
+        .ok_or_else(|| ApiError::bad_request(&format!("Invalid tool ID format: {}", tool_id)))?;
+
+    // Execute the tool
+    let result = state
+        .execute_mcp_server_tool(&server_id, tool_name, request.arguments)
+        .await
+        .map_err(|e| match e {
+            kelpie_server::state::StateError::NotFound { resource, id } => {
+                ApiError::not_found(resource, &id)
+            }
+            _ => ApiError::internal(format!("Failed to execute MCP server tool: {}", e)),
+        })?;
+
+    tracing::info!(server_id = %server_id, tool_id = %tool_id, "Executed MCP server tool");
+
+    Ok(Json(result))
 }
 
 #[cfg(test)]

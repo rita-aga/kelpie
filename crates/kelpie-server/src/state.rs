@@ -55,6 +55,10 @@ pub struct ToolInfo {
     pub default_requires_approval: bool,
     /// Tool type: "builtin", "custom", "client"
     pub tool_type: String,
+    /// Tags for categorization (Letta compatibility)
+    pub tags: Option<Vec<String>>,
+    /// Character limit for return value (Letta compatibility)
+    pub return_char_limit: Option<u32>,
 }
 
 /// Server-wide shared state
@@ -1533,6 +1537,8 @@ impl AppState {
             source: Some("custom".to_string()),
             default_requires_approval: false,
             tool_type: "custom".to_string(),
+            tags: None,
+            return_char_limit: None,
         })
     }
 
@@ -1549,6 +1555,8 @@ impl AppState {
         source: Option<String>,
         default_requires_approval: bool,
         tool_type: String,
+        tags: Option<Vec<String>>,
+        return_char_limit: Option<u32>,
     ) -> Result<ToolInfo, StateError> {
         if name.is_empty() {
             return Err(StateError::Internal {
@@ -1567,6 +1575,8 @@ impl AppState {
                 source: source.clone(),
                 default_requires_approval,
                 tool_type: tool_type.clone(),
+                tags: tags.clone(),
+                return_char_limit,
             };
 
             // Store in client tools map
@@ -1627,6 +1637,8 @@ impl AppState {
             source: source.clone(),
             default_requires_approval,
             tool_type: tool_type.clone(),
+            tags: tags.clone(),
+            return_char_limit,
         };
 
         self.inner
@@ -1657,6 +1669,8 @@ impl AppState {
             source: Some(tool.source.to_string()),
             default_requires_approval: false,
             tool_type: tool.source.to_string(),
+            tags: None,
+            return_char_limit: None,
         })
     }
 
@@ -1671,8 +1685,25 @@ impl AppState {
             }
         }
 
-        // For now, we can't look up registered tools by ID
-        // This would require maintaining an ID mapping
+        // Check registered tools using deterministic IDs
+        let tools = self.tool_registry().list_registered_tools().await;
+        for tool in tools {
+            let tool_id = Self::tool_name_to_uuid(&tool.definition.name).to_string();
+            if tool_id == id {
+                return Some(ToolInfo {
+                    id: tool_id,
+                    name: tool.definition.name,
+                    description: tool.definition.description,
+                    input_schema: tool.definition.input_schema,
+                    source: Some(tool.source.to_string()),
+                    default_requires_approval: false,
+                    tool_type: tool.source.to_string(),
+                    tags: None,
+                    return_char_limit: None,
+                });
+            }
+        }
+
         None
     }
 
@@ -1693,29 +1724,52 @@ impl AppState {
                 continue;
             }
             result.push(ToolInfo {
-                id: uuid::Uuid::new_v4().to_string(),
+                // Use deterministic UUID based on tool name for stable pagination
+                id: Self::tool_name_to_uuid(&tool.definition.name).to_string(),
                 name: tool.definition.name,
                 description: tool.definition.description,
                 input_schema: tool.definition.input_schema,
                 source: Some(tool.source.to_string()),
                 default_requires_approval: false,
                 tool_type: tool.source.to_string(),
+                tags: None,
+                return_char_limit: None,
             });
         }
 
         result
     }
 
+    /// Generate a deterministic UUID from a tool name
+    /// Uses UUID v5 (name-based with SHA-1) to ensure the same name always produces the same ID
+    fn tool_name_to_uuid(name: &str) -> uuid::Uuid {
+        // Use the DNS namespace as a standard namespace
+        uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, name.as_bytes())
+    }
+
     /// Delete a tool
     pub async fn delete_tool(&self, name: &str) -> Result<(), StateError> {
-        let removed = self.tool_registry().unregister(name).await;
-        if !removed {
+        // Try to remove from tool registry
+        let removed_from_registry = self.tool_registry().unregister(name).await;
+
+        // Try to remove from client tools
+        let removed_from_client = self
+            .inner
+            .client_tools
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?
+            .remove(name)
+            .is_some();
+
+        // Tool must exist in at least one location
+        if !removed_from_registry && !removed_from_client {
             return Err(StateError::NotFound {
                 resource: "tool",
                 id: name.to_string(),
             });
         }
 
+        // Remove from persistent storage if configured
         if let Some(storage) = &self.inner.storage {
             let _ = storage.delete_custom_tool(name).await;
         }
@@ -2652,6 +2706,68 @@ impl AppState {
             .collect();
 
         Ok(tool_responses)
+    }
+
+    /// Execute a tool on an MCP server
+    pub async fn execute_mcp_server_tool(
+        &self,
+        server_id: &str,
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<serde_json::Value, StateError> {
+        use kelpie_tools::mcp::{McpClient, McpConfig};
+        use std::sync::Arc;
+
+        // Get the MCP server
+        let server = self
+            .get_mcp_server(server_id)
+            .await
+            .ok_or_else(|| StateError::NotFound {
+                resource: "MCP server",
+                id: server_id.to_string(),
+            })?;
+
+        // Convert MCPServerConfig to McpConfig
+        let mcp_config = match &server.config {
+            crate::models::MCPServerConfig::Stdio { command, args, env } => {
+                let mut config = McpConfig::stdio(&server.server_name, command, args.clone());
+                if let Some(env_map) = env {
+                    for (k, v) in env_map {
+                        if let Some(v_str) = v.as_str() {
+                            config = config.with_env(k.clone(), v_str.to_string());
+                        }
+                    }
+                }
+                config
+            }
+            crate::models::MCPServerConfig::Sse { server_url, .. } => {
+                McpConfig::sse(&server.server_name, server_url)
+            }
+            crate::models::MCPServerConfig::StreamableHttp { server_url, .. } => {
+                McpConfig::http(&server.server_name, server_url)
+            }
+        };
+
+        // Create MCP client
+        let client = Arc::new(McpClient::new(mcp_config));
+
+        // Connect to the server
+        client.connect().await.map_err(|e| StateError::Internal {
+            message: format!("Failed to connect to MCP server: {}", e),
+        })?;
+
+        // Execute tool
+        let result = client
+            .execute_tool(tool_name, arguments)
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("Failed to execute MCP tool: {}", e),
+            })?;
+
+        // Disconnect
+        let _ = client.disconnect().await;
+
+        Ok(result)
     }
 }
 
