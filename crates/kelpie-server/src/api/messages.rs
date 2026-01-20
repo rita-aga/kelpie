@@ -1214,10 +1214,11 @@ pub async fn load_mcp_tool<R: Runtime + 'static>(
         if let Ok(tool) = serde_json::from_value::<super::tools::ToolResponse>(value) {
             if tool.name == tool_name {
                 // Register the MCP tool in the tool registry so it can be executed
+                // TigerStyle: Use full tool_id as name to match agent.tool_ids
                 state
                     .tool_registry()
                     .register_mcp_tool(
-                        tool.name.clone(),
+                        tool_id.to_string(),  // Use full ID, not short name
                         tool.description.clone(),
                         tool.input_schema.clone(),
                         server.server_name.clone(),
@@ -1232,7 +1233,7 @@ pub async fn load_mcp_tool<R: Runtime + 'static>(
                 );
 
                 return Some(crate::llm::ToolDefinition {
-                    name: tool.name,
+                    name: tool_id.to_string(),  // Use full ID to match agent.tool_ids
                     description: tool.description,
                     input_schema: tool.input_schema,
                 });

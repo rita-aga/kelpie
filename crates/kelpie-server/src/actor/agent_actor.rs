@@ -264,13 +264,24 @@ impl AgentActor {
             });
         }
 
-        // 3. Get tool definitions (filtered by agent capabilities)
+        // 3. Get tool definitions (filtered by agent capabilities + tool_ids)
         let capabilities = agent.agent_type.capabilities();
         let all_tools = self.tool_registry.get_tool_definitions().await;
+
+        // TigerStyle: Tools allowed if in static capabilities OR in agent's tool_ids
         let tools: Vec<_> = all_tools
             .into_iter()
-            .filter(|t| capabilities.allowed_tools.contains(&t.name))
+            .filter(|t| {
+                capabilities.allowed_tools.contains(&t.name) || agent.tool_ids.contains(&t.name)
+            })
             .collect();
+
+        tracing::debug!(
+            agent_id = %ctx.id.id(),
+            total_tools = tools.len(),
+            tool_names = ?tools.iter().map(|t| &t.name).collect::<Vec<_>>(),
+            "Loaded tools for LLM prompt"
+        );
 
         // 4. Call LLM with tools
         let mut response = self
