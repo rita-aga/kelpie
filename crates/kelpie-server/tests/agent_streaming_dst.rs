@@ -5,7 +5,7 @@
 #![cfg(feature = "dst")]
 
 use async_trait::async_trait;
-use kelpie_core::{Result, TimeProvider};
+use kelpie_core::{Result, Runtime, TimeProvider, TokioRuntime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -57,7 +57,10 @@ impl LlmClient for SimLlmClientAdapter {
 }
 
 /// Create AgentService from simulation environment
-fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
+fn create_service<R: Runtime + 'static>(
+    runtime: R,
+    sim_env: &SimEnvironment,
+) -> Result<AgentService<R>> {
     let sim_llm = SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone());
     let llm_adapter: Arc<dyn LlmClient> = Arc::new(SimLlmClientAdapter {
         client: Arc::new(sim_llm),
@@ -67,11 +70,15 @@ fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
     let factory = Arc::new(CloneFactory::new(actor));
     let kv = Arc::new(sim_env.storage.clone());
 
-    let mut dispatcher =
-        Dispatcher::<AgentActor, AgentActorState>::new(factory, kv, DispatcherConfig::default());
+    let mut dispatcher = Dispatcher::<AgentActor, AgentActorState, _>::new(
+        factory,
+        kv,
+        DispatcherConfig::default(),
+        runtime.clone(),
+    );
     let handle = dispatcher.handle();
 
-    tokio::spawn(async move {
+    runtime.spawn(async move {
         dispatcher.run().await;
     });
 
@@ -91,7 +98,8 @@ async fn test_dst_streaming_basic() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let runtime = TokioRuntime;
+            let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -126,7 +134,7 @@ async fn test_dst_streaming_basic() {
 
             // Start streaming in background
             let agent_id = agent.id.clone();
-            tokio::spawn(async move {
+            runtime.spawn(async move {
                 // This will fail until send_message_stream is implemented
                 let _ = service
                     .send_message_stream(&agent_id, message_json, tx)
@@ -205,7 +213,8 @@ async fn test_dst_streaming_with_network_delay() {
             0.3,
         ))
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let runtime = TokioRuntime;
+            let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -235,7 +244,7 @@ async fn test_dst_streaming_with_network_delay() {
 
             // Start streaming in background
             let agent_id = agent.id.clone();
-            tokio::spawn(async move {
+            runtime.spawn(async move {
                 let _ = service
                     .send_message_stream(&agent_id, message_json, tx)
                     .await;
@@ -301,7 +310,8 @@ async fn test_dst_streaming_cancellation() {
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
             let time = sim_env.io_context.time.clone();
-            let service = create_service(&sim_env)?;
+            let runtime = TokioRuntime;
+            let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -331,7 +341,7 @@ async fn test_dst_streaming_cancellation() {
 
             // Start streaming in background
             let agent_id = agent.id.clone();
-            let stream_handle = tokio::spawn(async move {
+            let stream_handle = runtime.spawn(async move {
                 let _ = service
                     .send_message_stream(&agent_id, message_json, tx)
                     .await;
@@ -393,7 +403,8 @@ async fn test_dst_streaming_backpressure() {
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
             let time = sim_env.io_context.time.clone();
-            let service = create_service(&sim_env)?;
+            let runtime = TokioRuntime;
+            let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -423,7 +434,7 @@ async fn test_dst_streaming_backpressure() {
 
             // Start streaming in background
             let agent_id = agent.id.clone();
-            tokio::spawn(async move {
+            runtime.spawn(async move {
                 let _ = service
                     .send_message_stream(&agent_id, message_json, tx)
                     .await;
@@ -492,7 +503,8 @@ async fn test_dst_streaming_with_tool_calls() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let runtime = TokioRuntime;
+            let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create agent with tools
             let request = CreateAgentRequest {
@@ -522,7 +534,7 @@ async fn test_dst_streaming_with_tool_calls() {
 
             // Start streaming in background
             let agent_id = agent.id.clone();
-            tokio::spawn(async move {
+            runtime.spawn(async move {
                 let _ = service
                     .send_message_stream(&agent_id, message_json, tx)
                     .await;

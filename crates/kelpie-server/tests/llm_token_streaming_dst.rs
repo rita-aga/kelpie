@@ -14,7 +14,7 @@
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
-use kelpie_core::Result;
+use kelpie_core::{Result, Runtime, TokioRuntime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{
@@ -69,7 +69,7 @@ impl LlmClient for SimLlmClientAdapter {
 }
 
 /// Create AgentService from simulation environment
-fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
+fn create_service<R: Runtime + 'static>(runtime: R, sim_env: &SimEnvironment) -> Result<AgentService<R>> {
     let sim_llm = SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone());
     let llm_adapter: Arc<dyn LlmClient> = Arc::new(SimLlmClientAdapter {
         client: Arc::new(sim_llm),
@@ -80,10 +80,10 @@ fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
     let kv = Arc::new(sim_env.storage.clone());
 
     let mut dispatcher =
-        Dispatcher::<AgentActor, AgentActorState>::new(factory, kv, DispatcherConfig::default());
+        Dispatcher::<AgentActor, AgentActorState, _>::new(factory, kv, DispatcherConfig::default(), runtime.clone());
     let handle = dispatcher.handle();
 
-    tokio::spawn(async move {
+    runtime.spawn(async move {
         dispatcher.run().await;
     });
 
@@ -102,7 +102,7 @@ async fn test_dst_llm_token_streaming_basic() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let service = create_service(TokioRuntime, &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -188,7 +188,7 @@ async fn test_dst_llm_streaming_with_network_delay() {
             0.5, // 50% of operations delayed
         ))
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let service = create_service(TokioRuntime, &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -251,7 +251,7 @@ async fn test_dst_llm_streaming_cancellation() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let service = create_service(TokioRuntime, &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -311,7 +311,7 @@ async fn test_dst_llm_streaming_with_tool_calls() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let service = create_service(TokioRuntime, &sim_env)?;
 
             // Create agent with tool
             let request = CreateAgentRequest {
@@ -382,7 +382,7 @@ async fn test_dst_llm_streaming_concurrent() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let service = create_service(TokioRuntime, &sim_env)?;
 
             // Create 3 agents
             let mut agent_ids = Vec::new();
@@ -478,7 +478,7 @@ async fn test_dst_llm_streaming_with_comprehensive_faults() {
             0.3,
         ))
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let service = create_service(TokioRuntime, &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
