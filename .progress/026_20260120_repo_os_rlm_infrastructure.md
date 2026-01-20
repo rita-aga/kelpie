@@ -141,6 +141,130 @@ Build an infrastructure layer that:
 
 ---
 
+### Decision 6: Evidence-Based Completion Enforcement
+
+**Context:** How do we ensure agents provide proof of completion, not just checkboxes?
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: Natural language | Prompt says "provide evidence" | Simple | Agent might ignore |
+| B: MCP tool requires evidence | Tool parameter is mandatory | Can't skip | Requires MCP infrastructure |
+| C: Tool + system re-runs verification | Tool requires evidence AND system verifies it | Can't lie | Most complex, most reliable |
+
+**Decision:** **Option C** - HARD enforcement via MCP tool:
+1. `mark_phase_complete(phase, evidence)` requires evidence parameter (can't omit)
+2. System re-runs all verification commands in evidence (can't lie about results)
+3. Only stores completion if all verifications pass
+4. Evidence stored in AgentFS with git SHA, timestamp, actual outputs
+
+**Implementation:**
+```typescript
+async function mark_phase_complete(phase: string, evidence: Evidence): Result {
+  // HARD: Evidence parameter required
+  if (!evidence.verification_commands?.length) {
+    throw new Error("Cannot mark complete without verification commands");
+  }
+
+  // HARD: System re-runs verifications NOW
+  for (const cmd of evidence.verification_commands) {
+    const result = await exec(cmd.command);
+    if (!matches(result, cmd.expected)) {
+      throw new Error(`Verification failed: ${cmd.command}`);
+    }
+  }
+
+  // HARD: Only if all pass, store completion
+  await agentfs.store(`completions/${phase}`, {
+    ...evidence,
+    verified_at: Date.now(),
+    git_sha: await getCurrentSha()
+  });
+
+  return { success: true };
+}
+```
+
+**Trade-offs accepted:**
+- More ceremony for completion
+- Agent must think about what to verify (good - forces explicit verification design)
+
+---
+
+### Decision 7: Handoff Verification Enforcement
+
+**Context:** How do we ensure new agents don't trust previous agents' claims?
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: Natural language | Skill says "verify before continuing" | Simple | Agent might skip |
+| B: Automatic on session start | System runs all verifications when agent starts | Can't skip | Adds startup latency |
+| C: Blocking gate | Agent can't access "completed" phases without re-verification | Forces verification | Most restrictive |
+
+**Decision:** **Option B** - HARD automatic verification on session start:
+1. When agent calls `start_plan_session(plan_id)`, system automatically re-runs ALL verification commands for completed phases
+2. Failed verifications mark phases as UNVERIFIED
+3. Agent receives verification report - can't ignore it
+4. Agent decides what to do (soft), but detection is automatic (hard)
+
+**Implementation:**
+```typescript
+async function start_plan_session(plan_id: string): SessionResult {
+  const completions = await agentfs.list(`completions/${plan_id}/*`);
+  const results = [];
+
+  // HARD: System automatically re-verifies everything
+  for (const completion of completions) {
+    for (const cmd of completion.verification_commands) {
+      const result = await exec(cmd.command);
+      const passed = matches(result, cmd.expected);
+
+      results.push({ phase: completion.phase, command: cmd.command, passed, actual: result });
+
+      if (!passed) {
+        // HARD: Mark as unverified
+        await agentfs.update(`completions/${completion.phase}`, { status: 'unverified' });
+      }
+    }
+  }
+
+  return { plan_id, verification_report: results };
+}
+```
+
+**Trade-offs accepted:**
+- Startup latency (running all verifications)
+- May surface issues previous agent didn't know about (feature, not bug)
+
+---
+
+### Decision 8: Slop Detection Strategy
+
+**Context:** How do we find and purge existing slop in the codebase?
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: Manual agent hunt | Ask agent to find slop | Flexible | Partial coverage, agent might miss |
+| B: Automated tools | Dedicated detection tools | Systematic | Needs tool development |
+| C: Hybrid | Tools detect, agent investigates/fixes | Best coverage | Complex |
+
+**Decision:** **Option C** - Automated detection with agent-driven cleanup:
+1. Slop detection tools (HARD, deterministic):
+   - `detect_dead_code()` - cargo udeps + call graph
+   - `detect_orphaned()` - git history analysis
+   - `detect_duplicates()` - semantic similarity
+   - `detect_fake_dst()` - verify DST tests actually use harness
+   - `detect_incomplete()` - TODO/FIXME/panic! scan
+   - `detect_lies()` - compare plan claims to actual test results
+2. Agent investigates candidates (SOFT)
+3. Agent proposes cleanup (SOFT)
+4. Verification after cleanup (HARD)
+
+**Trade-offs accepted:**
+- Tool development effort
+- Some false positives (agent filters)
+
+---
+
 ## Quick Decision Log
 
 | Time | Decision | Rationale | Trade-off |
@@ -153,6 +277,11 @@ Build an infrastructure layer that:
 | 2026-01-20 11:00 | Enhanced Layer 1 with imports/exports_to | Match Aider's repo map approach | More parsing complexity |
 | 2026-01-20 11:00 | Enhanced Layer 2 with implements/uses edges | Fine-grained dependency tracking | Requires rust-analyzer, not just cargo |
 | 2026-01-20 11:00 | Added target schemas for all indexes | Clear spec for implementation | More upfront design |
+| 2026-01-20 11:30 | HARD evidence-based completion | Agents can't lie about completion | More ceremony, MCP required |
+| 2026-01-20 11:30 | HARD automatic handoff verification | New agents can't trust old claims | Startup latency |
+| 2026-01-20 11:30 | Hybrid slop detection | Tools detect, agents investigate | Tool development effort |
+| 2026-01-20 12:15 | DST coverage enforcement (HARD) | Critical paths require DST tests | Pre-commit latency, may block commits |
+| 2026-01-20 12:30 | Harness adequacy verification | Harness must model real failure modes | Requires documenting known simulation gaps |
 
 ---
 
@@ -164,6 +293,14 @@ Build an infrastructure layer that:
 │                    (Claude Code + Skills + MCP)                             │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                    INTEGRITY LAYER (NEW)                            │    │
+│  │  • Handoff verification (auto re-run all verifications on start)   │    │
+│  │  • Evidence-based completion (tool re-runs, can't lie)             │    │
+│  │  • Slop detection (dead code, duplicates, fake DST, orphans)       │    │
+│  │  • Plan vs reality comparison (detect agent lies)                  │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                        │
+│  ┌─────────────────────────────────▼───────────────────────────────────┐    │
 │  │                        HARD SHELL                                   │    │
 │  │  • Git hooks (pre-commit: constraints, tests)                       │    │
 │  │  • MCP gates (freshness, verification proof)                        │    │
@@ -535,6 +672,332 @@ cat .kelpie-index/semantic/validation_issues.json | jq '. | length'
   - Before accepting `state_task_complete`, require verification proof
   - Log every tool call to audit trail
 
+- [ ] **4.7: Integrity Tools (HARD enforcement)**
+
+  **4.7.1: Evidence-Based Completion**
+  ```typescript
+  // mark_phase_complete(phase, evidence) - HARD, can't skip
+  async function mark_phase_complete(phase: string, evidence: Evidence): Result {
+    // HARD: Evidence parameter required
+    if (!evidence.verification_commands?.length) {
+      throw new Error("Cannot mark complete without verification commands");
+    }
+
+    // HARD: Cross-check against phase definition
+    const phaseSpec = await loadPhaseSpec(phase);
+    for (const required of phaseSpec.required_outputs) {
+      if (!evidence.files_created.includes(required)) {
+        throw new Error(`Phase ${phase} requires ${required} but not in evidence`);
+      }
+    }
+
+    // HARD: System re-runs verifications NOW
+    const results = [];
+    for (const cmd of evidence.verification_commands) {
+      const result = await exec(cmd.command);
+      const passed = matches(result, cmd.expected);
+      results.push({ command: cmd.command, expected: cmd.expected, actual: result, passed });
+      if (!passed) {
+        throw new Error(`Verification failed: ${cmd.command} expected ${cmd.expected} got ${result}`);
+      }
+    }
+
+    // HARD: Only if all pass, store completion with proof
+    await agentfs.store(`completions/${phase}`, {
+      phase,
+      claimed_at: Date.now(),
+      git_sha: await getCurrentSha(),
+      evidence,
+      verification_results: results,
+      status: 'verified'
+    });
+
+    return { success: true, message: `Phase ${phase} verified and marked complete` };
+  }
+  ```
+
+  **4.7.2: Handoff Verification (automatic on session start)**
+  ```typescript
+  // start_plan_session(plan_id) - HARD, automatic verification
+  async function start_plan_session(plan_id: string): SessionResult {
+    const completions = await agentfs.list(`completions/${plan_id}/*`);
+    const verificationReport = [];
+
+    // HARD: System automatically re-verifies ALL claimed completions
+    for (const completion of completions) {
+      if (completion.status !== 'verified') continue;
+
+      for (const cmd of completion.evidence.verification_commands) {
+        const result = await exec(cmd.command);
+        const passed = matches(result, cmd.expected);
+
+        verificationReport.push({
+          phase: completion.phase,
+          command: cmd.command,
+          expected: cmd.expected,
+          actual: result,
+          passed,
+          original_result: completion.verification_results.find(r => r.command === cmd.command)?.actual
+        });
+
+        if (!passed) {
+          // HARD: Mark phase as UNVERIFIED - previous agent lied or code changed
+          await agentfs.update(`completions/${completion.phase}`, {
+            status: 'unverified',
+            unverified_at: Date.now(),
+            failure_reason: `${cmd.command}: expected ${cmd.expected}, got ${result}`
+          });
+        }
+      }
+    }
+
+    const failedPhases = verificationReport.filter(r => !r.passed);
+
+    return {
+      plan_id,
+      session_started: Date.now(),
+      verification_report: verificationReport,
+      phases_verified: verificationReport.filter(r => r.passed).length,
+      phases_failed: failedPhases.length,
+      phases_needing_attention: [...new Set(failedPhases.map(r => r.phase))],
+      message: failedPhases.length > 0
+        ? `WARNING: ${failedPhases.length} verifications failed. Review phases_needing_attention before proceeding.`
+        : `All ${verificationReport.length} verifications passed. Safe to continue.`
+    };
+  }
+  ```
+
+- [ ] **4.8: Slop Detection Tools**
+
+  **4.8.1: Dead Code Detection**
+  ```typescript
+  async function detect_dead_code(): SlopReport {
+    const results = { unused_deps: [], unreachable_functions: [], orphaned_files: [] };
+
+    // Run cargo udeps for unused dependencies
+    const udeps = await exec("cargo +nightly udeps --all-targets 2>&1");
+    results.unused_deps = parseUdepsOutput(udeps);
+
+    // Query call graph for unreachable functions
+    const symbols = await loadIndex("structural/symbols.json");
+    const deps = await loadIndex("structural/dependencies.json");
+
+    for (const [file, data] of Object.entries(symbols)) {
+      for (const symbol of data.symbols) {
+        const refs = deps.edges.filter(e => e.to === symbol.name);
+        if (refs.length === 0 && symbol.visibility === "pub") {
+          results.unreachable_functions.push({
+            name: symbol.name,
+            file,
+            line: symbol.line,
+            reason: "No incoming references in call graph"
+          });
+        }
+      }
+    }
+
+    return results;
+  }
+  ```
+
+  **4.8.2: Orphaned Code Detection**
+  ```typescript
+  async function detect_orphaned_code(): SlopReport {
+    // Find files that might have been superseded but not deleted
+    const results = [];
+
+    // Pattern 1: old_X.rs and X.rs both exist
+    const files = await glob("**/*.rs");
+    for (const file of files) {
+      if (file.includes("old_") || file.includes("_old") || file.includes("_backup")) {
+        const newFile = file.replace(/old_|_old|_backup/g, "");
+        if (files.includes(newFile)) {
+          results.push({
+            file,
+            reason: `Possibly superseded by ${newFile}`,
+            action: "Review and delete if obsolete"
+          });
+        }
+      }
+    }
+
+    // Pattern 2: Check git history for "replaced by" or "superseded by" commits
+    // (implementation details...)
+
+    return results;
+  }
+  ```
+
+  **4.8.3: Fake DST Detection**
+  ```typescript
+  async function detect_fake_dst(): SlopReport {
+    const results = [];
+    const testIndex = await loadIndex("structural/tests.json");
+
+    for (const test of testIndex.tests.filter(t => t.type === "dst" || t.file.includes("_dst"))) {
+      const content = await readFile(test.file);
+
+      const checks = {
+        uses_simulation: content.includes("Simulation::new") || content.includes("SimConfig"),
+        has_fault_injection: content.includes("with_fault") || content.includes("FaultConfig"),
+        uses_sim_components: content.includes("SimStorage") || content.includes("SimClock") || content.includes("SimNetwork"),
+        is_deterministic: null  // Will test below
+      };
+
+      // Test determinism: run twice with same seed
+      const seed = Math.floor(Math.random() * 100000);
+      const run1 = await exec(`DST_SEED=${seed} cargo test --test ${test.name} -- --nocapture 2>&1`);
+      const run2 = await exec(`DST_SEED=${seed} cargo test --test ${test.name} -- --nocapture 2>&1`);
+      checks.is_deterministic = run1 === run2;
+
+      // Verdict
+      if (!checks.uses_simulation && !checks.uses_sim_components) {
+        results.push({
+          test: test.name,
+          file: test.file,
+          verdict: "NOT_DST",
+          reason: "Claims to be DST but doesn't use Simulation harness or SimComponents",
+          checks
+        });
+      } else if (!checks.has_fault_injection) {
+        results.push({
+          test: test.name,
+          file: test.file,
+          verdict: "WEAK_DST",
+          reason: "Uses DST harness but has no fault injection",
+          checks
+        });
+      } else if (!checks.is_deterministic) {
+        results.push({
+          test: test.name,
+          file: test.file,
+          verdict: "BROKEN_DST",
+          reason: "Same seed produces different results - not deterministic",
+          checks
+        });
+      }
+    }
+
+    return results;
+  }
+  ```
+
+  **4.8.4: Duplicate Detection**
+  ```typescript
+  async function detect_duplicates(): SlopReport {
+    const results = [];
+    const symbols = await loadIndex("structural/symbols.json");
+
+    // Find functions with similar signatures
+    const functions = [];
+    for (const [file, data] of Object.entries(symbols)) {
+      for (const sym of data.symbols.filter(s => s.kind === "fn")) {
+        functions.push({ ...sym, file });
+      }
+    }
+
+    // Group by signature similarity
+    for (let i = 0; i < functions.length; i++) {
+      for (let j = i + 1; j < functions.length; j++) {
+        const a = functions[i], b = functions[j];
+        if (a.signature && b.signature && signatureSimilarity(a.signature, b.signature) > 0.8) {
+          results.push({
+            func_a: { name: a.name, file: a.file, signature: a.signature },
+            func_b: { name: b.name, file: b.file, signature: b.signature },
+            similarity: signatureSimilarity(a.signature, b.signature),
+            reason: "Very similar signatures - possible duplicate implementation"
+          });
+        }
+      }
+    }
+
+    return results;
+  }
+  ```
+
+  **4.8.5: Incomplete Code Detection**
+  ```typescript
+  async function detect_incomplete(): SlopReport {
+    const results = [];
+
+    // Pattern scan for incomplete markers
+    const patterns = [
+      { pattern: /TODO/g, severity: "low", category: "todo" },
+      { pattern: /FIXME/g, severity: "medium", category: "fixme" },
+      { pattern: /HACK/g, severity: "medium", category: "hack" },
+      { pattern: /XXX/g, severity: "high", category: "xxx" },
+      { pattern: /unimplemented!\(\)/g, severity: "high", category: "unimplemented" },
+      { pattern: /todo!\(\)/g, severity: "high", category: "todo_macro" },
+      { pattern: /panic!\("not implemented/g, severity: "high", category: "panic_stub" },
+      { pattern: /\.unwrap\(\)/g, severity: "medium", category: "unwrap" },
+    ];
+
+    const files = await glob("crates/**/*.rs");
+    for (const file of files) {
+      const content = await readFile(file);
+      const lines = content.split("\n");
+
+      for (const { pattern, severity, category } of patterns) {
+        let match;
+        while ((match = pattern.exec(content)) !== null) {
+          const line = content.substring(0, match.index).split("\n").length;
+          results.push({
+            file,
+            line,
+            category,
+            severity,
+            match: match[0],
+            context: lines[line - 1]?.trim()
+          });
+        }
+      }
+    }
+
+    return results;
+  }
+  ```
+
+  **4.8.6: Plan Lie Detection**
+  ```typescript
+  async function detect_lies(plan_id: string): SlopReport {
+    const results = [];
+    const plan = await loadPlan(plan_id);
+    const completions = await agentfs.list(`completions/${plan_id}/*`);
+
+    for (const completion of completions) {
+      // Check claimed files exist
+      for (const file of completion.evidence.files_created || []) {
+        if (!await fileExists(file)) {
+          results.push({
+            phase: completion.phase,
+            type: "missing_file",
+            claimed: file,
+            actual: "File does not exist",
+            severity: "high"
+          });
+        }
+      }
+
+      // Re-run verification commands
+      for (const cmd of completion.evidence.verification_commands || []) {
+        const result = await exec(cmd.command);
+        if (!matches(result, cmd.expected)) {
+          results.push({
+            phase: completion.phase,
+            type: "verification_mismatch",
+            command: cmd.command,
+            claimed: cmd.expected,
+            actual: result,
+            severity: "high"
+          });
+        }
+      }
+    }
+
+    return results;
+  }
+  ```
+
 **Verification:**
 ```bash
 # Test MCP server
@@ -542,6 +1005,727 @@ cd tools/mcp-kelpie && npm test
 
 # Manual test
 echo '{"tool": "index_constraints"}' | node src/index.js
+
+# Test slop detection
+echo '{"tool": "detect_fake_dst"}' | node src/index.js
+echo '{"tool": "detect_incomplete"}' | node src/index.js
+```
+
+- [ ] **4.9: DST Coverage & Integrity Tools**
+
+  **Context:** Kelpie already has `scripts/check_dst.sh` and CI runs DST checks. But we need:
+  - Critical path → DST test mapping (which paths have coverage?)
+  - Fault type coverage (are we testing all 16 fault types?)
+  - Enhanced fake DST detection beyond 4.8.3 (verify determinism property)
+  - Pre-commit gate for changes to critical paths
+
+  **4.9.1: Critical Path Coverage Report**
+  ```typescript
+  async function dst_coverage_report(): DSTCoverageReport {
+    // Load critical paths from CONSTRAINTS.md
+    const criticalPaths = [
+      "Actor activation/deactivation",
+      "State persistence and recovery",
+      "Cross-actor invocation",
+      "Failure detection and recovery",
+      "Migration correctness",
+      "Message ordering",
+      "Transaction atomicity",
+      "Cluster membership changes"
+    ];
+
+    // Load test index
+    const tests = await loadIndex("structural/tests.json");
+    const dstTests = tests.tests.filter(t => t.type === "dst");
+
+    // Map critical paths to tests
+    const coverage = {};
+    for (const path of criticalPaths) {
+      const keywords = pathToKeywords(path); // "Actor activation" → ["actor", "activation", "activate"]
+      const coveringTests = dstTests.filter(t =>
+        keywords.some(kw => t.name.toLowerCase().includes(kw) || t.topics.includes(kw))
+      );
+
+      coverage[path] = {
+        covered: coveringTests.length > 0,
+        tests: coveringTests.map(t => ({ name: t.name, file: t.file })),
+        test_count: coveringTests.length
+      };
+    }
+
+    // Calculate overall coverage
+    const coveredPaths = Object.values(coverage).filter(c => c.covered).length;
+
+    return {
+      critical_paths_total: criticalPaths.length,
+      critical_paths_covered: coveredPaths,
+      coverage_percentage: (coveredPaths / criticalPaths.length * 100).toFixed(1),
+      by_path: coverage,
+      uncovered_paths: Object.entries(coverage)
+        .filter(([_, c]) => !c.covered)
+        .map(([path, _]) => path)
+    };
+  }
+  ```
+
+  **4.9.2: Fault Type Coverage Report**
+  ```typescript
+  async function fault_type_coverage(): FaultTypeCoverageReport {
+    // All 16 fault types from CONSTRAINTS.md
+    const allFaultTypes = {
+      Storage: ["StorageWriteFail", "StorageReadFail", "StorageCorruption", "StorageLatency", "DiskFull"],
+      Crash: ["CrashBeforeWrite", "CrashAfterWrite", "CrashDuringTransaction"],
+      Network: ["NetworkPartition", "NetworkDelay", "NetworkPacketLoss", "NetworkMessageReorder"],
+      Time: ["ClockSkew", "ClockJump"],
+      Resource: ["OutOfMemory", "CPUStarvation"]
+    };
+
+    // Scan DST test files for fault type usage
+    const dstFiles = await glob("crates/**/tests/*_dst.rs");
+    const usageByType = {};
+
+    for (const [category, types] of Object.entries(allFaultTypes)) {
+      for (const faultType of types) {
+        usageByType[faultType] = {
+          category,
+          used_in: [],
+          usage_count: 0
+        };
+      }
+    }
+
+    for (const file of dstFiles) {
+      const content = await readFile(file);
+      for (const faultType of Object.keys(usageByType)) {
+        const regex = new RegExp(`FaultType::${faultType}|"${faultType}"`, 'g');
+        const matches = content.match(regex);
+        if (matches) {
+          usageByType[faultType].used_in.push(file);
+          usageByType[faultType].usage_count += matches.length;
+        }
+      }
+    }
+
+    // Calculate coverage by category
+    const coverageByCategory = {};
+    for (const [category, types] of Object.entries(allFaultTypes)) {
+      const usedTypes = types.filter(t => usageByType[t].usage_count > 0);
+      coverageByCategory[category] = {
+        total: types.length,
+        used: usedTypes.length,
+        unused: types.filter(t => usageByType[t].usage_count === 0)
+      };
+    }
+
+    const totalTypes = Object.keys(usageByType).length;
+    const usedTypes = Object.values(usageByType).filter(u => u.usage_count > 0).length;
+
+    return {
+      fault_types_total: totalTypes,
+      fault_types_used: usedTypes,
+      coverage_percentage: (usedTypes / totalTypes * 100).toFixed(1),
+      by_type: usageByType,
+      by_category: coverageByCategory,
+      unused_fault_types: Object.entries(usageByType)
+        .filter(([_, u]) => u.usage_count === 0)
+        .map(([type, _]) => type)
+    };
+  }
+  ```
+
+  **4.9.3: Enhanced Determinism Verification**
+  ```typescript
+  async function verify_all_dst_determinism(seeds?: number[]): DeterminismReport {
+    // Use existing check_dst.sh logic, but enhanced
+    const testSeeds = seeds || [12345, 67890, 11111, 42, 999];
+    const results = [];
+
+    const dstTests = await glob("crates/**/tests/*_dst.rs");
+
+    for (const testFile of dstTests) {
+      const testName = path.basename(testFile, ".rs");
+
+      for (const seed of testSeeds) {
+        // Run twice with same seed
+        const run1 = await exec(`DST_SEED=${seed} cargo test --test ${testName} -- --nocapture 2>&1`);
+        const run2 = await exec(`DST_SEED=${seed} cargo test --test ${testName} -- --nocapture 2>&1`);
+
+        // Filter out timestamps and build artifacts
+        const filtered1 = filterNonDeterministicOutput(run1);
+        const filtered2 = filterNonDeterministicOutput(run2);
+
+        const isDeterministic = filtered1 === filtered2;
+
+        if (!isDeterministic) {
+          // Find the diff
+          const diff = generateDiff(filtered1, filtered2);
+          results.push({
+            test: testName,
+            seed,
+            deterministic: false,
+            diff_preview: diff.slice(0, 500),
+            likely_cause: diagnoseDeterminismFailure(diff)
+          });
+        } else {
+          results.push({
+            test: testName,
+            seed,
+            deterministic: true
+          });
+        }
+      }
+    }
+
+    const failedTests = results.filter(r => !r.deterministic);
+
+    return {
+      tests_checked: dstTests.length,
+      seeds_used: testSeeds,
+      all_deterministic: failedTests.length === 0,
+      failures: failedTests,
+      failure_count: failedTests.length,
+      message: failedTests.length > 0
+        ? `${failedTests.length} DST test(s) are NOT deterministic. See failures for details.`
+        : `All ${dstTests.length} DST tests are deterministic across ${testSeeds.length} seeds.`
+    };
+  }
+
+  function diagnoseDeterminismFailure(diff: string): string {
+    if (diff.includes("SystemTime") || diff.includes("Instant::now"))
+      return "Uses real system time instead of SimClock";
+    if (diff.includes("thread") || diff.includes("spawn"))
+      return "Async race condition - task ordering varies";
+    if (diff.includes("rand") || diff.includes("random"))
+      return "Uses random without DeterministicRng";
+    if (diff.includes("HashMap") && diff.includes("iter"))
+      return "HashMap iteration order is non-deterministic";
+    return "Unknown - manual investigation required";
+  }
+  ```
+
+  **4.9.4: DST Coverage Enforcement Gate**
+  ```typescript
+  async function enforce_dst_coverage(changed_files: string[]): EnforcementResult {
+    // Check if any changed file is in a critical path
+    const criticalPathPatterns = [
+      /actor.*activate|deactivate/i,
+      /state.*persist|recover/i,
+      /invoke|cross.*actor/i,
+      /failure.*detect|recover/i,
+      /migrat|teleport/i,
+      /message.*order/i,
+      /transaction|atomic/i,
+      /cluster.*member/i
+    ];
+
+    const criticalChanges = [];
+    for (const file of changed_files) {
+      const content = await readFile(file);
+      for (const pattern of criticalPathPatterns) {
+        if (pattern.test(content) || pattern.test(file)) {
+          criticalChanges.push({ file, pattern: pattern.toString() });
+          break;
+        }
+      }
+    }
+
+    if (criticalChanges.length === 0) {
+      return { blocked: false, message: "No critical path changes detected." };
+    }
+
+    // Check if corresponding DST tests exist
+    const coverageReport = await dst_coverage_report();
+    const missingCoverage = [];
+
+    for (const change of criticalChanges) {
+      // Find which critical path this change affects
+      const affectedPath = identifyAffectedCriticalPath(change);
+      if (affectedPath && !coverageReport.by_path[affectedPath]?.covered) {
+        missingCoverage.push({
+          file: change.file,
+          critical_path: affectedPath,
+          message: `Changed ${change.file} affects '${affectedPath}' but no DST tests cover it`
+        });
+      }
+    }
+
+    if (missingCoverage.length > 0) {
+      return {
+        blocked: true,
+        message: `BLOCKED: Critical path changes require DST coverage. Missing coverage for: ${missingCoverage.map(m => m.critical_path).join(", ")}`,
+        missing: missingCoverage,
+        action_required: "Add DST tests for the affected critical paths before committing"
+      };
+    }
+
+    return {
+      blocked: false,
+      message: `Critical path changes detected in ${criticalChanges.length} file(s), all have DST coverage.`,
+      critical_changes: criticalChanges
+    };
+  }
+  ```
+
+  **4.9.5: Pre-commit Hook Integration**
+  ```bash
+  # Addition to .git/hooks/pre-commit
+
+  # DST Coverage Enforcement (for critical paths)
+  CHANGED_FILES=$(git diff --cached --name-only --diff-filter=ACMR -- '*.rs')
+  if [ -n "$CHANGED_FILES" ]; then
+    echo "Checking DST coverage for changed files..."
+    RESULT=$(echo "{\"tool\": \"enforce_dst_coverage\", \"args\": {\"changed_files\": $(echo $CHANGED_FILES | jq -R -s 'split("\n") | map(select(length > 0))')}}" | node tools/mcp-kelpie/src/index.js)
+
+    if echo "$RESULT" | jq -e '.blocked == true' > /dev/null; then
+      echo "❌ DST Coverage Required:"
+      echo "$RESULT" | jq -r '.message'
+      echo ""
+      echo "Missing coverage:"
+      echo "$RESULT" | jq -r '.missing[] | "  - \(.file): \(.critical_path)"'
+      exit 1
+    fi
+  fi
+  ```
+
+**Verification:**
+```bash
+# Test DST coverage report
+echo '{"tool": "dst_coverage_report"}' | node tools/mcp-kelpie/src/index.js
+
+# Test fault type coverage
+echo '{"tool": "fault_type_coverage"}' | node tools/mcp-kelpie/src/index.js
+
+# Test determinism verification (slow - runs tests multiple times)
+echo '{"tool": "verify_all_dst_determinism", "args": {"seeds": [42, 12345]}}' | node tools/mcp-kelpie/src/index.js
+
+# Test enforcement gate
+echo '{"tool": "enforce_dst_coverage", "args": {"changed_files": ["crates/kelpie-runtime/src/actor.rs"]}}' | node tools/mcp-kelpie/src/index.js
+```
+
+- [ ] **4.10: Harness Adequacy Verification**
+
+  **Context:** Phase 4.9 checks if tests USE the harness, but not if the harness is ADEQUATE. A test can use SimStorage but if SimStorage doesn't model real FDB failure modes, the test is meaningless. We need to verify the harness itself is complete.
+
+  **4.10.1: Harness Capability Audit**
+  ```typescript
+  async function harness_capability_audit(): HarnessAuditReport {
+    // Required fault types from CONSTRAINTS.md
+    const requiredFaultTypes = {
+      Storage: ["StorageWriteFail", "StorageReadFail", "StorageCorruption", "StorageLatency", "DiskFull"],
+      Crash: ["CrashBeforeWrite", "CrashAfterWrite", "CrashDuringTransaction"],
+      Network: ["NetworkPartition", "NetworkDelay", "NetworkPacketLoss", "NetworkMessageReorder"],
+      Time: ["ClockSkew", "ClockJump"],
+      Resource: ["OutOfMemory", "CPUStarvation"]
+    };
+
+    // Required simulation components for critical paths
+    const requiredComponents = {
+      "SimClock": {
+        purpose: "Deterministic time control",
+        required_for: ["All DST tests", "Timeout testing", "Clock skew injection"]
+      },
+      "SimStorage": {
+        purpose: "Simulated persistent storage",
+        required_for: ["State persistence", "Storage fault injection", "Transaction testing"]
+      },
+      "SimNetwork": {
+        purpose: "Simulated network layer",
+        required_for: ["Cross-actor invocation", "Partition testing", "Message ordering"]
+      },
+      "SimVm": {
+        purpose: "Simulated VM for agent execution",
+        required_for: ["Migration/teleport testing", "Crash injection"]
+      },
+      "DeterministicRng": {
+        purpose: "Seeded random number generator",
+        required_for: ["Reproducibility", "Fault probability sampling"]
+      },
+      "FaultInjector": {
+        purpose: "Fault injection framework",
+        required_for: ["All fault testing"]
+      }
+    };
+
+    // Scan kelpie-dst crate for implementations
+    const dstLib = await readFile("crates/kelpie-dst/src/lib.rs");
+    const dstFiles = await glob("crates/kelpie-dst/src/**/*.rs");
+
+    const componentStatus = {};
+    for (const [component, spec] of Object.entries(requiredComponents)) {
+      const found = dstLib.includes(`pub use ${component.toLowerCase()}`) ||
+                    dstLib.includes(`pub struct ${component}`) ||
+                    dstLib.includes(`pub mod ${component.toLowerCase()}`);
+
+      // Check for actual implementation
+      let implementation = null;
+      for (const file of dstFiles) {
+        const content = await readFile(file);
+        if (content.includes(`struct ${component}`) || content.includes(`impl ${component}`)) {
+          implementation = file;
+          break;
+        }
+      }
+
+      componentStatus[component] = {
+        ...spec,
+        exported: found,
+        implemented: implementation !== null,
+        implementation_file: implementation,
+        status: found && implementation ? "OK" : implementation ? "NOT_EXPORTED" : "MISSING"
+      };
+    }
+
+    // Check fault type implementations in FaultInjector
+    const faultFile = await readFile("crates/kelpie-dst/src/fault.rs");
+    const faultTypeStatus = {};
+
+    for (const [category, types] of Object.entries(requiredFaultTypes)) {
+      for (const faultType of types) {
+        const isEnumVariant = faultFile.includes(faultType);
+        const hasHandler = faultFile.includes(`FaultType::${faultType}`) &&
+                          (faultFile.includes(`=> {`) || faultFile.includes(`=>`));
+
+        faultTypeStatus[faultType] = {
+          category,
+          defined: isEnumVariant,
+          has_handler: hasHandler,
+          status: isEnumVariant && hasHandler ? "IMPLEMENTED" :
+                  isEnumVariant ? "DEFINED_NO_HANDLER" : "MISSING"
+        };
+      }
+    }
+
+    const missingComponents = Object.entries(componentStatus)
+      .filter(([_, s]) => s.status !== "OK")
+      .map(([name, s]) => ({ name, status: s.status }));
+
+    const missingFaults = Object.entries(faultTypeStatus)
+      .filter(([_, s]) => s.status !== "IMPLEMENTED")
+      .map(([name, s]) => ({ name, status: s.status, category: s.category }));
+
+    return {
+      components: componentStatus,
+      fault_types: faultTypeStatus,
+      missing_components: missingComponents,
+      missing_fault_types: missingFaults,
+      harness_complete: missingComponents.length === 0 && missingFaults.length === 0,
+      message: missingComponents.length === 0 && missingFaults.length === 0
+        ? "Harness is complete - all components and fault types implemented"
+        : `Harness incomplete: ${missingComponents.length} missing components, ${missingFaults.length} missing fault types`
+    };
+  }
+  ```
+
+  **4.10.2: Simulation Fidelity Check**
+  ```typescript
+  async function simulation_fidelity_check(): FidelityReport {
+    // For each simulation component, document what it models vs what it doesn't
+    const fidelitySpec = {
+      "SimStorage": {
+        models: [
+          "Read/write operations",
+          "Transaction semantics (begin/commit/abort)",
+          "Key-value interface",
+          "Configurable latency",
+          "Write failures",
+          "Read failures"
+        ],
+        does_not_model: [
+          "FDB layer coordination",
+          "FDB transaction conflicts (optimistic concurrency)",
+          "FDB watch semantics",
+          "Disk I/O patterns",
+          "Storage tiering",
+          "Compaction"
+        ],
+        known_gaps: [
+          {
+            gap: "No transaction conflict simulation",
+            risk: "Tests may pass but production fails on concurrent writes",
+            severity: "HIGH",
+            mitigation: "Add SimStorage::with_conflict_probability()"
+          }
+        ]
+      },
+      "SimNetwork": {
+        models: [
+          "Message send/receive",
+          "Configurable latency",
+          "Packet loss",
+          "Network partitions",
+          "Message reordering"
+        ],
+        does_not_model: [
+          "TCP semantics (retransmission, congestion)",
+          "Partial message delivery",
+          "Connection establishment/teardown",
+          "Bandwidth limits",
+          "Network buffer overflow"
+        ],
+        known_gaps: [
+          {
+            gap: "No partial network partition (asymmetric)",
+            risk: "Can't test A->B works but B->A fails",
+            severity: "MEDIUM",
+            mitigation: "Add directional partition support"
+          }
+        ]
+      },
+      "SimClock": {
+        models: [
+          "Monotonic time progression",
+          "Time advancement",
+          "Sleep/timeout"
+        ],
+        does_not_model: [
+          "Wall clock (real NTP time)",
+          "Leap seconds",
+          "Timezone effects"
+        ],
+        known_gaps: []
+      },
+      "SimVm": {
+        models: [
+          "VM lifecycle (start/stop)",
+          "Snapshot/restore",
+          "Guest agent communication"
+        ],
+        does_not_model: [
+          "CPU scheduling",
+          "Memory pressure",
+          "I/O scheduling",
+          "Hypervisor overhead"
+        ],
+        known_gaps: [
+          {
+            gap: "No memory pressure simulation",
+            risk: "OOM scenarios not testable",
+            severity: "MEDIUM",
+            mitigation: "Add SimVm::with_memory_limit()"
+          }
+        ]
+      }
+    };
+
+    // Check actual implementation matches spec
+    const results = {};
+    for (const [component, spec] of Object.entries(fidelitySpec)) {
+      const implFile = await findImplementation(component);
+      if (!implFile) {
+        results[component] = { status: "NOT_FOUND", spec };
+        continue;
+      }
+
+      const content = await readFile(implFile);
+
+      // Verify claimed "models" features exist
+      const verifiedModels = [];
+      const unverifiedModels = [];
+      for (const feature of spec.models) {
+        const keywords = featureToKeywords(feature);
+        const found = keywords.some(kw => content.toLowerCase().includes(kw.toLowerCase()));
+        if (found) {
+          verifiedModels.push(feature);
+        } else {
+          unverifiedModels.push(feature);
+        }
+      }
+
+      results[component] = {
+        status: unverifiedModels.length === 0 ? "VERIFIED" : "PARTIAL",
+        implementation_file: implFile,
+        models_verified: verifiedModels,
+        models_unverified: unverifiedModels,
+        does_not_model: spec.does_not_model,
+        known_gaps: spec.known_gaps
+      };
+    }
+
+    // Aggregate gaps
+    const allGaps = Object.values(fidelitySpec)
+      .flatMap(s => s.known_gaps)
+      .sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
+
+    return {
+      by_component: results,
+      all_known_gaps: allGaps,
+      high_severity_gaps: allGaps.filter(g => g.severity === "HIGH"),
+      message: allGaps.length > 0
+        ? `${allGaps.length} known simulation gaps. ${allGaps.filter(g => g.severity === "HIGH").length} are HIGH severity.`
+        : "No known simulation gaps documented."
+    };
+  }
+  ```
+
+  **4.10.3: Critical Path Simulability Check**
+  ```typescript
+  async function critical_path_simulability(): SimulabilityReport {
+    // For each critical path, determine if the harness can simulate it
+    const criticalPaths = [
+      {
+        path: "Actor activation/deactivation",
+        required_components: ["SimStorage", "SimClock"],
+        required_faults: ["StorageReadFail", "StorageWriteFail"],
+        scenarios: [
+          { name: "Activate new actor", simulable: true },
+          { name: "Deactivate idle actor", simulable: true },
+          { name: "Activation fails mid-way", simulable: true, requires: "CrashDuringTransaction" },
+          { name: "Concurrent activation race", simulable: false,
+            reason: "No transaction conflict simulation", gap_ref: "SimStorage" }
+        ]
+      },
+      {
+        path: "State persistence and recovery",
+        required_components: ["SimStorage", "SimVm"],
+        required_faults: ["StorageWriteFail", "CrashAfterWrite", "StorageCorruption"],
+        scenarios: [
+          { name: "Normal persist/recover", simulable: true },
+          { name: "Crash before persist completes", simulable: true },
+          { name: "Corruption during recovery", simulable: true },
+          { name: "Partial write (torn page)", simulable: false,
+            reason: "SimStorage doesn't model partial writes" }
+        ]
+      },
+      {
+        path: "Cross-actor invocation",
+        required_components: ["SimNetwork", "SimClock"],
+        required_faults: ["NetworkDelay", "NetworkPartition", "NetworkPacketLoss"],
+        scenarios: [
+          { name: "Normal RPC", simulable: true },
+          { name: "RPC timeout", simulable: true },
+          { name: "Network partition during call", simulable: true },
+          { name: "Asymmetric partition", simulable: false,
+            reason: "SimNetwork doesn't model directional partitions" }
+        ]
+      },
+      {
+        path: "Failure detection and recovery",
+        required_components: ["SimNetwork", "SimClock", "SimVm"],
+        required_faults: ["CrashBeforeWrite", "NetworkPartition"],
+        scenarios: [
+          { name: "Detect crashed node", simulable: true },
+          { name: "Distinguish crash from partition", simulable: true },
+          { name: "Split-brain detection", simulable: false,
+            reason: "Requires asymmetric partition + clock skew combo" }
+        ]
+      },
+      {
+        path: "Migration/teleport correctness",
+        required_components: ["SimVm", "SimStorage", "SimNetwork"],
+        required_faults: ["CrashDuringTransaction", "NetworkPacketLoss"],
+        scenarios: [
+          { name: "Clean migration", simulable: true },
+          { name: "Crash during snapshot", simulable: true },
+          { name: "Network failure during transfer", simulable: true },
+          { name: "Source/dest clock skew", simulable: true, requires: "ClockSkew" }
+        ]
+      }
+    ];
+
+    // Check each path
+    const harnessAudit = await harness_capability_audit();
+    const results = [];
+
+    for (const cp of criticalPaths) {
+      // Check required components
+      const missingComponents = cp.required_components.filter(
+        c => harnessAudit.components[c]?.status !== "OK"
+      );
+
+      // Check required faults
+      const missingFaults = cp.required_faults.filter(
+        f => harnessAudit.fault_types[f]?.status !== "IMPLEMENTED"
+      );
+
+      // Aggregate scenario simulability
+      const simulableScenarios = cp.scenarios.filter(s => s.simulable);
+      const nonSimulableScenarios = cp.scenarios.filter(s => !s.simulable);
+
+      results.push({
+        critical_path: cp.path,
+        fully_simulable: missingComponents.length === 0 &&
+                         missingFaults.length === 0 &&
+                         nonSimulableScenarios.length === 0,
+        missing_components: missingComponents,
+        missing_faults: missingFaults,
+        scenarios: {
+          total: cp.scenarios.length,
+          simulable: simulableScenarios.length,
+          not_simulable: nonSimulableScenarios.length,
+          details: cp.scenarios
+        },
+        coverage_quality: nonSimulableScenarios.length === 0 ? "FULL" :
+                          nonSimulableScenarios.length < simulableScenarios.length ? "PARTIAL" : "POOR"
+      });
+    }
+
+    const fullyCovered = results.filter(r => r.fully_simulable).length;
+    const partiallyCovered = results.filter(r => r.coverage_quality === "PARTIAL").length;
+    const poorlyCovered = results.filter(r => r.coverage_quality === "POOR").length;
+
+    return {
+      critical_paths: results,
+      summary: {
+        total: results.length,
+        fully_simulable: fullyCovered,
+        partially_simulable: partiallyCovered,
+        poorly_simulable: poorlyCovered
+      },
+      action_items: results
+        .filter(r => !r.fully_simulable)
+        .flatMap(r => [
+          ...r.missing_components.map(c => `Implement ${c} in kelpie-dst`),
+          ...r.missing_faults.map(f => `Add ${f} fault handler`),
+          ...r.scenarios.details.filter(s => !s.simulable).map(s =>
+            `Add simulation support for: ${s.name} (${s.reason})`
+          )
+        ]),
+      message: fullyCovered === results.length
+        ? "All critical paths are fully simulable"
+        : `${fullyCovered}/${results.length} critical paths fully simulable. ` +
+          `${partiallyCovered} partial, ${poorlyCovered} poor coverage.`
+    };
+  }
+  ```
+
+  **4.10.4: Harness Evolution Tracking**
+  ```typescript
+  // Store baseline and track harness improvements over time
+  async function track_harness_evolution(): void {
+    const audit = await harness_capability_audit();
+    const fidelity = await simulation_fidelity_check();
+    const simulability = await critical_path_simulability();
+
+    const snapshot = {
+      timestamp: new Date().toISOString(),
+      git_sha: await getCurrentSha(),
+      components_ok: Object.values(audit.components).filter(c => c.status === "OK").length,
+      components_total: Object.keys(audit.components).length,
+      faults_implemented: Object.values(audit.fault_types).filter(f => f.status === "IMPLEMENTED").length,
+      faults_total: Object.keys(audit.fault_types).length,
+      critical_paths_full: simulability.summary.fully_simulable,
+      critical_paths_total: simulability.summary.total,
+      known_gaps: fidelity.all_known_gaps.length,
+      high_severity_gaps: fidelity.high_severity_gaps.length
+    };
+
+    // Append to evolution log
+    await appendJsonl(".kelpie-index/meta/harness_evolution.jsonl", snapshot);
+  }
+  ```
+
+**Verification:**
+```bash
+# Audit harness capabilities
+echo '{"tool": "harness_capability_audit"}' | node tools/mcp-kelpie/src/index.js
+
+# Check simulation fidelity (what's modeled vs not)
+echo '{"tool": "simulation_fidelity_check"}' | node tools/mcp-kelpie/src/index.js
+
+# Check critical path simulability
+echo '{"tool": "critical_path_simulability"}' | node tools/mcp-kelpie/src/index.js
+
+# Expected: Reports showing which gaps exist and their severity
 ```
 
 ---
@@ -595,10 +1779,77 @@ echo '{"tool": "index_constraints"}' | node src/index.js
     - Reminder to verify by execution
     - Link to verification tools
 
+- [ ] **5.5: RLM Handoff Skill**
+  ```markdown
+  # .claude/skills/rlm-handoff.md
+
+  When taking over a plan from another agent:
+
+  1. MANDATORY: Call mcp.start_plan_session(plan_id)
+     - This automatically re-verifies ALL completed phases
+     - You will receive a verification report
+     - You CANNOT skip this step
+
+  2. Review verification report:
+     - phases_verified: These are confirmed working
+     - phases_needing_attention: These FAILED verification
+       - Previous agent may have lied
+       - Or code changed since completion
+       - Or verification was inadequate
+
+  3. For each failed phase:
+     - Investigate why it failed
+     - Either fix the issue OR mark phase as incomplete
+     - Do NOT proceed to dependent phases until fixed
+
+  4. Only after all verifications pass:
+     - Continue with next incomplete phase
+     - Follow normal RLM task workflow
+
+  NEVER trust checkboxes in plan files.
+  ALWAYS let the system verify via execution.
+  ```
+
+- [ ] **5.6: RLM Slop Hunt Skill**
+  ```markdown
+  # .claude/skills/rlm-slop-hunt.md
+
+  When asked to find or clean up slop in the codebase:
+
+  1. Run detection tools:
+     - mcp.detect_dead_code() → unused deps, unreachable functions
+     - mcp.detect_orphaned_code() → superseded but not deleted
+     - mcp.detect_duplicates() → similar implementations
+     - mcp.detect_fake_dst() → tests claiming DST but aren't
+     - mcp.detect_incomplete() → TODO, FIXME, stubs
+
+  2. For each candidate:
+     - DO NOT blindly delete
+     - Verify it's actually slop:
+       - Check references in call graph
+       - Check git history for context
+       - Run tests to see if removal breaks anything
+     - If uncertain, flag for human review
+
+  3. Propose cleanup:
+     - Group by type (dead code, duplicates, etc.)
+     - Prioritize by severity (high = blocking, low = advisory)
+     - Include verification command for each cleanup
+
+  4. Execute approved cleanups:
+     - One at a time
+     - Run tests after each
+     - Commit with clear message explaining what was removed and why
+
+  5. Re-run detection to confirm slop is gone
+  ```
+
 **Verification:**
 ```bash
 # Check skills are registered
 cat .claude/skills/rlm-task.md
+cat .claude/skills/rlm-handoff.md
+cat .claude/skills/rlm-slop-hunt.md
 ```
 
 ---
@@ -764,20 +2015,208 @@ cargo test -p kelpie-indexer
 
 ---
 
+### Phase 9: Slop Cleanup Workflow
+
+**Goal:** Systematic process to find and purge existing slop from the kelpie codebase.
+
+- [ ] **9.1: Initial Slop Audit**
+  Run all detection tools on current kelpie state:
+  ```bash
+  # Create baseline slop report
+  mcp.detect_dead_code() > .kelpie-index/slop/dead_code.json
+  mcp.detect_orphaned_code() > .kelpie-index/slop/orphaned.json
+  mcp.detect_duplicates() > .kelpie-index/slop/duplicates.json
+  mcp.detect_fake_dst() > .kelpie-index/slop/fake_dst.json
+  mcp.detect_incomplete() > .kelpie-index/slop/incomplete.json
+  ```
+
+- [ ] **9.2: Triage Slop Candidates**
+  For each category, classify:
+  ```
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  TRIAGE MATRIX                                                  │
+  │                                                                 │
+  │  Severity │ Confidence │ Action                                 │
+  │  ─────────┼────────────┼────────────────────────────────────────│
+  │  HIGH     │ HIGH       │ Delete immediately (after test)        │
+  │  HIGH     │ LOW        │ Investigate, then decide               │
+  │  LOW      │ HIGH       │ Queue for cleanup sprint               │
+  │  LOW      │ LOW        │ Flag for human review                  │
+  └─────────────────────────────────────────────────────────────────┘
+  ```
+
+- [ ] **9.3: Fake DST Remediation**
+  For each test flagged by `detect_fake_dst()`:
+  ```
+  If verdict == "NOT_DST":
+    - Either rename to remove "_dst" suffix
+    - Or rewrite to use actual Simulation harness
+    - Document why test exists if it's intentionally not DST
+
+  If verdict == "WEAK_DST":
+    - Add fault injection for relevant failure modes
+    - Follow CONSTRAINTS.md §1 workflow
+
+  If verdict == "BROKEN_DST":
+    - Fix non-determinism source
+    - Common causes: SystemTime, random without seed, async race
+    - Verify with: DST_SEED=42 cargo test <name> (run twice, compare)
+  ```
+
+- [ ] **9.4: Dead Code Removal**
+  For each candidate from `detect_dead_code()`:
+  ```
+  1. Verify truly unused:
+     - Check call graph (no incoming edges?)
+     - Check if pub but internal-only (might be API surface)
+     - Check if test-only (acceptable)
+
+  2. If confirmed dead:
+     - git rm or delete
+     - Run cargo test to confirm nothing breaks
+     - Commit: "chore: remove dead code {name} - no references in call graph"
+
+  3. If uncertain:
+     - Add #[allow(dead_code)] with comment explaining why kept
+     - Or ask human for decision
+  ```
+
+- [ ] **9.5: Duplicate Consolidation**
+  For each duplicate pair from `detect_duplicates()`:
+  ```
+  1. Analyze both implementations:
+     - Are they truly duplicates or just similar?
+     - Which is more correct/complete?
+     - Which has better tests?
+
+  2. If true duplicates:
+     - Keep the better one
+     - Update all callers to use it
+     - Delete the worse one
+     - Commit: "refactor: consolidate duplicate implementations of {name}"
+
+  3. If intentional (e.g., different error handling):
+     - Document why both exist
+     - Consider if they should share a common base
+  ```
+
+- [ ] **9.6: Orphan Cleanup**
+  For each orphaned file from `detect_orphaned_code()`:
+  ```
+  1. Check git history:
+     - When was this last modified?
+     - Was it superseded by another file?
+     - Who wrote it and why?
+
+  2. If superseded:
+     - Verify new implementation covers all functionality
+     - Delete orphan
+     - Commit: "chore: remove orphaned {file} - superseded by {new_file} in {commit}"
+
+  3. If still needed:
+     - Rename to remove "old_" prefix if applicable
+     - Integrate properly into module structure
+  ```
+
+- [ ] **9.7: Incomplete Code Resolution**
+  For each TODO/FIXME from `detect_incomplete()`:
+  ```
+  Severity HIGH (unimplemented!, panic!("not implemented")):
+    - Either implement it NOW
+    - Or delete if no longer needed
+    - NEVER leave in production code
+
+  Severity MEDIUM (FIXME, HACK, unwrap):
+    - Create issue/task for each
+    - Prioritize by impact
+    - Schedule for future sprint
+
+  Severity LOW (TODO):
+    - Review if still relevant
+    - Delete if obsolete
+    - Keep if valid future work
+  ```
+
+- [ ] **9.8: Final Verification**
+  After all cleanup:
+  ```bash
+  # Re-run all detection tools
+  mcp.detect_dead_code()      # Should be empty or near-empty
+  mcp.detect_orphaned_code()  # Should be empty
+  mcp.detect_fake_dst()       # Should be empty
+  mcp.detect_duplicates()     # Should be empty or documented exceptions
+
+  # Run full test suite
+  cargo test
+
+  # Run DST with multiple seeds
+  for seed in 1 42 100 999 12345; do
+    DST_SEED=$seed cargo test -p kelpie-dst
+  done
+
+  # Run clippy
+  cargo clippy --all-targets -- -D warnings
+  ```
+
+- [ ] **9.9: Document Cleanup Results**
+  Create cleanup report:
+  ```markdown
+  # Slop Cleanup Report - {date}
+
+  ## Summary
+  - Dead code removed: X functions, Y files
+  - Duplicates consolidated: Z pairs
+  - Fake DST fixed: N tests
+  - Orphans deleted: M files
+  - TODOs resolved: P items
+
+  ## Before/After Metrics
+  - Lines of code: BEFORE → AFTER (delta)
+  - Test count: BEFORE → AFTER
+  - DST coverage: BEFORE% → AFTER%
+
+  ## Remaining Items (Documented Exceptions)
+  - {item}: {reason for keeping}
+  ```
+
+**Verification:**
+```bash
+# Verify slop is gone
+./tools/mcp-kelpie detect_all_slop | jq '.total_issues'
+# Should be 0 or only documented exceptions
+
+# Verify tests still pass
+cargo test
+
+# Verify DST determinism
+DST_SEED=42 cargo test -p kelpie-dst 2>&1 | md5sum
+DST_SEED=42 cargo test -p kelpie-dst 2>&1 | md5sum
+# Both should match
+```
+
+---
+
 ## Checkpoints
 
 - [x] Codebase understood
 - [x] Plan approved
 - [x] **Options & Decisions filled in**
 - [x] **Quick Decision Log maintained**
-- [x] **Phase 1: Foundation complete** ✅
-- [ ] Phase 2: Structural indexing complete
-- [ ] Phase 3: Semantic indexing complete
-- [ ] Phase 4: MCP server complete
-- [ ] Phase 5: RLM skills complete
-- [ ] Phase 6: Hard controls complete
-- [ ] Phase 7: Multi-agent orchestration complete
-- [ ] Phase 8: Integration testing complete
+- [x] **Phase 1: Foundation - directory structure & AgentFS** ✅
+- [x] **Phase 2.1: Symbol Index (tools/kelpie-indexer)** ✅
+- [ ] Phase 2.2: Dependency Graph
+- [ ] Phase 2.3: Test Index
+- [ ] Phase 2.4: Module Index
+- [ ] Phase 2: Structural indexing (symbols, deps, tests)
+- [ ] Phase 3: Semantic indexing (summaries, constraints)
+- [ ] Phase 4: MCP server (query, verify, integrity, slop detection, DST coverage)
+- [ ] Phase 4.9: DST Coverage & Integrity Tools (critical path mapping, fault type coverage, determinism verification, enforcement gate)
+- [ ] Phase 4.10: Harness Adequacy Verification (capability audit, fidelity check, simulability analysis)
+- [ ] Phase 5: RLM skills (task, verify, explore, handoff, slop-hunt)
+- [ ] Phase 6: Hard controls (hooks, gates, audit)
+- [ ] Phase 7: Multi-agent orchestration
+- [ ] Phase 8: Integration testing
+- [ ] Phase 9: Slop cleanup workflow (initial audit on kelpie)
 - [ ] Tests passing (`cargo test`)
 - [ ] Clippy clean (`cargo clippy`)
 - [ ] Code formatted (`cargo fmt`)
@@ -799,6 +2238,8 @@ cargo test -p kelpie-indexer
 - [ ] Index freshness detection under concurrent updates
 - [ ] Verification gates under fault injection
 - [ ] Audit logging under crashes
+- [ ] DST coverage report accuracy (verify mappings are correct)
+- [ ] Determinism verification catches real non-determinism (inject non-determinism, verify detection)
 
 **Integration tests:**
 - [ ] Full index build → query → verify flow
@@ -878,6 +2319,60 @@ cargo test -p kelpie-dst index
 **Key Insight:**
 The separation between structural (deterministic, tracked) and semantic (LLM-generated, ignored) indexes is working well. This allows us to version control the deterministic parts while keeping the variable parts out of git.
 
+### Phase 2.1: Symbol Index (Completed 2026-01-20)
+
+**Indexer Tool Created:**
+- Built `tools/kelpie-indexer` Rust binary using syn parser
+- Added to workspace members in root Cargo.toml
+- Command: `cargo run --release -p kelpie-indexer -- symbols`
+
+**Symbol Extraction:**
+- Indexed **186 Rust files** across all kelpie crates
+- Extracted **3,563 symbols** (structs, enums, traits, functions, methods)
+- Captured visibility (pub, private, pub(crate), etc.)
+- Captured function signatures (async, unsafe, method names)
+- Extracted imports for each file
+- Generated deterministic output (773KB JSON file)
+
+**Freshness Tracking:**
+- Updated with SHA256 hashes for all 186 indexed files
+- Git SHA: df48636a6b95ae073fd3d30db3a6963166ac1393
+- Timestamp: 2026-01-20T23:03:18Z
+
+**Known Limitations:**
+- Line numbers set to 0 (proc-macro2 spans don't expose line info directly)
+- exports_to field empty (will be populated by dependency analysis in Phase 2.2)
+- Signatures simplified to "fn name(..)" format (full signatures need more parsing)
+
+**Key Insight:**
+Using syn for parsing is fast and deterministic. The indexer completes in ~1 second for the entire codebase. Line numbers can be added later via a different strategy if needed.
+
+### Phase 2.2: Dependency Graph (Completed 2026-01-20)
+
+**Indexer Enhancement:**
+- Extended `tools/kelpie-indexer` with cargo metadata parsing
+- Added `dependencies` command alongside existing `symbols` command
+- Command: `cargo run --release -p kelpie-indexer -- dependencies`
+
+**Dependency Extraction:**
+- Indexed **15 kelpie crates** using `cargo metadata --format-version=1 --no-deps`
+- Built **46 dependency edges** (crate-level dependencies)
+- Generated graph with nodes (crates) and edges (depends relationships)
+- Output: `.kelpie-index/structural/dependencies.json`
+
+**Graph Structure:**
+- Nodes: Each kelpie crate with id, type="crate", crate_name
+- Edges: Dependency relationships with from, to, type="depends"
+- Examples: kelpie-runtime → kelpie-core, kelpie-server → kelpie-storage
+
+**Current Scope:**
+- **Implemented:** Crate-level dependencies (cargo metadata)
+- **Not yet implemented:** Fine-grained type relationships (struct → trait, fn → type)
+- **Not yet implemented:** exports_to field in symbols.json
+
+**Key Insight:**
+Cargo metadata provides clean crate-level dependency information. Fine-grained type relationships (what structs implement what traits, what functions use what types) will require additional analysis, possibly using rust-analyzer LSP or deeper syn parsing. For now, crate-level deps are sufficient for Phase 2.2.
+
 ---
 
 ## What to Try [UPDATE AFTER EACH PHASE]
@@ -887,25 +2382,32 @@ The separation between structural (deterministic, tracked) and semantic (LLM-gen
 |------|------------|-----------------|
 | Plan exists | Read this file | Understanding of architecture |
 | Directory structure | `ls -la .kelpie-index/` | See structural/, semantic/, constraints/, meta/ subdirectories |
-| Index placeholders | `cat .kelpie-index/structural/symbols.json` | See empty index structure with version, git_sha fields |
 | AgentFS database | `sqlite3 .agentfs/agent.db "SELECT * FROM agent_state;"` | See initialized=true and current_task |
 | Database schema | `sqlite3 .agentfs/agent.db ".schema"` | See agent_state, verified_facts, audit_log tables |
 | Git ignore | `git status` | .agentfs/ not tracked, .kelpie-index/structural/ tracked |
-| Freshness tracking | `cat .kelpie-index/meta/freshness.json` | See current git SHA: 53f582a0 |
+| **Symbol index** | `cargo run -p kelpie-indexer -- symbols` | Index 186 files, extract 3563 symbols |
+| **View symbol index** | `cat .kelpie-index/structural/symbols.json \| jq '.files\["crates/kelpie-core/src/actor.rs"\]'` | See symbols, imports for ActorId etc |
+| **Index statistics** | `cat .kelpie-index/structural/symbols.json \| jq '{files: (.files \| length), git_sha, built_at}'` | 186 files, git SHA df48636a |
+| **Freshness tracking** | `cat .kelpie-index/meta/freshness.json \| jq '{git_sha, file_count: (.file_hashes \| length)}'` | SHA256 hashes for 186 files |
+| **Dependency graph** | `cargo run -p kelpie-indexer -- dependencies` | Index 15 crates, build 46 dependency edges |
+| **View dependency graph** | `cat .kelpie-index/structural/dependencies.json \| jq '{node_count: (.nodes\|length), edge_count: (.edges\|length)}'` | See 15 nodes, 46 edges |
+| **View crate dependencies** | `cat .kelpie-index/structural/dependencies.json \| jq '.edges\[:5\]'` | See sample dependency relationships |
 
 ### Doesn't Work Yet ❌
 | What | Why | When Expected |
 |------|-----|---------------|
-| Index building | Not implemented | Phase 2 |
+| Test index | Not implemented | Phase 2.3 |
+| Module hierarchy index | Not implemented | Phase 2.4 |
 | Semantic summaries | Not implemented | Phase 3 |
 | MCP server | Not implemented | Phase 4 |
 | RLM skills | Not implemented | Phase 5 |
 | Hard controls | Not implemented | Phase 6 |
 
 ### Known Limitations ⚠️
-- Phase 1 only creates the structure, indexes are empty
-- AgentFS database has schema but no real data yet
-- .gitignore patterns will only take effect after committing
+- Symbol index has line numbers set to 0 (proc-macro2 limitation)
+- Dependency graph only includes crate-level dependencies (not fine-grained type relationships)
+- exports_to field in symbols.json is empty (needs cross-reference analysis)
+- AgentFS database has schema but no real execution data yet
 - Semantic embeddings directory exists but is optional
 
 ---
