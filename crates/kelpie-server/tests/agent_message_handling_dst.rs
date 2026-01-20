@@ -473,7 +473,8 @@ async fn test_dst_agent_message_concurrent() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(TokioRuntime, &sim_env)?;
+            let runtime = TokioRuntime;
+            let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create 5 agents with different names
             let mut agent_ids = Vec::new();
@@ -503,7 +504,7 @@ async fn test_dst_agent_message_concurrent() {
                 let agent_id_clone = agent_id.clone();
                 let message = format!("Message to agent {}", idx + 1);
 
-                let handle = tokio::spawn(async move {
+                let handle = runtime.spawn(async move {
                     let msg_request = serde_json::json!({"role": "user", "content": message});
                     service_clone
                         .send_message(&agent_id_clone, msg_request)

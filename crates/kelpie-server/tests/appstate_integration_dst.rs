@@ -692,7 +692,7 @@ async fn create_appstate_with_service<R: Runtime + 'static>(
 /// Test if AppState's service is operational
 ///
 /// Tries a simple operation to verify service is functional
-async fn test_service_operational(app_state: &AppState) -> Result<()> {
+async fn test_service_operational<R: kelpie_core::Runtime + 'static>(app_state: &AppState<R>) -> Result<()> {
     // Get agent service (must exist for actor-based AppState)
     let service = app_state
         .agent_service()

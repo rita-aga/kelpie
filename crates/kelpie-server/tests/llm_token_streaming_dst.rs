@@ -382,7 +382,8 @@ async fn test_dst_llm_streaming_concurrent() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(TokioRuntime, &sim_env)?;
+            let runtime = TokioRuntime;
+            let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create 3 agents
             let mut agent_ids = Vec::new();
@@ -410,7 +411,7 @@ async fn test_dst_llm_streaming_concurrent() {
             for (idx, agent_id) in agent_ids.iter().enumerate() {
                 let service_clone = service.clone();
                 let agent_id_clone = agent_id.clone();
-                let handle = tokio::spawn(async move {
+                let handle = runtime.spawn(async move {
                     let mut stream = service_clone
                         .stream_message(&agent_id_clone, format!("Message {}", idx + 1))
                         .await?;

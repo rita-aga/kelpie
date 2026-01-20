@@ -174,6 +174,8 @@ async fn test_dst_concurrent_streaming_with_faults() {
             0.4, // 40% operations delayed
         ))
         .run_async(|sim_env| async move {
+            use kelpie_core::{Runtime, TokioRuntime};
+            let runtime = TokioRuntime;
             let time = sim_env.io_context.time.clone();
 
             // Create 3 concurrent "streams"
@@ -181,7 +183,7 @@ async fn test_dst_concurrent_streaming_with_faults() {
 
             for i in 1..=3 {
                 let time_clone = time.clone();
-                let handle = tokio::spawn(async move {
+                let handle = runtime.spawn(async move {
                     // Simulate stream processing (deterministic sleep)
                     time_clone.sleep_ms(10).await;
                     Ok::<i32, kelpie_core::Error>(i)

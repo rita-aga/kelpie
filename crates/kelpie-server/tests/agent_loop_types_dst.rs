@@ -37,8 +37,8 @@ fn sim_err(msg: String) -> Error {
 
 /// Simulates the agent loop logic from messages.rs
 /// This mirrors the actual code path but without requiring a real LLM
-struct SimAgentLoop {
-    state: AppState,
+struct SimAgentLoop<R: kelpie_core::Runtime> {
+    state: AppState<R>,
     agent_id: String,
     /// Tracks which tools were offered to "LLM"
     tools_offered: Vec<String>,
@@ -50,8 +50,8 @@ struct SimAgentLoop {
     iteration: u32,
 }
 
-impl SimAgentLoop {
-    fn new(state: AppState, agent_id: String) -> Self {
+impl<R: kelpie_core::Runtime + 'static> SimAgentLoop<R> {
+    fn new(state: AppState<R>, agent_id: String) -> Self {
         Self {
             state,
             agent_id,
@@ -175,7 +175,7 @@ fn create_agent_with_type(name: &str, agent_type: AgentType) -> AgentState {
     })
 }
 
-async fn setup_state_with_tools(state: &AppState) {
+async fn setup_state_with_tools<R: kelpie_core::Runtime + 'static>(state: &AppState<R>) {
     let registry = state.tool_registry();
 
     // Register mock shell tool
@@ -341,7 +341,7 @@ fn test_sim_react_agent_forbidden_tool_rejection() {
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config).run(|_env| async move {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         setup_state_with_tools(&state).await;
 
         // Create React agent
@@ -448,7 +448,7 @@ fn test_sim_max_iterations_by_agent_type() {
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config).run(|_env| async move {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         setup_state_with_tools(&state).await;
 
         // Test MemGPT (max_iterations = 5)
@@ -523,7 +523,7 @@ fn test_sim_heartbeat_rejection_for_react_agent() {
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config).run(|_env| async move {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         setup_state_with_tools(&state).await;
 
         // Create React agent

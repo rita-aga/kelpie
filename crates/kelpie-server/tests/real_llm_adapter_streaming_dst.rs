@@ -276,6 +276,9 @@ async fn test_dst_llm_client_concurrent() {
 
     let result = Simulation::new(config)
         .run_async(|_sim_env| async move {
+            use kelpie_core::{Runtime, TokioRuntime};
+            let runtime = TokioRuntime;
+
             // Create 3 clients with different token sets
             let mut handles = Vec::new();
 
@@ -284,7 +287,7 @@ async fn test_dst_llm_client_concurrent() {
                     (0..10).map(|j| format!("client{}token{} ", i, j)).collect();
                 let client = MockStreamingLlmClient::new(tokens);
 
-                let handle = tokio::spawn(async move {
+                let handle = runtime.spawn(async move {
                     let mut stream = client
                         .stream_complete(vec![LlmMessage {
                             role: "user".to_string(),

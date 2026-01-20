@@ -547,6 +547,8 @@ async fn test_dst_fdb_concurrent_operations() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.1))
         .run_async(|env| async move {
+            use kelpie_core::{Runtime, TokioRuntime};
+            let runtime = TokioRuntime;
             let storage = Arc::new(create_storage(&env));
 
             // Spawn 10 concurrent tasks, each creating an agent and updating blocks
@@ -554,7 +556,7 @@ async fn test_dst_fdb_concurrent_operations() {
 
             for i in 0..10 {
                 let storage_clone = storage.clone();
-                let task = tokio::spawn(async move {
+                let task = runtime.spawn(async move {
                     let agent_id = format!("concurrent-agent-{}", i);
                     let agent = AgentMetadata::new(
                         agent_id.clone(),

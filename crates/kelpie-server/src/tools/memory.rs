@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 
 /// Register all memory tools with the unified registry
-pub async fn register_memory_tools(registry: &UnifiedToolRegistry, state: AppState<TokioRuntime>) {
+pub async fn register_memory_tools<R: kelpie_core::Runtime + 'static>(registry: &UnifiedToolRegistry, state: AppState<R>) {
     // core_memory_append
     register_core_memory_append(registry, state.clone()).await;
 
@@ -40,7 +40,7 @@ pub async fn register_memory_tools(registry: &UnifiedToolRegistry, state: AppSta
     );
 }
 
-async fn register_core_memory_append(registry: &UnifiedToolRegistry, state: AppState<TokioRuntime>) {
+async fn register_core_memory_append<R: kelpie_core::Runtime + 'static>(registry: &UnifiedToolRegistry, state: AppState<R>) {
     let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
         let state = state.clone();
         let input = input.clone();
@@ -102,7 +102,7 @@ async fn register_core_memory_append(registry: &UnifiedToolRegistry, state: AppS
         .await;
 }
 
-async fn register_core_memory_replace(registry: &UnifiedToolRegistry, state: AppState<TokioRuntime>) {
+async fn register_core_memory_replace<R: kelpie_core::Runtime + 'static>(registry: &UnifiedToolRegistry, state: AppState<R>) {
     let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
         let state = state.clone();
         let input = input.clone();
@@ -184,7 +184,7 @@ async fn register_core_memory_replace(registry: &UnifiedToolRegistry, state: App
         .await;
 }
 
-async fn register_archival_memory_insert(registry: &UnifiedToolRegistry, state: AppState<TokioRuntime>) {
+async fn register_archival_memory_insert<R: kelpie_core::Runtime + 'static>(registry: &UnifiedToolRegistry, state: AppState<R>) {
     let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
         let state = state.clone();
         let input = input.clone();
@@ -232,7 +232,7 @@ async fn register_archival_memory_insert(registry: &UnifiedToolRegistry, state: 
         .await;
 }
 
-async fn register_archival_memory_search(registry: &UnifiedToolRegistry, state: AppState<TokioRuntime>) {
+async fn register_archival_memory_search<R: kelpie_core::Runtime + 'static>(registry: &UnifiedToolRegistry, state: AppState<R>) {
     let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
         let state = state.clone();
         let input = input.clone();
@@ -305,7 +305,7 @@ async fn register_archival_memory_search(registry: &UnifiedToolRegistry, state: 
         .await;
 }
 
-async fn register_conversation_search(registry: &UnifiedToolRegistry, state: AppState<TokioRuntime>) {
+async fn register_conversation_search<R: kelpie_core::Runtime + 'static>(registry: &UnifiedToolRegistry, state: AppState<R>) {
     let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
         let state = state.clone();
         let input = input.clone();
@@ -383,7 +383,7 @@ async fn register_conversation_search(registry: &UnifiedToolRegistry, state: App
         .await;
 }
 
-async fn register_conversation_search_date(registry: &UnifiedToolRegistry, state: AppState<TokioRuntime>) {
+async fn register_conversation_search_date<R: kelpie_core::Runtime + 'static>(registry: &UnifiedToolRegistry, state: AppState<R>) {
     let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
         let state = state.clone();
         let input = input.clone();

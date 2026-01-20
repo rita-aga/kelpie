@@ -477,7 +477,7 @@ async fn test_dst_web_search_missing_api_key() {
                 let prev_key = std::env::var("TAVILY_API_KEY").ok();
                 std::env::set_var("TAVILY_API_KEY", "");
 
-                state = AppState::new();
+                state = AppState::new(kelpie_core::TokioRuntime);
                 registry = state.tool_registry();
 
                 if let Some(prev) = prev_key {
@@ -512,7 +512,7 @@ async fn test_dst_run_code_unsupported_language() {
 
     let result = Simulation::new(config)
         .run_async(|_sim_env| async move {
-            let state = AppState::new();
+            let state = AppState::new(kelpie_core::TokioRuntime);
             let registry = state.tool_registry();
             register_run_code_tool(registry).await;
 

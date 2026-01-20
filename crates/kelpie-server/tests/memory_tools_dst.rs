@@ -861,6 +861,9 @@ async fn test_dst_memory_agent_isolation() {
 
 #[tokio::test]
 async fn test_dst_memory_concurrent_access() {
+    use kelpie_core::{Runtime, TokioRuntime};
+    let runtime = TokioRuntime;
+
     let seed = std::env::var("DST_SEED")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -874,7 +877,7 @@ async fn test_dst_memory_concurrent_access() {
     let mut handles = Vec::new();
     for i in 0..10 {
         let reg = registry.clone();
-        let handle = tokio::spawn(async move {
+        let handle = runtime.spawn(async move {
             reg.execute(
                 "core_memory_append",
                 &json!({

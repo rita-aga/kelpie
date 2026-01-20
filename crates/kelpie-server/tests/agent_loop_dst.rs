@@ -586,13 +586,15 @@ async fn test_dst_registry_concurrent_execution() {
 
     let result = Simulation::new(config)
         .run_async(|_env| async move {
+            use kelpie_core::{Runtime, TokioRuntime};
+            let runtime = TokioRuntime;
             let registry = Arc::new(create_registry_with_builtin(None).await);
 
             // Spawn multiple concurrent executions
             let mut handles = Vec::new();
             for i in 0..10 {
                 let reg = registry.clone();
-                let handle = tokio::spawn(async move {
+                let handle = runtime.spawn(async move {
                     let result = reg
                         .execute("echo", &json!({"message": format!("concurrent {}", i)}))
                         .await;
