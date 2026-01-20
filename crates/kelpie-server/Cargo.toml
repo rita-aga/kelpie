@@ -80,3 +80,7 @@ kelpie-tools = { workspace = true, features = ["dst"] }
 anyhow = { workspace = true }
 tokio-test = "0.4"
 mockito = "1.5"
+madsim = "0.2"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(madsim)'] }

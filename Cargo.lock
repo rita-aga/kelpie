@@ -2574,6 +2574,7 @@ dependencies = [
  "kelpie-storage",
  "kelpie-tools",
  "kelpie-vm",
+ "madsim",
  "mockito",
  "prometheus",
  "reqwest",
