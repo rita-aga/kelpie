@@ -220,7 +220,7 @@ impl AgentActor {
             role: MessageRole::User,
             content: request.content.clone(),
             tool_call_id: None,
-            tool_calls: None,
+            tool_call: None,
             created_at: chrono::Utc::now(),
         };
 
@@ -293,20 +293,7 @@ impl AgentActor {
         while !response.tool_calls.is_empty() && iterations < MAX_ITERATIONS {
             iterations += 1;
 
-            // Map LlmToolCall to ToolCall for message storage
-            let tool_calls_mapped = Some(
-                response
-                    .tool_calls
-                    .iter()
-                    .map(|tc| ToolCall {
-                        id: tc.id.clone(),
-                        name: tc.name.clone(),
-                        arguments: tc.input.clone(),
-                    })
-                    .collect(),
-            );
-
-            // Store assistant message with tool calls
+            // Store assistant message (without tool calls - those are separate messages in Letta format)
             let assistant_msg = Message {
                 id: uuid::Uuid::new_v4().to_string(),
                 agent_id: ctx.id.id().to_string(),
@@ -314,15 +301,31 @@ impl AgentActor {
                 role: MessageRole::Assistant,
                 content: response.content.clone(),
                 tool_call_id: None,
-                tool_calls: tool_calls_mapped,
+                tool_call: None,
                 created_at: chrono::Utc::now(),
             };
             ctx.state.add_message(assistant_msg);
 
-            // Execute each tool
+            // Execute each tool and create tool_call/tool_return messages per Letta format
             let mut tool_results = Vec::new();
             let mut should_break = false;
             for tool_call in &response.tool_calls {
+                // Create tool_call message for this specific tool
+                let tool_call_msg = Message {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    agent_id: ctx.id.id().to_string(),
+                    message_type: "tool_call_message".to_string(),
+                    role: MessageRole::Assistant,
+                    content: response.content.clone(),
+                    tool_call_id: None,
+                    tool_call: Some(ToolCall {
+                        id: tool_call.id.clone(),
+                        name: tool_call.name.clone(),
+                        arguments: tool_call.input.clone(),
+                    }),
+                    created_at: chrono::Utc::now(),
+                };
+                ctx.state.add_message(tool_call_msg);
                 let context = ToolExecutionContext {
                     agent_id: Some(ctx.id.id().to_string()),
                     project_id: agent.project_id.clone(),
@@ -342,7 +345,7 @@ impl AgentActor {
                     role: MessageRole::Tool,
                     content: result,
                     tool_call_id: Some(tool_call.id.clone()),
-                    tool_calls: None,
+                    tool_call: None,
                     created_at: chrono::Utc::now(),
                 };
                 ctx.state.add_message(tool_msg);
@@ -436,7 +439,7 @@ impl AgentActor {
             role: MessageRole::Assistant,
             content: final_content,
             tool_call_id: None,
-            tool_calls: None,
+            tool_call: None,
             created_at: chrono::Utc::now(),
         };
         ctx.state.add_message(assistant_msg);

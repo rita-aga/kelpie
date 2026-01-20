@@ -447,15 +447,13 @@ impl<R: kelpie_core::Runtime> AgentService<R> {
                 }));
             }
 
-            // Add tool calls if present
-            if let Some(tool_calls) = message.tool_calls {
-                for tool_call in tool_calls {
-                    chunks.push(Ok(StreamChunk::ToolCallStart {
-                        id: tool_call.id,
-                        name: tool_call.name,
-                        input: tool_call.arguments,
-                    }));
-                }
+            // Add tool call if present (Letta uses singular tool_call, not plural)
+            if let Some(tool_call) = message.tool_call {
+                chunks.push(Ok(StreamChunk::ToolCallStart {
+                    id: tool_call.id,
+                    name: tool_call.name,
+                    input: tool_call.arguments,
+                }));
             }
         }
 

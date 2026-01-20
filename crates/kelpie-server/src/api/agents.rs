@@ -189,6 +189,22 @@ async fn create_agent<R: Runtime + 'static>(
         tracing::warn!(agent_id = %created.id, error = %e, "failed to persist agent to storage");
     }
 
+    // Pre-load MCP tools into registry for actor-based message handling
+    if !created.tool_ids.is_empty() {
+        tracing::debug!(
+            agent_id = %created.id,
+            tool_count = created.tool_ids.len(),
+            "Pre-loading MCP tools at agent creation"
+        );
+
+        for tool_id in &created.tool_ids {
+            // Load MCP tool if it matches the pattern
+            if let Some(_tool_def) = super::messages::load_mcp_tool(&state, tool_id).await {
+                tracing::debug!(agent_id = %created.id, tool_id = %tool_id, "Loaded MCP tool into registry");
+            }
+        }
+    }
+
     tracing::info!(agent_id = %created.id, name = %created.name, block_count = created.blocks.len(), "created agent");
     Ok(Json(created))
 }

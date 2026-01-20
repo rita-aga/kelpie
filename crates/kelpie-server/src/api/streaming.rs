@@ -122,7 +122,7 @@ pub async fn send_message_stream<R: Runtime + 'static>(
         role: role.clone(),
         content: content.clone(),
         tool_call_id: request.tool_call_id.clone(),
-        tool_calls: None,
+        tool_call: None,
         created_at: Utc::now(),
     };
 
@@ -329,7 +329,7 @@ async fn generate_response_events<R: Runtime + 'static>(
                 role: MessageRole::Assistant,
                 content: final_content,
                 tool_call_id: None,
-                tool_calls: None,
+                tool_call: None,
                 created_at: Utc::now(),
             };
             let _ = state.add_message(agent_id, assistant_message);
@@ -461,7 +461,7 @@ async fn generate_streaming_response_events<R: Runtime + 'static>(
                                         role: MessageRole::Assistant,
                                         content: content_buf.clone(),
                                         tool_call_id: None,
-                                        tool_calls: None,
+                                        tool_call: None,
                                         created_at: Utc::now(),
                                     };
                                     let _ = state_ref.add_message(agent_id_ref, assistant_message);

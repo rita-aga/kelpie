@@ -552,8 +552,8 @@ pub struct Message {
     pub content: String,
     /// Tool call ID if this is a tool response
     pub tool_call_id: Option<String>,
-    /// Tool calls made by assistant
-    pub tool_calls: Option<Vec<ToolCall>>,
+    /// Single tool call made by assistant (Letta compatibility - singular, not plural)
+    pub tool_call: Option<ToolCall>,
     /// Creation timestamp
     #[serde(rename = "date")]
     pub created_at: DateTime<Utc>,
@@ -824,8 +824,8 @@ pub struct MessageImportData {
     pub content: String,
     /// Tool call ID if this is a tool response
     pub tool_call_id: Option<String>,
-    /// Tool calls made by assistant
-    pub tool_calls: Option<Vec<ToolCall>>,
+    /// Single tool call made by assistant (Letta compatibility)
+    pub tool_call: Option<ToolCall>,
 }
 
 /// Response from exporting an agent

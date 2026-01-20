@@ -172,7 +172,7 @@ fn import_messages<R: Runtime + 'static>(
             role: msg_data.role,
             content: msg_data.content,
             tool_call_id: msg_data.tool_call_id,
-            tool_calls: msg_data.tool_calls,
+            tool_call: msg_data.tool_call,
             created_at: Utc::now(),
         };
 

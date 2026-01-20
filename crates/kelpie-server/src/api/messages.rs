@@ -207,6 +207,7 @@ pub async fn handle_message_request<R: Runtime + 'static>(
     if let Some(service) = state.agent_service() {
         tracing::debug!(agent_id = %agent_id, "Using AgentService for message handling");
 
+        // Note: MCP tools are pre-loaded at agent creation time (see agents.rs)
         let response = service
             .send_message_full(&agent_id, content.clone())
             .await
@@ -237,7 +238,7 @@ pub async fn handle_message_request<R: Runtime + 'static>(
         role: role.clone(),
         content: content.clone(),
         tool_call_id: request.tool_call_id.clone(),
-        tool_calls: None,
+        tool_call: None,
         created_at: Utc::now(),
     };
 
@@ -423,8 +424,12 @@ pub async fn handle_message_request<R: Runtime + 'static>(
                         });
                     }
 
-                    // Create tool_call message for this iteration (before execution)
-                    if !server_tools.is_empty() {
+                    // Execute server-side tools only
+                    let mut tool_results = Vec::new();
+                    let mut should_break = false;
+
+                    for tool_call in &server_tools {
+                        // Create tool_call message for this specific tool (Letta expects one message per tool call)
                         let tool_call_msg = Message {
                             id: Uuid::new_v4().to_string(),
                             agent_id: agent_id.clone(),
@@ -432,23 +437,15 @@ pub async fn handle_message_request<R: Runtime + 'static>(
                             role: MessageRole::Assistant,
                             content: response.content.clone(),
                             tool_call_id: None,
-                            tool_calls: Some(
-                                response.tool_calls.iter().map(|tc| kelpie_server::models::ToolCall {
-                                    id: tc.id.clone(),
-                                    name: tc.name.clone(),
-                                    arguments: tc.input.clone(),
-                                }).collect()
-                            ),
+                            tool_call: Some(kelpie_server::models::ToolCall {
+                                id: tool_call.id.clone(),
+                                name: tool_call.name.clone(),
+                                arguments: tool_call.input.clone(),
+                            }),
                             created_at: Utc::now(),
                         };
                         all_intermediate_messages.push(tool_call_msg);
-                    }
 
-                    // Execute server-side tools only
-                    let mut tool_results = Vec::new();
-                    let mut should_break = false;
-
-                    for tool_call in &server_tools {
                         let context = crate::tools::ToolExecutionContext {
                             agent_id: Some(agent_id.clone()),
                             project_id: agent.project_id.clone(),
@@ -473,7 +470,7 @@ pub async fn handle_message_request<R: Runtime + 'static>(
                             role: MessageRole::Tool,
                             content: exec_result.output.clone(),
                             tool_call_id: Some(tool_call.id.clone()),
-                            tool_calls: None,
+                            tool_call: None,
                             created_at: Utc::now(),
                         };
                         all_intermediate_messages.push(tool_return_msg);
@@ -622,7 +619,7 @@ pub async fn handle_message_request<R: Runtime + 'static>(
         role: MessageRole::Assistant,
         content: response_content,
         tool_call_id: None,
-        tool_calls: None,
+        tool_call: None,
         created_at: Utc::now(),
     };
 
@@ -791,7 +788,7 @@ async fn send_message_streaming<R: Runtime + 'static>(
         role: role.clone(),
         content: content.clone(),
         tool_call_id: request.tool_call_id.clone(),
-        tool_calls: None,
+        tool_call: None,
         created_at: Utc::now(),
     };
 
@@ -1117,7 +1114,7 @@ async fn generate_sse_events<R: Runtime + 'static>(
                 role: MessageRole::Assistant,
                 content: final_content,
                 tool_call_id: None,
-                tool_calls: None,
+                tool_call: None,
                 created_at: Utc::now(),
             };
             let _ = state.add_message(agent_id, assistant_message);
@@ -1161,7 +1158,7 @@ async fn generate_sse_events<R: Runtime + 'static>(
 }
 
 /// Load an MCP tool by parsing its ID and discovering from the server
-async fn load_mcp_tool<R: Runtime + 'static>(
+pub async fn load_mcp_tool<R: Runtime + 'static>(
     state: &AppState<R>,
     tool_id: &str,
 ) -> Option<crate::llm::ToolDefinition> {
