@@ -206,7 +206,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Register builtin tools with the unified registry
-async fn register_builtin_tools(state: &AppState<TokioRuntime>) {
+async fn register_builtin_tools<R: kelpie_core::Runtime + 'static>(state: &AppState<R>) {
     let registry = state.tool_registry();
 
     // Register shell tool
