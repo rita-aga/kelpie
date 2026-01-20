@@ -483,7 +483,7 @@ fn test_memgpt_memory_tools_under_faults() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.3).with_filter("block_write"))
         .run(|env| async move {
-            let state = AppState::with_fault_injector(env.faults.clone());
+            let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, env.faults.clone());
             register_memory_tools(state.tool_registry(), state.clone()).await;
 
             // Create MemGPT agent
@@ -613,7 +613,7 @@ fn test_agent_types_determinism() {
                 FaultConfig::new(FaultType::StorageWriteFail, 0.5).with_filter("block_write"),
             )
             .run(|env| async move {
-                let state = AppState::with_fault_injector(env.faults.clone());
+                let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, env.faults.clone());
                 register_memory_tools(state.tool_registry(), state.clone()).await;
 
                 // Create all agent types

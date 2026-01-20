@@ -12,7 +12,7 @@
 #![cfg(feature = "dst")]
 
 use async_trait::async_trait;
-use kelpie_core::Result;
+use kelpie_core::{Result, Runtime, TokioRuntime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -122,7 +122,10 @@ impl LlmClient for SimLlmClientAdapter {
 }
 
 /// Create AgentService from simulation environment
-fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
+fn create_service<R: Runtime + 'static>(
+    runtime: R,
+    sim_env: &SimEnvironment,
+) -> Result<AgentService<R>> {
     let sim_llm = SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone());
     let llm_adapter: Arc<dyn LlmClient> = Arc::new(SimLlmClientAdapter {
         client: Arc::new(sim_llm),
@@ -132,11 +135,15 @@ fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
     let factory = Arc::new(CloneFactory::new(actor));
     let kv = Arc::new(sim_env.storage.clone());
 
-    let mut dispatcher =
-        Dispatcher::<AgentActor, AgentActorState>::new(factory, kv, DispatcherConfig::default());
+    let mut dispatcher = Dispatcher::<AgentActor, AgentActorState, _>::new(
+        factory,
+        kv,
+        DispatcherConfig::default(),
+        runtime.clone(),
+    );
     let handle = dispatcher.handle();
 
-    tokio::spawn(async move {
+    runtime.spawn(async move {
         dispatcher.run().await;
     });
 
@@ -156,7 +163,7 @@ async fn test_dst_agent_message_basic() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let service = create_service(TokioRuntime, &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -249,7 +256,7 @@ async fn test_dst_agent_message_with_tool_call() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let service = create_service(TokioRuntime, &sim_env)?;
 
             // Create agent with shell tool
             let request = CreateAgentRequest {
@@ -322,7 +329,7 @@ async fn test_dst_agent_message_with_storage_fault() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.3))
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let service = create_service(TokioRuntime, &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -391,7 +398,7 @@ async fn test_dst_agent_message_history() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let service = create_service(TokioRuntime, &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -466,7 +473,7 @@ async fn test_dst_agent_message_concurrent() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let service = create_service(TokioRuntime, &sim_env)?;
 
             // Create 5 agents with different names
             let mut agent_ids = Vec::new();

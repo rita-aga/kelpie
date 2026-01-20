@@ -65,7 +65,7 @@ fn test_message_write_fault_after_pause() {
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("message_write"))
         .run(|env| async move {
             // Create state with the simulation's fault injector
-            let state = AppState::with_fault_injector(env.faults.clone());
+            let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, env.faults.clone());
             let registry = state.tool_registry();
 
             // Register pause_heartbeats with simulated clock
@@ -136,7 +136,7 @@ fn test_block_read_fault_during_context_build() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 1.0).with_filter("block_read"))
         .run(|env| async move {
-            let state = AppState::with_fault_injector(env.faults.clone());
+            let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, env.faults.clone());
 
             // Create agent (works - block_read fault only affects reads)
             let agent = create_test_agent("test-agent");
@@ -178,7 +178,7 @@ fn test_probabilistic_faults_during_pause_flow() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.3).with_filter("message_write"))
         .run(|env| async move {
-            let state = AppState::with_fault_injector(env.faults.clone());
+            let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, env.faults.clone());
             let registry = state.tool_registry();
 
             let clock = env.clock.clone();
@@ -251,7 +251,7 @@ fn test_agent_write_fault() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("agent_write"))
         .run(|env| async move {
-            let state = AppState::with_fault_injector(env.faults.clone());
+            let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, env.faults.clone());
             let registry = state.tool_registry();
 
             let clock = env.clock.clone();
@@ -299,7 +299,7 @@ fn test_multiple_simultaneous_faults() {
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("message_write"))
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("agent_write"))
         .run(|env| async move {
-            let state = AppState::with_fault_injector(env.faults.clone());
+            let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, env.faults.clone());
             let registry = state.tool_registry();
 
             let clock = env.clock.clone();
@@ -366,7 +366,7 @@ fn test_fault_injection_determinism() {
                 FaultConfig::new(FaultType::StorageWriteFail, 0.5).with_filter("message_write"),
             )
             .run(|env| async move {
-                let state = AppState::with_fault_injector(env.faults.clone());
+                let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, env.faults.clone());
 
                 let agent = create_test_agent("test-agent");
                 let agent_id = agent.id.clone();
@@ -413,7 +413,7 @@ fn test_pause_tool_isolation_from_storage_faults() {
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0))
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 1.0))
         .run(|env| async move {
-            let state = AppState::with_fault_injector(env.faults.clone());
+            let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, env.faults.clone());
             let registry = state.tool_registry();
 
             let clock = env.clock.clone();

@@ -3,7 +3,7 @@
 //! TigerStyle: Tests the ACTUAL memory tools implementation with fault injection.
 //!
 //! These tests differ from memory_tools_dst.rs:
-//! - Use AppState::with_fault_injector() for real fault injection
+//! - Use AppState::with_fault_injector(kelpie_core::TokioRuntime, ) for real fault injection
 //! - Execute actual memory tools through UnifiedToolRegistry
 //! - Test concurrent access patterns to find race conditions
 //!
@@ -87,7 +87,7 @@ async fn test_core_memory_append_with_block_read_fault() {
             .build(),
     );
 
-    let state = AppState::with_fault_injector(fault_injector);
+    let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, fault_injector);
 
     // Create agent first (before faults are triggered)
     let agent = create_test_agent("test-agent");
@@ -133,7 +133,7 @@ async fn test_core_memory_append_with_block_write_fault() {
             .build(),
     );
 
-    let state = AppState::with_fault_injector(fault_injector);
+    let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, fault_injector);
 
     // Create agent with persona block
     let agent = create_test_agent("test-agent");
@@ -175,7 +175,7 @@ async fn test_core_memory_replace_with_read_fault() {
             .build(),
     );
 
-    let state = AppState::with_fault_injector(fault_injector);
+    let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, fault_injector);
 
     // Create agent
     let agent = create_test_agent("test-agent");
@@ -220,7 +220,7 @@ async fn test_archival_memory_insert_with_write_fault() {
             .build(),
     );
 
-    let state = AppState::with_fault_injector(fault_injector);
+    let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, fault_injector);
 
     // Create agent
     let agent = create_test_agent("test-agent");
@@ -263,7 +263,7 @@ async fn test_archival_memory_search_with_read_fault() {
             .build(),
     );
 
-    let state = AppState::with_fault_injector(fault_injector);
+    let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, fault_injector);
 
     // Create agent
     let agent = create_test_agent("test-agent");
@@ -306,7 +306,7 @@ async fn test_conversation_search_with_read_fault() {
             .build(),
     );
 
-    let state = AppState::with_fault_injector(fault_injector);
+    let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, fault_injector);
 
     // Create agent
     let agent = create_test_agent("test-agent");
@@ -354,7 +354,7 @@ async fn test_memory_operations_with_probabilistic_faults() {
             .build(),
     );
 
-    let state = AppState::with_fault_injector(fault_injector);
+    let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, fault_injector);
 
     // Create agent
     let agent = create_test_agent("test-agent");
@@ -433,7 +433,7 @@ async fn test_core_memory_append_toctou_race() {
         // No faults - we're testing the race condition itself
         let fault_injector = Arc::new(FaultInjectorBuilder::new(rng).build());
 
-        let state = AppState::with_fault_injector(fault_injector);
+        let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, fault_injector);
 
         // Create agent without the "facts" block
         let agent = create_test_agent("race-test-agent");
@@ -521,7 +521,7 @@ async fn test_memory_tools_recovery_after_fault() {
             .build(),
     );
 
-    let state = AppState::with_fault_injector(fault_injector);
+    let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, fault_injector);
 
     // Create agent
     let agent = create_test_agent("recovery-test");
@@ -605,7 +605,7 @@ async fn test_full_memory_workflow_under_faults() {
             .build(),
     );
 
-    let state = AppState::with_fault_injector(fault_injector);
+    let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, fault_injector);
 
     // Create agent
     let agent = create_test_agent("workflow-test");

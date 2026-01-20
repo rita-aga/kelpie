@@ -391,13 +391,14 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
 
     /// Create server state with fault injector for DST testing
     #[cfg(feature = "dst")]
-    pub fn with_fault_injector(fault_injector: Arc<FaultInjector>) -> Self {
+    pub fn with_fault_injector(runtime: R, fault_injector: Arc<FaultInjector>) -> Self {
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
 
         Self {
             inner: Arc::new(AppStateInner {
                 agent_service: None,
                 dispatcher: None,
+                runtime,
                 shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
