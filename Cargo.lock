@@ -2436,6 +2436,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "madsim",
  "once_cell",
  "opentelemetry",
  "opentelemetry-otlp",

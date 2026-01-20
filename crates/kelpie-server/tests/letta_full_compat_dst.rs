@@ -98,7 +98,7 @@ async fn test_dst_summarization_with_llm_faults() {
                 max_tokens: 128,
             };
             let llm = LlmClient::with_http_client(llm_config, sim_http);
-            let state = AppState::with_llm(llm);
+            let state = AppState::with_llm(kelpie_core::current_runtime(), llm);
 
             let agent = state
                 .create_agent_async(CreateAgentRequest {
@@ -178,7 +178,7 @@ async fn test_dst_scheduling_job_write_fault() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("job_write"))
         .run_async(|_sim_env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, _sim_env.faults.clone());
+            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), _sim_env.faults.clone());
             let app = api::router(state);
 
             let response = app
@@ -221,7 +221,7 @@ async fn test_dst_projects_write_fault() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("project_write"))
         .run_async(|sim_env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, sim_env.faults.clone());
+            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), sim_env.faults.clone());
             let app = api::router(state);
 
             let response = app
@@ -260,7 +260,7 @@ async fn test_dst_batch_status_write_fault() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("batch_write"))
         .run_async(|sim_env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, sim_env.faults.clone());
+            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), sim_env.faults.clone());
             let app = api::router(state);
 
             let response = app
@@ -304,7 +304,7 @@ async fn test_dst_agent_group_write_fault() {
             FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("agent_group_write"),
         )
         .run_async(|sim_env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, sim_env.faults.clone());
+            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), sim_env.faults.clone());
             let app = api::router(state);
 
             let response = app
@@ -346,7 +346,11 @@ async fn test_dst_custom_tool_storage_fault() {
         .run_async(|sim_env| async move {
             let adapter = KvAdapter::with_dst_storage(sim_env.rng.fork(), sim_env.faults.clone());
             let storage = Arc::new(adapter);
-            let state = AppState::with_storage_and_faults(storage, sim_env.faults.clone());
+            let state = AppState::with_storage_and_faults(
+                kelpie_core::current_runtime(),
+                storage,
+                sim_env.faults.clone()
+            );
 
             let result = state
                 .register_tool(
@@ -374,7 +378,7 @@ async fn test_dst_conversation_search_date_with_faults() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.5).with_filter("message_read"))
         .run_async(|sim_env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, sim_env.faults.clone());
+            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), sim_env.faults.clone());
             let registry = state.tool_registry();
             register_memory_tools(registry, state.clone()).await;
 
@@ -477,7 +481,7 @@ async fn test_dst_web_search_missing_api_key() {
                 let prev_key = std::env::var("TAVILY_API_KEY").ok();
                 std::env::set_var("TAVILY_API_KEY", "");
 
-                state = AppState::new(kelpie_core::TokioRuntime);
+                state = AppState::new(kelpie_core::current_runtime());
                 registry = state.tool_registry();
 
                 if let Some(prev) = prev_key {
@@ -512,7 +516,7 @@ async fn test_dst_run_code_unsupported_language() {
 
     let result = Simulation::new(config)
         .run_async(|_sim_env| async move {
-            let state = AppState::new(kelpie_core::TokioRuntime);
+            let state = AppState::new(kelpie_core::current_runtime());
             let registry = state.tool_registry();
             register_run_code_tool(registry).await;
 
@@ -543,7 +547,7 @@ async fn test_dst_export_with_message_read_fault() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 1.0).with_filter("message_read"))
         .run_async(|sim_env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, sim_env.faults.clone());
+            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), sim_env.faults.clone());
             let agent = state
                 .create_agent_async(CreateAgentRequest {
                     name: "export-fault-agent".to_string(),
@@ -632,7 +636,7 @@ async fn test_dst_import_with_message_write_fault() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("message_write"))
         .run_async(|sim_env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::TokioRuntime, sim_env.faults.clone());
+            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), sim_env.faults.clone());
             let app = api::router(state);
 
             let response = app

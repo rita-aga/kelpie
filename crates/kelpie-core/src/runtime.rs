@@ -232,6 +232,56 @@ impl Runtime for MadsimRuntime {
     }
 }
 
+// =============================================================================
+// Runtime Factory
+// =============================================================================
+
+/// Type alias for the current runtime
+///
+/// Resolves to MadsimRuntime when madsim feature is enabled (deterministic testing),
+/// TokioRuntime otherwise (production).
+///
+/// Use this for generic type parameters like `AgentService<CurrentRuntime>`.
+#[cfg(madsim)]
+pub type CurrentRuntime = MadsimRuntime;
+
+/// Type alias for the current runtime (TokioRuntime variant)
+#[cfg(not(madsim))]
+pub type CurrentRuntime = TokioRuntime;
+
+/// Get the current runtime instance
+///
+/// Returns MadsimRuntime when madsim feature is enabled (for deterministic testing),
+/// TokioRuntime otherwise (for production).
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use kelpie_core::runtime::{Runtime, current_runtime};
+///
+/// async fn my_function() {
+///     let runtime = current_runtime();
+///     runtime.sleep(std::time::Duration::from_millis(100)).await;
+/// }
+/// ```
+///
+/// # Testing
+///
+/// Run tests with madsim enabled for deterministic behavior:
+/// ```bash
+/// cargo test --features madsim
+/// ```
+#[cfg(madsim)]
+pub fn current_runtime() -> MadsimRuntime {
+    MadsimRuntime
+}
+
+/// Get the current runtime instance (TokioRuntime variant)
+#[cfg(not(madsim))]
+pub fn current_runtime() -> TokioRuntime {
+    TokioRuntime
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

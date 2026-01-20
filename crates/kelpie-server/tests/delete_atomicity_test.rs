@@ -341,7 +341,8 @@ impl LlmClient for SimLlmClientAdapter {
     }
 }
 
-fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
+fn create_service(sim_env: &SimEnvironment) -> Result<AgentService<kelpie_core::CurrentRuntime>> {
+    use kelpie_core::Runtime;
     let sim_llm = SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone());
     let llm_adapter: Arc<dyn LlmClient> = Arc::new(SimLlmClientAdapter {
         client: Arc::new(sim_llm),
@@ -350,9 +351,14 @@ fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
     let factory = Arc::new(CloneFactory::new(actor));
     let kv = Arc::new(sim_env.storage.clone());
     let mut dispatcher =
-        Dispatcher::<AgentActor, AgentActorState>::new(factory, kv, DispatcherConfig::default());
+        Dispatcher::<AgentActor, AgentActorState, kelpie_core::CurrentRuntime>::new(
+            factory,
+            kv,
+            DispatcherConfig::default(),
+            kelpie_core::current_runtime()
+        );
     let handle = dispatcher.handle();
-    tokio::spawn(async move {
+    kelpie_core::current_runtime().spawn(async move {
         dispatcher.run().await;
     });
     Ok(AgentService::new(handle))
