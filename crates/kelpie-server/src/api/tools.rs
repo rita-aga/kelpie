@@ -9,6 +9,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use kelpie_core::TokioRuntime;
 use kelpie_server::state::{AppState, ToolInfo};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -180,7 +181,7 @@ pub struct ExecuteToolResponse {
 }
 
 /// Create the tools router
-pub fn router() -> Router<AppState> {
+pub fn router() -> Router<AppState<TokioRuntime>> {
     Router::new()
         .route("/", get(list_tools).post(register_tool).put(upsert_tool))
         .route(
@@ -200,7 +201,7 @@ pub fn router() -> Router<AppState> {
 /// GET /v1/tools?id=<id>
 #[instrument(skip(state), level = "info")]
 async fn list_tools(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Query(query): Query<ListToolsQuery>,
 ) -> Json<ToolListResponse> {
     // Debug: Log the query parameters received
@@ -296,7 +297,7 @@ fn extract_function_name(source: &str) -> Option<String> {
 /// Name can be provided explicitly or extracted from source_code.
 #[instrument(skip(state, request), level = "info")]
 async fn upsert_tool(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Json(request): Json<UpsertToolRequest>,
 ) -> Result<Json<ToolResponse>, ApiError> {
     // Determine source code first (needed for name extraction)
@@ -429,7 +430,7 @@ async fn upsert_tool(
 /// PATCH /v1/tools/:name_or_id
 #[instrument(skip(state, request), fields(name_or_id = %name_or_id), level = "info")]
 async fn update_tool(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(name_or_id): Path<String>,
     Json(request): Json<UpsertToolRequest>,
 ) -> Result<Json<ToolResponse>, ApiError> {
@@ -485,7 +486,7 @@ async fn update_tool(
 /// POST /v1/tools
 #[instrument(skip(state, request), level = "info")]
 async fn register_tool(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Json(request): Json<RegisterToolRequest>,
 ) -> Result<Json<ToolResponse>, ApiError> {
     let source_code = request.source_code.or(request.source);
@@ -594,7 +595,7 @@ async fn register_tool(
 /// Get a specific tool by name or ID
 #[instrument(skip(state), fields(name_or_id = %name_or_id), level = "info")]
 async fn get_tool(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(name_or_id): Path<String>,
 ) -> Result<Json<ToolResponse>, ApiError> {
     // Try by ID first (if it looks like a UUID)
@@ -616,7 +617,7 @@ async fn get_tool(
 /// Delete a tool by name or ID
 #[instrument(skip(state), fields(name_or_id = %name_or_id), level = "info")]
 async fn delete_tool(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(name_or_id): Path<String>,
 ) -> Result<(), ApiError> {
     // Resolve ID to name if needed
@@ -642,7 +643,7 @@ async fn delete_tool(
 /// Execute a tool
 #[instrument(skip(state, request), fields(name = %name), level = "info")]
 async fn execute_tool(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(name): Path<String>,
     Json(request): Json<ExecuteToolRequest>,
 ) -> Result<Json<ExecuteToolResponse>, ApiError> {
@@ -669,11 +670,12 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
-    use kelpie_server::state::AppState;
+    use kelpie_core::TokioRuntime;
+use kelpie_server::state::AppState;
     use tower::ServiceExt;
 
     async fn test_app() -> Router {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         api::router(state)
     }
 

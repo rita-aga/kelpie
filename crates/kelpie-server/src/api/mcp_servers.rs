@@ -10,6 +10,7 @@ use axum::{
     Json, Router,
 };
 use kelpie_server::models::{MCPServer, MCPServerConfig};
+use kelpie_core::TokioRuntime;
 use kelpie_server::state::AppState;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -54,7 +55,7 @@ impl From<MCPServer> for MCPServerResponse {
 }
 
 /// Create router for MCP servers endpoints
-pub fn router() -> Router<AppState> {
+pub fn router() -> Router<AppState<TokioRuntime>> {
     Router::new()
         .route("/", get(list_servers).post(create_server))
         .route(
@@ -73,7 +74,7 @@ pub fn router() -> Router<AppState> {
 ///
 /// GET /v1/mcp-servers/
 #[instrument(skip(state), level = "info")]
-async fn list_servers(State(state): State<AppState>) -> Json<Vec<MCPServerResponse>> {
+async fn list_servers(State(state): State<AppState<TokioRuntime>>) -> Json<Vec<MCPServerResponse>> {
     let servers = state.list_mcp_servers().await;
     let items: Vec<MCPServerResponse> = servers.into_iter().map(MCPServerResponse::from).collect();
 
@@ -85,7 +86,7 @@ async fn list_servers(State(state): State<AppState>) -> Json<Vec<MCPServerRespon
 /// POST /v1/mcp-servers/
 #[instrument(skip(state, request), level = "info")]
 async fn create_server(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Json(request): Json<CreateMCPServerRequest>,
 ) -> Result<Json<MCPServerResponse>, ApiError> {
     // Validate server name
@@ -115,7 +116,7 @@ async fn create_server(
 /// GET /v1/mcp-servers/{server_id}
 #[instrument(skip(state), fields(server_id = %server_id), level = "info")]
 async fn get_server(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(server_id): Path<String>,
 ) -> Result<Json<MCPServerResponse>, ApiError> {
     let server = state
@@ -131,7 +132,7 @@ async fn get_server(
 /// PUT/PATCH /v1/mcp-servers/{server_id}
 #[instrument(skip(state, request), fields(server_id = %server_id), level = "info")]
 async fn update_server(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(server_id): Path<String>,
     Json(request): Json<UpdateMCPServerRequest>,
 ) -> Result<Json<MCPServerResponse>, ApiError> {
@@ -153,7 +154,7 @@ async fn update_server(
 /// DELETE /v1/mcp-servers/{server_id}
 #[instrument(skip(state), fields(server_id = %server_id), level = "info")]
 async fn delete_server(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(server_id): Path<String>,
 ) -> Result<(), ApiError> {
     state
@@ -174,7 +175,7 @@ async fn delete_server(
 /// GET /v1/mcp-servers/{server_id}/tools
 #[instrument(skip(state), fields(server_id = %server_id), level = "info")]
 async fn list_server_tools(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(server_id): Path<String>,
 ) -> Result<Json<Vec<super::tools::ToolResponse>>, ApiError> {
     // Discover tools from the MCP server (returns JSON Values)
@@ -204,7 +205,7 @@ async fn list_server_tools(
 /// GET /v1/mcp-servers/{server_id}/tools/{tool_id}
 #[instrument(skip(state), fields(server_id = %server_id, tool_id = %tool_id), level = "info")]
 async fn get_server_tool(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path((server_id, tool_id)): Path<(String, String)>,
 ) -> Result<Json<super::tools::ToolResponse>, ApiError> {
     // Discover tools from the MCP server (returns JSON Values)
@@ -250,7 +251,7 @@ fn default_arguments() -> serde_json::Value {
 /// POST /v1/mcp-servers/{server_id}/tools/{tool_id}/run
 #[instrument(skip(state, request), fields(server_id = %server_id, tool_id = %tool_id), level = "info")]
 async fn run_server_tool(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path((server_id, tool_id)): Path<(String, String)>,
     Json(request): Json<RunToolRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -283,11 +284,12 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
-    use kelpie_server::state::AppState;
+    use kelpie_core::TokioRuntime;
+use kelpie_server::state::AppState;
     use tower::ServiceExt;
 
     async fn test_app() -> Router {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         api_router(state)
     }
 

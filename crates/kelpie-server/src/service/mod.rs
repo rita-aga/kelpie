@@ -27,14 +27,14 @@ use tokio::sync::mpsc;
 ///
 /// TigerStyle: Clean abstraction, explicit error handling, testable.
 #[derive(Clone)]
-pub struct AgentService {
+pub struct AgentService<R: kelpie_core::Runtime> {
     /// Dispatcher handle for actor invocations
-    dispatcher: DispatcherHandle,
+    dispatcher: DispatcherHandle<R>,
 }
 
-impl AgentService {
+impl<R: kelpie_core::Runtime> AgentService<R> {
     /// Create a new AgentService
-    pub fn new(dispatcher: DispatcherHandle) -> Self {
+    pub fn new(dispatcher: DispatcherHandle<R>) -> Self {
         Self { dispatcher }
     }
 

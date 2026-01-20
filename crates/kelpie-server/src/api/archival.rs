@@ -8,6 +8,7 @@ use axum::{
     Json,
 };
 use kelpie_server::models::ArchivalEntry;
+use kelpie_core::TokioRuntime;
 use kelpie_server::state::AppState;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -56,7 +57,7 @@ pub struct AddArchivalRequest {
 /// Search archival memory
 #[instrument(skip(state, query), fields(agent_id = %agent_id, query = ?query.q, limit = query.limit), level = "info")]
 pub async fn search_archival(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(agent_id): Path<String>,
     Query(query): Query<ArchivalSearchQuery>,
 ) -> Result<Json<ArchivalListResponse>, ApiError> {
@@ -80,7 +81,7 @@ pub async fn search_archival(
 /// Add entry to archival memory
 #[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
 pub async fn add_archival(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(agent_id): Path<String>,
     Json(request): Json<AddArchivalRequest>,
 ) -> Result<Json<ArchivalEntry>, ApiError> {
@@ -109,7 +110,7 @@ pub async fn add_archival(
 /// Get a specific archival entry
 #[instrument(skip(state), fields(agent_id = %agent_id, entry_id = %entry_id), level = "info")]
 pub async fn get_archival_entry(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path((agent_id, entry_id)): Path<(String, String)>,
 ) -> Result<Json<ArchivalEntry>, ApiError> {
     // Verify agent exists
@@ -127,7 +128,7 @@ pub async fn get_archival_entry(
 /// Delete an archival entry
 #[instrument(skip(state), fields(agent_id = %agent_id, entry_id = %entry_id), level = "info")]
 pub async fn delete_archival_entry(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path((agent_id, entry_id)): Path<(String, String)>,
 ) -> Result<(), ApiError> {
     // Verify agent exists
@@ -149,11 +150,12 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
-    use kelpie_server::state::AppState;
+    use kelpie_core::TokioRuntime;
+use kelpie_server::state::AppState;
     use tower::ServiceExt;
 
     async fn test_app_with_agent() -> (Router, String) {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
 
         // Create agent
         let body = serde_json::json!({

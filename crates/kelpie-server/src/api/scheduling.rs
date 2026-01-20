@@ -9,6 +9,7 @@ use crate::api::ApiError;
 use axum::{extract::Path, extract::Query, routing::get, Router};
 use axum::{extract::State, Json};
 use kelpie_server::models::{CreateJobRequest, Job, UpdateJobRequest};
+use kelpie_core::TokioRuntime;
 use kelpie_server::state::AppState;
 use serde::Deserialize;
 use tracing::instrument;
@@ -18,7 +19,7 @@ const JOBS_PER_AGENT_MAX: usize = 100;
 const SCHEDULE_PATTERN_LENGTH_MAX: usize = 256;
 
 /// Create scheduling routes
-pub fn router() -> Router<AppState> {
+pub fn router() -> Router<AppState<TokioRuntime>> {
     Router::new()
         .route("/jobs", get(list_jobs).post(create_job))
         .route(
@@ -32,7 +33,7 @@ pub fn router() -> Router<AppState> {
 /// POST /v1/jobs
 #[instrument(skip(state, request), fields(agent_id = %request.agent_id, action = ?request.action), level = "info")]
 async fn create_job(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Json(request): Json<CreateJobRequest>,
 ) -> Result<Json<Job>, ApiError> {
     // Validate agent exists
@@ -83,7 +84,7 @@ async fn create_job(
 /// GET /v1/jobs/{job_id}
 #[instrument(skip(state), fields(job_id = %job_id), level = "info")]
 async fn get_job(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(job_id): Path<String>,
 ) -> Result<Json<Job>, ApiError> {
     let job = state
@@ -98,7 +99,7 @@ async fn get_job(
 /// GET /v1/jobs?agent_id={agent_id}
 #[instrument(skip(state, query), fields(agent_id = ?query.agent_id), level = "info")]
 async fn list_jobs(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Query(query): Query<ListJobsQuery>,
 ) -> Result<Json<Vec<Job>>, ApiError> {
     let jobs = state.list_all_jobs(query.agent_id.as_deref())?;
@@ -118,7 +119,7 @@ struct ListJobsQuery {
 /// PATCH /v1/jobs/{job_id}
 #[instrument(skip(state, request), fields(job_id = %job_id), level = "info")]
 async fn update_job(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(job_id): Path<String>,
     Json(request): Json<UpdateJobRequest>,
 ) -> Result<Json<Job>, ApiError> {
@@ -143,7 +144,7 @@ async fn update_job(
 /// DELETE /v1/jobs/{job_id}
 #[instrument(skip(state), fields(job_id = %job_id), level = "info")]
 async fn delete_job(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(job_id): Path<String>,
 ) -> Result<(), ApiError> {
     state.delete_job(&job_id)?;
@@ -165,7 +166,7 @@ mod tests {
 
     /// Create test app
     async fn test_app() -> Router {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         api::router(state)
     }
 

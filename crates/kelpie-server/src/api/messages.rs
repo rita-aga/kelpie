@@ -18,6 +18,7 @@ use kelpie_server::models::{
     ApprovalRequest, BatchMessagesRequest, BatchStatus, ClientTool, CreateMessageRequest, Message,
     MessageResponse, MessageRole, UsageStats,
 };
+use kelpie_core::TokioRuntime;
 use kelpie_server::state::AppState;
 use kelpie_server::tools::{parse_pause_signal, ToolSignal, AGENT_LOOP_ITERATIONS_MAX};
 use serde::{Deserialize, Serialize};
@@ -118,7 +119,7 @@ struct StopReasonEvent {
 async fn tool_requires_approval(
     tool_name: &str,
     client_tools: &[ClientTool],
-    state: &AppState,
+    state: &AppState<TokioRuntime>,
 ) -> bool {
     // Check if tool is in client_tools array from request
     if client_tools.iter().any(|ct| ct.name == tool_name) {
@@ -140,7 +141,7 @@ async fn tool_requires_approval(
 /// GET /v1/agents/{agent_id}/messages
 #[instrument(skip(state, query), fields(agent_id = %agent_id, limit = query.limit), level = "info")]
 pub async fn list_messages(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(agent_id): Path<String>,
     Query(query): Query<ListMessagesQuery>,
 ) -> Result<Json<Vec<Message>>, ApiError> {
@@ -160,7 +161,7 @@ pub async fn list_messages(
 /// OR when streaming=true is passed in the request body (Letta SDK compatibility).
 #[instrument(skip(state, query, request), fields(agent_id = %agent_id), level = "info")]
 pub async fn send_message(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(agent_id): Path<String>,
     Query(query): Query<SendMessageQuery>,
     Json(request): Json<CreateMessageRequest>,
@@ -183,7 +184,7 @@ pub async fn send_message(
 /// Send a message with JSON response (non-streaming)
 #[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
 async fn send_message_json(
-    state: AppState,
+    state: AppState<TokioRuntime>,
     agent_id: String,
     request: CreateMessageRequest,
 ) -> Result<Response, ApiError> {
@@ -193,7 +194,7 @@ async fn send_message_json(
 
 /// Shared handler for message processing (non-streaming)
 pub async fn handle_message_request(
-    state: AppState,
+    state: AppState<TokioRuntime>,
     agent_id: String,
     request: CreateMessageRequest,
 ) -> Result<MessageResponse, ApiError> {
@@ -583,7 +584,7 @@ pub async fn handle_message_request(
 /// Send a batch of messages
 #[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
 pub async fn send_messages_batch(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(agent_id): Path<String>,
     Json(request): Json<BatchMessagesRequest>,
 ) -> Result<Json<BatchStatus>, ApiError> {
@@ -665,7 +666,7 @@ pub async fn send_messages_batch(
 /// Get batch status
 #[instrument(skip(state), fields(agent_id = %agent_id, batch_id = %batch_id), level = "info")]
 pub async fn get_batch_status(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path((agent_id, batch_id)): Path<(String, String)>,
 ) -> Result<Json<BatchStatus>, ApiError> {
     let status = state
@@ -682,7 +683,7 @@ pub async fn get_batch_status(
 /// Send a message with SSE streaming response
 #[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
 async fn send_message_streaming(
-    state: AppState,
+    state: AppState<TokioRuntime>,
     agent_id: String,
     request: CreateMessageRequest,
 ) -> Result<Response, ApiError> {
@@ -755,7 +756,7 @@ async fn send_message_streaming(
     level = "debug"
 )]
 async fn generate_sse_events(
-    state: &AppState,
+    state: &AppState<TokioRuntime>,
     agent_id: &str,
     agent: &kelpie_server::models::AgentState,
     llm: &crate::llm::LlmClient,
@@ -1093,11 +1094,12 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use axum::Router;
     use kelpie_server::models::AgentState;
-    use kelpie_server::state::AppState;
+    use kelpie_core::TokioRuntime;
+use kelpie_server::state::AppState;
     use tower::ServiceExt;
 
     async fn test_app_with_agent() -> (Router, String) {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
 
         // Create agent
         let body = serde_json::json!({

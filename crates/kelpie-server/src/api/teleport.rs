@@ -15,13 +15,14 @@ use axum::{
     routing::{delete, get},
     Json, Router,
 };
+use kelpie_core::TokioRuntime;
 use kelpie_server::state::AppState;
 use serde::Serialize;
 
 use super::ApiError;
 
 /// Create the teleport router
-pub fn router() -> Router<AppState> {
+pub fn router() -> Router<AppState<TokioRuntime>> {
     Router::new()
         // Package management
         .route("/packages", get(list_packages))
@@ -89,7 +90,7 @@ async fn teleport_info() -> Json<TeleportInfoResponse> {
 /// List all teleport packages
 ///
 /// GET /v1/teleport/packages
-async fn list_packages(State(_state): State<AppState>) -> Json<ListPackagesResponse> {
+async fn list_packages(State(_state): State<AppState<TokioRuntime>>) -> Json<ListPackagesResponse> {
     // TODO: When teleport storage is added to AppState, query actual packages
     // For now, return empty list
     Json(ListPackagesResponse {
@@ -102,7 +103,7 @@ async fn list_packages(State(_state): State<AppState>) -> Json<ListPackagesRespo
 ///
 /// GET /v1/teleport/packages/:package_id
 async fn get_package(
-    State(_state): State<AppState>,
+    State(_state): State<AppState<TokioRuntime>>,
     Path(package_id): Path<String>,
 ) -> Result<Json<PackageResponse>, ApiError> {
     // TODO: When teleport storage is added to AppState, query actual package
@@ -114,7 +115,7 @@ async fn get_package(
 ///
 /// DELETE /v1/teleport/packages/:package_id
 async fn delete_package(
-    State(_state): State<AppState>,
+    State(_state): State<AppState<TokioRuntime>>,
     Path(package_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // TODO: When teleport storage is added to AppState, delete actual package
@@ -130,7 +131,7 @@ mod tests {
     use tower::ServiceExt;
 
     fn test_app() -> Router {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         Router::new()
             .nest("/v1/teleport", router())
             .with_state(state)

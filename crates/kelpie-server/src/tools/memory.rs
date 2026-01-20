@@ -11,11 +11,12 @@
 
 use crate::state::AppState;
 use crate::tools::{BuiltinToolHandler, UnifiedToolRegistry};
+use kelpie_core::TokioRuntime;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
 /// Register all memory tools with the unified registry
-pub async fn register_memory_tools(registry: &UnifiedToolRegistry, state: AppState) {
+pub async fn register_memory_tools(registry: &UnifiedToolRegistry, state: AppState<TokioRuntime>) {
     // core_memory_append
     register_core_memory_append(registry, state.clone()).await;
 
@@ -39,7 +40,7 @@ pub async fn register_memory_tools(registry: &UnifiedToolRegistry, state: AppSta
     );
 }
 
-async fn register_core_memory_append(registry: &UnifiedToolRegistry, state: AppState) {
+async fn register_core_memory_append(registry: &UnifiedToolRegistry, state: AppState<TokioRuntime>) {
     let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
         let state = state.clone();
         let input = input.clone();
@@ -101,7 +102,7 @@ async fn register_core_memory_append(registry: &UnifiedToolRegistry, state: AppS
         .await;
 }
 
-async fn register_core_memory_replace(registry: &UnifiedToolRegistry, state: AppState) {
+async fn register_core_memory_replace(registry: &UnifiedToolRegistry, state: AppState<TokioRuntime>) {
     let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
         let state = state.clone();
         let input = input.clone();
@@ -183,7 +184,7 @@ async fn register_core_memory_replace(registry: &UnifiedToolRegistry, state: App
         .await;
 }
 
-async fn register_archival_memory_insert(registry: &UnifiedToolRegistry, state: AppState) {
+async fn register_archival_memory_insert(registry: &UnifiedToolRegistry, state: AppState<TokioRuntime>) {
     let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
         let state = state.clone();
         let input = input.clone();
@@ -231,7 +232,7 @@ async fn register_archival_memory_insert(registry: &UnifiedToolRegistry, state: 
         .await;
 }
 
-async fn register_archival_memory_search(registry: &UnifiedToolRegistry, state: AppState) {
+async fn register_archival_memory_search(registry: &UnifiedToolRegistry, state: AppState<TokioRuntime>) {
     let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
         let state = state.clone();
         let input = input.clone();
@@ -304,7 +305,7 @@ async fn register_archival_memory_search(registry: &UnifiedToolRegistry, state: 
         .await;
 }
 
-async fn register_conversation_search(registry: &UnifiedToolRegistry, state: AppState) {
+async fn register_conversation_search(registry: &UnifiedToolRegistry, state: AppState<TokioRuntime>) {
     let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
         let state = state.clone();
         let input = input.clone();
@@ -382,7 +383,7 @@ async fn register_conversation_search(registry: &UnifiedToolRegistry, state: App
         .await;
 }
 
-async fn register_conversation_search_date(registry: &UnifiedToolRegistry, state: AppState) {
+async fn register_conversation_search_date(registry: &UnifiedToolRegistry, state: AppState<TokioRuntime>) {
     let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
         let state = state.clone();
         let input = input.clone();
@@ -596,7 +597,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_memory_tools_registration() {
-        let state = AppState::new();
+        let state = AppState::new(TokioRuntime);
         let registry = state.tool_registry();
 
         register_memory_tools(registry, state.clone()).await;
@@ -611,7 +612,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_core_memory_append_integration() {
-        let state = AppState::new();
+        let state = AppState::new(TokioRuntime);
 
         // Create agent
         let agent = create_test_agent("test-agent");
@@ -645,7 +646,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_core_memory_replace_integration() {
-        let state = AppState::new();
+        let state = AppState::new(TokioRuntime);
 
         // Create agent with existing block
         let agent = create_test_agent("test-agent");
@@ -682,7 +683,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_archival_memory_integration() {
-        let state = AppState::new();
+        let state = AppState::new(TokioRuntime);
 
         // Create agent
         let agent = create_test_agent("test-agent");
@@ -776,7 +777,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_conversation_search_date() {
-        let state = AppState::new();
+        let state = AppState::new(TokioRuntime);
 
         // Create agent
         let agent = create_test_agent("test-agent");
@@ -811,7 +812,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_conversation_search_date_unix_timestamp() {
-        let state = AppState::new();
+        let state = AppState::new(TokioRuntime);
 
         // Create agent
         let agent = create_test_agent("test-agent");
@@ -840,7 +841,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_conversation_search_date_invalid_range() {
-        let state = AppState::new();
+        let state = AppState::new(TokioRuntime);
 
         // Create agent
         let agent = create_test_agent("test-agent");
@@ -872,7 +873,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_conversation_search_date_invalid_format() {
-        let state = AppState::new();
+        let state = AppState::new(TokioRuntime);
 
         // Create agent
         let agent = create_test_agent("test-agent");
@@ -901,7 +902,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_conversation_search_date_missing_params() {
-        let state = AppState::new();
+        let state = AppState::new(TokioRuntime);
         let registry = state.tool_registry();
         register_memory_tools(registry, state.clone()).await;
 

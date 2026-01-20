@@ -5,6 +5,7 @@
 pub mod agent_groups;
 pub mod agents;
 pub mod groups;
+pub mod identities;
 pub mod archival;
 pub mod blocks;
 pub mod import_export;
@@ -25,6 +26,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use kelpie_core::TokioRuntime;
 use kelpie_server::models::{ErrorResponse, HealthResponse};
 use kelpie_server::state::{AppState, StateError};
 use serde::Serialize;
@@ -32,7 +34,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 /// Create the API router with all routes
-pub fn router(state: AppState) -> Router {
+pub fn router(state: AppState<TokioRuntime>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -61,6 +63,8 @@ pub fn router(state: AppState) -> Router {
         .nest("/v1", agent_groups::router())
         // Groups routes (Letta compatibility alias for agent_groups)
         .nest("/v1", groups::router())
+        // Identities routes
+        .nest("/v1", identities::router())
         // Teleport routes
         .nest("/v1/teleport", teleport::router())
         // Scheduling routes (Phase 5)
@@ -101,7 +105,7 @@ struct CapabilitiesResponse {
 }
 
 /// Health check endpoint
-async fn health_check(State(state): State<AppState>) -> Json<HealthResponse> {
+async fn health_check(State(state): State<AppState<TokioRuntime>>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -113,7 +117,7 @@ async fn health_check(State(state): State<AppState>) -> Json<HealthResponse> {
 ///
 /// Returns metrics in Prometheus text format.
 /// This is scraped by Prometheus servers for monitoring.
-async fn metrics(State(state): State<AppState>) -> Response {
+async fn metrics(State(state): State<AppState<TokioRuntime>>) -> Response {
     // Calculate and record memory metrics
     let _ = state.record_memory_metrics();
 

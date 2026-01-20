@@ -63,15 +63,17 @@ pub struct ToolInfo {
 
 /// Server-wide shared state
 #[derive(Clone)]
-pub struct AppState {
-    inner: Arc<AppStateInner>,
+pub struct AppState<R: kelpie_core::Runtime> {
+    inner: Arc<AppStateInner<R>>,
 }
 
-struct AppStateInner {
+struct AppStateInner<R: kelpie_core::Runtime> {
     /// NEW Phase 5: Actor-based agent service (None for backward compat)
-    agent_service: Option<AgentService>,
+    agent_service: Option<AgentService<R>>,
     /// NEW Phase 5: Actor runtime dispatcher handle (None for backward compat)
-    dispatcher: Option<DispatcherHandle>,
+    dispatcher: Option<DispatcherHandle<R>>,
+    /// Runtime for spawning tasks
+    runtime: R,
     /// NEW Phase 5: Shutdown coordination channel
     shutdown_tx: Option<tokio::sync::broadcast::Sender<()>>,
 
@@ -98,6 +100,8 @@ struct AppStateInner {
     batches: RwLock<HashMap<String, crate::models::BatchStatus>>,
     /// Agent groups by ID (Phase 8)
     agent_groups: RwLock<HashMap<String, crate::models::AgentGroup>>,
+    /// Identities by ID
+    identities: RwLock<HashMap<String, crate::models::Identity>>,
     /// Server start time for uptime calculation
     start_time: Instant,
     /// LLM client (None if no API key configured)
@@ -113,15 +117,15 @@ struct AppStateInner {
     fault_injector: Option<Arc<FaultInjector>>,
 }
 
-impl AppState {
-    /// Create new server state
-    pub fn new() -> Self {
-        Self::with_registry(None)
+impl<R: kelpie_core::Runtime + 'static> AppState<R> {
+    /// Create new server state with runtime
+    pub fn new(runtime: R) -> Self {
+        Self::with_registry(runtime, None)
     }
 
-    /// Create new server state with optional Prometheus registry
+    /// Create new server state with runtime and optional Prometheus registry
     #[cfg(feature = "otel")]
-    pub fn with_registry(registry: Option<&prometheus::Registry>) -> Self {
+    pub fn with_registry(runtime: R, registry: Option<&prometheus::Registry>) -> Self {
         let llm = LlmClient::from_env();
         if llm.is_some() {
             tracing::info!("LLM integration enabled");
@@ -151,11 +155,11 @@ impl AppState {
             let kv = Arc::new(MemoryKV::new());
 
             // Create Dispatcher
-            let mut dispatcher = Dispatcher::new(factory, kv, DispatcherConfig::default());
+            let mut dispatcher = Dispatcher::new(factory, kv, DispatcherConfig::default(), runtime.clone());
             let handle = dispatcher.handle();
 
             // Spawn dispatcher runtime
-            tokio::spawn(async move {
+            runtime.spawn(async move {
                 dispatcher.run().await;
             });
 
@@ -175,6 +179,7 @@ impl AppState {
             inner: Arc::new(AppStateInner {
                 agent_service,
                 dispatcher,
+                runtime,
                 shutdown_tx,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -187,6 +192,7 @@ impl AppState {
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
+                identities: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm,
                 storage: None,
@@ -199,7 +205,7 @@ impl AppState {
 
     /// Create new server state without Prometheus registry (when otel feature not enabled)
     #[cfg(not(feature = "otel"))]
-    pub fn with_registry(_registry: Option<()>) -> Self {
+    pub fn with_registry(runtime: R, _registry: Option<()>) -> Self {
         let llm = LlmClient::from_env();
         if llm.is_some() {
             tracing::info!("LLM integration enabled");
@@ -229,11 +235,11 @@ impl AppState {
             let kv = Arc::new(MemoryKV::new());
 
             // Create Dispatcher
-            let mut dispatcher = Dispatcher::new(factory, kv, DispatcherConfig::default());
+            let mut dispatcher = Dispatcher::new(factory, kv, DispatcherConfig::default(), runtime.clone());
             let handle = dispatcher.handle();
 
             // Spawn dispatcher runtime
-            tokio::spawn(async move {
+            runtime.spawn(async move {
                 dispatcher.run().await;
             });
 
@@ -253,6 +259,7 @@ impl AppState {
             inner: Arc::new(AppStateInner {
                 agent_service,
                 dispatcher,
+                runtime,
                 shutdown_tx,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -265,6 +272,7 @@ impl AppState {
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
+                identities: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm,
                 storage: None,
@@ -277,7 +285,7 @@ impl AppState {
     /// Create server state with durable storage backend
     ///
     /// TigerStyle: Storage enables persistence for crash recovery.
-    pub fn with_storage(storage: Arc<dyn AgentStorage>) -> Self {
+    pub fn with_storage(runtime: R, storage: Arc<dyn AgentStorage>) -> Self {
         let llm = LlmClient::from_env();
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
 
@@ -285,6 +293,7 @@ impl AppState {
             inner: Arc::new(AppStateInner {
                 agent_service: None,
                 dispatcher: None,
+                runtime,
                 shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -297,6 +306,7 @@ impl AppState {
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
+                identities: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm,
                 storage: Some(storage),
@@ -311,6 +321,7 @@ impl AppState {
     /// Create server state with persistent storage and prometheus registry
     #[cfg(feature = "otel")]
     pub fn with_storage_and_registry(
+        runtime: R,
         storage: Arc<dyn AgentStorage>,
         registry: Option<prometheus::Registry>,
     ) -> Self {
@@ -321,6 +332,7 @@ impl AppState {
             inner: Arc::new(AppStateInner {
                 agent_service: None,
                 dispatcher: None,
+                runtime,
                 shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -333,6 +345,7 @@ impl AppState {
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
+                identities: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm,
                 storage: Some(storage),
@@ -344,13 +357,14 @@ impl AppState {
     }
 
     /// Create server state with an explicit LLM client (test helper)
-    pub fn with_llm(llm: LlmClient) -> Self {
+    pub fn with_llm(runtime: R, llm: LlmClient) -> Self {
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
 
         Self {
             inner: Arc::new(AppStateInner {
                 agent_service: None,
                 dispatcher: None,
+                runtime,
                 shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -363,6 +377,7 @@ impl AppState {
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
+                identities: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm: Some(llm),
                 storage: None,
@@ -395,6 +410,7 @@ impl AppState {
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
+                identities: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm: None,
                 storage: None,
@@ -408,6 +424,7 @@ impl AppState {
     /// Create server state with both storage and fault injector for DST testing
     #[cfg(feature = "dst")]
     pub fn with_storage_and_faults(
+        runtime: R,
         storage: Arc<dyn AgentStorage>,
         fault_injector: Arc<FaultInjector>,
     ) -> Self {
@@ -417,6 +434,7 @@ impl AppState {
             inner: Arc::new(AppStateInner {
                 agent_service: None,
                 dispatcher: None,
+                runtime,
                 shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -429,6 +447,7 @@ impl AppState {
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
+                identities: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm: None,
                 storage: Some(storage),
@@ -444,12 +463,13 @@ impl AppState {
     /// TigerStyle: This constructor enables actor-based agent management (Phase 5).
     ///
     /// # Arguments
+    /// * `runtime` - Runtime for spawning tasks
     /// * `agent_service` - Service layer for agent operations
     /// * `dispatcher` - Dispatcher handle for shutdown coordination
     ///
     /// Note: This constructor is used for DST testing and will eventually
     /// replace the HashMap-based constructors after Phase 6 migration.
-    pub fn with_agent_service(agent_service: AgentService, dispatcher: DispatcherHandle) -> Self {
+    pub fn with_agent_service(runtime: R, agent_service: AgentService<R>, dispatcher: DispatcherHandle<R>) -> Self {
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
         let (shutdown_tx, _rx) = tokio::sync::broadcast::channel(1);
 
@@ -457,6 +477,7 @@ impl AppState {
             inner: Arc::new(AppStateInner {
                 agent_service: Some(agent_service),
                 dispatcher: Some(dispatcher),
+                runtime,
                 shutdown_tx: Some(shutdown_tx),
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -469,6 +490,7 @@ impl AppState {
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
+                identities: RwLock::new(HashMap::new()),
                 start_time: Instant::now(),
                 llm: None,
                 storage: None,
@@ -484,7 +506,7 @@ impl AppState {
     ///
     /// Returns None if AppState was created without actor-based service.
     /// After Phase 6 migration, this will always return Some.
-    pub fn agent_service(&self) -> Option<&AgentService> {
+    pub fn agent_service(&self) -> Option<&AgentService<R>> {
         self.inner.agent_service.as_ref()
     }
 
@@ -504,7 +526,7 @@ impl AppState {
         }
 
         // Wait for in-flight requests (up to timeout)
-        tokio::time::sleep(timeout).await;
+        self.inner.runtime.sleep(timeout).await;
 
         // Shutdown dispatcher if present
         if let Some(dispatcher) = &self.inner.dispatcher {
@@ -1859,6 +1881,146 @@ impl AppState {
         Ok(())
     }
 
+    /// Load MCP servers from storage into the in-memory state
+    ///
+    /// Called on server startup to restore persisted MCP servers.
+    pub async fn load_mcp_servers_from_storage(&self) -> Result<(), StateError> {
+        let Some(storage) = &self.inner.storage else {
+            return Ok(());
+        };
+
+        let servers = storage
+            .list_mcp_servers()
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("storage error: {}", e),
+            })?;
+
+        let count = servers.len();
+        for server in servers {
+            self.inner
+                .mcp_servers
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?
+                .insert(server.id.clone(), server);
+        }
+
+        tracing::info!(count = count, "loaded MCP servers from storage");
+        Ok(())
+    }
+
+    /// Load agent groups from storage into the in-memory state
+    ///
+    /// Called on server startup to restore persisted agent groups.
+    pub async fn load_agent_groups_from_storage(&self) -> Result<(), StateError> {
+        let Some(storage) = &self.inner.storage else {
+            return Ok(());
+        };
+
+        let groups = storage
+            .list_agent_groups()
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("storage error: {}", e),
+            })?;
+
+        let count = groups.len();
+        for group in groups {
+            self.inner
+                .agent_groups
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?
+                .insert(group.id.clone(), group);
+        }
+
+        tracing::info!(count = count, "loaded agent groups from storage");
+        Ok(())
+    }
+
+    /// Load identities from storage into the in-memory state
+    ///
+    /// Called on server startup to restore persisted identities.
+    pub async fn load_identities_from_storage(&self) -> Result<(), StateError> {
+        let Some(storage) = &self.inner.storage else {
+            return Ok(());
+        };
+
+        let identities = storage
+            .list_identities()
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("storage error: {}", e),
+            })?;
+
+        let count = identities.len();
+        for identity in identities {
+            self.inner
+                .identities
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?
+                .insert(identity.id.clone(), identity);
+        }
+
+        tracing::info!(count = count, "loaded identities from storage");
+        Ok(())
+    }
+
+    /// Load projects from storage into the in-memory state
+    ///
+    /// Called on server startup to restore persisted projects.
+    pub async fn load_projects_from_storage(&self) -> Result<(), StateError> {
+        let Some(storage) = &self.inner.storage else {
+            return Ok(());
+        };
+
+        let projects = storage
+            .list_projects()
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("storage error: {}", e),
+            })?;
+
+        let count = projects.len();
+        for project in projects {
+            self.inner
+                .projects
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?
+                .insert(project.id.clone(), project);
+        }
+
+        tracing::info!(count = count, "loaded projects from storage");
+        Ok(())
+    }
+
+    /// Load jobs from storage into the in-memory state
+    ///
+    /// Called on server startup to restore persisted jobs.
+    pub async fn load_jobs_from_storage(&self) -> Result<(), StateError> {
+        let Some(storage) = &self.inner.storage else {
+            return Ok(());
+        };
+
+        let jobs = storage
+            .list_jobs()
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("storage error: {}", e),
+            })?;
+
+        let count = jobs.len();
+        for job in jobs {
+            self.inner
+                .jobs
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?
+                .insert(job.id.clone(), job);
+        }
+
+        tracing::info!(count = count, "loaded jobs from storage");
+        Ok(())
+    }
+
     // =========================================================================
     // Archival memory operations
     // =========================================================================
@@ -2364,27 +2526,41 @@ impl AppState {
     // =========================================================================
 
     /// Add a new agent group
-    pub fn add_agent_group(&self, group: AgentGroup) -> Result<(), StateError> {
+    pub async fn add_agent_group(&self, group: AgentGroup) -> Result<(), StateError> {
         if self.should_inject_fault("agent_group_write").is_some() {
             return Err(StateError::FaultInjected {
                 operation: "agent_group_write".to_string(),
             });
         }
 
-        let mut groups = self
-            .inner
-            .agent_groups
-            .write()
-            .map_err(|_| StateError::LockPoisoned)?;
+        // Update in-memory state (lock scope ensures guard is dropped before await)
+        {
+            let mut groups = self
+                .inner
+                .agent_groups
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?;
 
-        if groups.contains_key(&group.id) {
-            return Err(StateError::AlreadyExists {
-                resource: "agent_group",
-                id: group.id.clone(),
-            });
+            if groups.contains_key(&group.id) {
+                return Err(StateError::AlreadyExists {
+                    resource: "agent_group",
+                    id: group.id.clone(),
+                });
+            }
+
+            groups.insert(group.id.clone(), group.clone());
+        } // Lock dropped here
+
+        // Persist to storage if configured
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .save_agent_group(&group)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
         }
 
-        groups.insert(group.id.clone(), group);
         Ok(())
     }
 
@@ -2441,58 +2617,256 @@ impl AppState {
     }
 
     /// Update an agent group
-    pub fn update_agent_group(&self, group: AgentGroup) -> Result<(), StateError> {
+    pub async fn update_agent_group(&self, group: AgentGroup) -> Result<(), StateError> {
         if self.should_inject_fault("agent_group_write").is_some() {
             return Err(StateError::FaultInjected {
                 operation: "agent_group_write".to_string(),
             });
         }
 
-        let mut groups = self
-            .inner
-            .agent_groups
-            .write()
-            .map_err(|_| StateError::LockPoisoned)?;
+        // Update in-memory state (lock scope ensures guard is dropped before await)
+        {
+            let mut groups = self
+                .inner
+                .agent_groups
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?;
 
-        if !groups.contains_key(&group.id) {
-            return Err(StateError::NotFound {
-                resource: "agent_group",
-                id: group.id.clone(),
-            });
+            if !groups.contains_key(&group.id) {
+                return Err(StateError::NotFound {
+                    resource: "agent_group",
+                    id: group.id.clone(),
+                });
+            }
+
+            groups.insert(group.id.clone(), group.clone());
+        } // Lock dropped here
+
+        // Persist to storage if configured
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .save_agent_group(&group)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
         }
 
-        groups.insert(group.id.clone(), group);
         Ok(())
     }
 
     /// Delete an agent group
-    pub fn delete_agent_group(&self, group_id: &str) -> Result<(), StateError> {
+    pub async fn delete_agent_group(&self, group_id: &str) -> Result<(), StateError> {
         if self.should_inject_fault("agent_group_write").is_some() {
             return Err(StateError::FaultInjected {
                 operation: "agent_group_write".to_string(),
             });
         }
 
-        let mut groups = self
+        // Update in-memory state (lock scope ensures guard is dropped before await)
+        {
+            let mut groups = self
+                .inner
+                .agent_groups
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?;
+
+            if groups.remove(group_id).is_none() {
+                return Err(StateError::NotFound {
+                    resource: "agent_group",
+                    id: group_id.to_string(),
+                });
+            }
+        } // Lock dropped here
+
+        // Persist deletion to storage if configured
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .delete_agent_group(group_id)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
+        }
+
+        Ok(())
+    }
+
+    // =========================================================================
+    // Identities
+    // =========================================================================
+
+    /// Add a new identity
+    pub async fn add_identity(&self, identity: crate::models::Identity) -> Result<(), StateError> {
+        if self.should_inject_fault("identity_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "identity_write".to_string(),
+            });
+        }
+
+        // Update in-memory state (lock scope ensures guard is dropped before await)
+        {
+            let mut identities = self
+                .inner
+                .identities
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?;
+
+            if identities.contains_key(&identity.id) {
+                return Err(StateError::AlreadyExists {
+                    resource: "identity",
+                    id: identity.id.clone(),
+                });
+            }
+
+            identities.insert(identity.id.clone(), identity.clone());
+        } // Lock dropped here
+
+        // Persist to storage if configured
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .save_identity(&identity)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
+        }
+
+        Ok(())
+    }
+
+    /// Get identity by ID
+    pub fn get_identity(&self, identity_id: &str) -> Result<Option<crate::models::Identity>, StateError> {
+        if self.should_inject_fault("identity_read").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "identity_read".to_string(),
+            });
+        }
+
+        let identities = self
             .inner
-            .agent_groups
-            .write()
+            .identities
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+        Ok(identities.get(identity_id).cloned())
+    }
+
+    /// List identities with pagination
+    pub fn list_identities(
+        &self,
+        cursor: Option<&str>,
+    ) -> Result<(Vec<crate::models::Identity>, Option<String>), StateError> {
+        if self.should_inject_fault("identity_read").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "identity_read".to_string(),
+            });
+        }
+
+        let identities = self
+            .inner
+            .identities
+            .read()
             .map_err(|_| StateError::LockPoisoned)?;
 
-        if groups.remove(group_id).is_none() {
-            return Err(StateError::NotFound {
-                resource: "agent_group",
-                id: group_id.to_string(),
+        let mut all_identities: Vec<_> = identities.values().cloned().collect();
+        all_identities.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+        let start_idx = if let Some(cursor_id) = cursor {
+            all_identities
+                .iter()
+                .position(|i| i.id == cursor_id)
+                .map(|idx| idx + 1)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        let remaining: Vec<_> = all_identities.into_iter().skip(start_idx).collect();
+        let next_cursor = remaining.last().map(|i| i.id.clone());
+
+        Ok((remaining, next_cursor))
+    }
+
+    /// Update an identity
+    pub async fn update_identity(&self, identity: crate::models::Identity) -> Result<(), StateError> {
+        if self.should_inject_fault("identity_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "identity_write".to_string(),
             });
+        }
+
+        // Update in-memory state (lock scope ensures guard is dropped before await)
+        {
+            let mut identities = self
+                .inner
+                .identities
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?;
+
+            if !identities.contains_key(&identity.id) {
+                return Err(StateError::NotFound {
+                    resource: "identity",
+                    id: identity.id.clone(),
+                });
+            }
+
+            identities.insert(identity.id.clone(), identity.clone());
+        } // Lock dropped here
+
+        // Persist to storage if configured
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .save_identity(&identity)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
+        }
+
+        Ok(())
+    }
+
+    /// Delete an identity
+    pub async fn delete_identity(&self, identity_id: &str) -> Result<(), StateError> {
+        if self.should_inject_fault("identity_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "identity_write".to_string(),
+            });
+        }
+
+        // Update in-memory state (lock scope ensures guard is dropped before await)
+        {
+            let mut identities = self
+                .inner
+                .identities
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?;
+
+            if identities.remove(identity_id).is_none() {
+                return Err(StateError::NotFound {
+                    resource: "identity",
+                    id: identity_id.to_string(),
+                });
+            }
+        } // Lock dropped here
+
+        // Persist deletion to storage if configured
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .delete_identity(identity_id)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
         }
 
         Ok(())
     }
 }
 
-impl Default for AppState {
+impl Default for AppState<kelpie_core::TokioRuntime> {
     fn default() -> Self {
-        Self::new()
+        Self::new(kelpie_core::TokioRuntime)
     }
 }
 
@@ -2545,7 +2919,7 @@ impl std::error::Error for StateError {}
 // MCP Server Management (Letta Compatibility)
 // =============================================================================
 
-impl AppState {
+impl<R: kelpie_core::Runtime> AppState<R> {
     /// Create a new MCP server
     pub async fn create_mcp_server(
         &self,
@@ -2554,14 +2928,27 @@ impl AppState {
     ) -> Result<crate::models::MCPServer, StateError> {
         let server = crate::models::MCPServer::new(server_name, config);
 
-        let server_id = server.id.clone();
-        self.inner
-            .mcp_servers
-            .write()
-            .map_err(|_| StateError::LockPoisoned)?
-            .insert(server_id.clone(), server.clone());
+        // Update in-memory state (lock scope ensures guard is dropped before await)
+        {
+            let server_id = server.id.clone();
+            self.inner
+                .mcp_servers
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?
+                .insert(server_id.clone(), server.clone());
+        } // Lock dropped here
 
-        tracing::debug!(server_id = %server_id, "Created MCP server");
+        // Persist to storage if configured
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .save_mcp_server(&server)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
+        }
+
+        tracing::debug!(server_id = %server.id, "Created MCP server");
         Ok(server)
     }
 
@@ -2586,45 +2973,72 @@ impl AppState {
         server_name: Option<String>,
         config: Option<crate::models::MCPServerConfig>,
     ) -> Result<crate::models::MCPServer, StateError> {
-        let mut servers = self
-            .inner
-            .mcp_servers
-            .write()
-            .map_err(|_| StateError::LockPoisoned)?;
+        let updated_server = {
+            let mut servers = self
+                .inner
+                .mcp_servers
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?;
 
-        let server = servers
-            .get_mut(server_id)
-            .ok_or_else(|| StateError::NotFound {
-                resource: "MCP server",
-                id: server_id.to_string(),
-            })?;
+            let server = servers
+                .get_mut(server_id)
+                .ok_or_else(|| StateError::NotFound {
+                    resource: "MCP server",
+                    id: server_id.to_string(),
+                })?;
 
-        if let Some(name) = server_name {
-            server.server_name = name;
+            if let Some(name) = server_name {
+                server.server_name = name;
+            }
+            if let Some(cfg) = config {
+                server.config = cfg;
+            }
+            server.updated_at = chrono::Utc::now();
+
+            server.clone()
+        };
+
+        // Persist to storage if configured
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .save_mcp_server(&updated_server)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
         }
-        if let Some(cfg) = config {
-            server.config = cfg;
-        }
-        server.updated_at = chrono::Utc::now();
 
         tracing::debug!(server_id = %server_id, "Updated MCP server");
-        Ok(server.clone())
+        Ok(updated_server)
     }
 
     /// Delete an MCP server
     pub async fn delete_mcp_server(&self, server_id: &str) -> Result<(), StateError> {
-        let mut servers = self
-            .inner
-            .mcp_servers
-            .write()
-            .map_err(|_| StateError::LockPoisoned)?;
+        // Update in-memory state (lock scope ensures guard is dropped before await)
+        {
+            let mut servers = self
+                .inner
+                .mcp_servers
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?;
 
-        servers
-            .remove(server_id)
-            .ok_or_else(|| StateError::NotFound {
-                resource: "MCP server",
-                id: server_id.to_string(),
-            })?;
+            servers
+                .remove(server_id)
+                .ok_or_else(|| StateError::NotFound {
+                    resource: "MCP server",
+                    id: server_id.to_string(),
+                })?;
+        } // Lock dropped here
+
+        // Persist deletion to storage if configured
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .delete_mcp_server(server_id)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
+        }
 
         tracing::debug!(server_id = %server_id, "Deleted MCP server");
         Ok(())
@@ -2801,7 +3215,7 @@ mod tests {
 
     #[test]
     fn test_create_and_get_agent() {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         let agent = create_test_agent("test-agent");
         let agent_id = agent.id.clone();
 
@@ -2815,7 +3229,7 @@ mod tests {
 
     #[test]
     fn test_list_agents_pagination() {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
 
         for i in 0..5 {
             let agent = create_test_agent(&format!("agent-{}", i));
@@ -2840,7 +3254,7 @@ mod tests {
 
     #[test]
     fn test_delete_agent() {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         let agent = create_test_agent("to-delete");
         let agent_id = agent.id.clone();
 
@@ -2853,7 +3267,7 @@ mod tests {
 
     #[test]
     fn test_update_block() {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         let agent = create_test_agent("block-test");
         let agent_id = agent.id.clone();
         let block_id = agent.blocks[0].id.clone();
@@ -2871,7 +3285,7 @@ mod tests {
 
     #[test]
     fn test_messages() {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         let agent = create_test_agent("msg-test");
         let agent_id = agent.id.clone();
 
@@ -2902,7 +3316,7 @@ mod tests {
     #[tokio::test]
     async fn test_dual_mode_get_agent_hashmap() {
         // Test dual-mode with HashMap (no service)
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         let agent = create_test_agent("dual-mode-test");
         let agent_id = agent.id.clone();
 

@@ -5,6 +5,7 @@
 mod api;
 
 // Re-export from library
+use kelpie_core::TokioRuntime;
 use kelpie_server::state::AppState;
 use kelpie_server::{llm, tools};
 use tools::{register_heartbeat_tools, register_memory_tools};
@@ -83,6 +84,9 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid bind address '{}': {}", cli.bind, e))?;
 
+    // Create runtime for dispatcher
+    let runtime = TokioRuntime;
+
     // Initialize storage backend (if configured)
     let storage = if let Some(ref cluster_file) = cli.fdb_cluster_file {
         use kelpie_server::storage::FdbAgentRegistry;
@@ -104,16 +108,16 @@ async fn main() -> anyhow::Result<()> {
     // Create application state
     #[cfg(feature = "otel")]
     let state = if let Some(storage) = storage {
-        AppState::with_storage_and_registry(storage, _telemetry_guard.registry().cloned())
+        AppState::with_storage_and_registry(runtime.clone(), storage, _telemetry_guard.registry().cloned())
     } else {
-        AppState::with_registry(_telemetry_guard.registry())
+        AppState::with_registry(runtime.clone(), _telemetry_guard.registry())
     };
 
     #[cfg(not(feature = "otel"))]
     let state = if let Some(storage) = storage {
-        AppState::with_storage(storage)
+        AppState::with_storage(runtime.clone(), storage)
     } else {
-        AppState::new()
+        AppState::new(runtime.clone())
     };
 
     // Register builtin tools
@@ -142,6 +146,31 @@ async fn main() -> anyhow::Result<()> {
     // Load agents from storage (if configured)
     if let Err(err) = state.load_agents_from_storage().await {
         tracing::warn!(error = %err, "Failed to load agents from storage");
+    }
+
+    // Load MCP servers from storage (if configured)
+    if let Err(err) = state.load_mcp_servers_from_storage().await {
+        tracing::warn!(error = %err, "Failed to load MCP servers from storage");
+    }
+
+    // Load agent groups from storage (if configured)
+    if let Err(err) = state.load_agent_groups_from_storage().await {
+        tracing::warn!(error = %err, "Failed to load agent groups from storage");
+    }
+
+    // Load identities from storage (if configured)
+    if let Err(err) = state.load_identities_from_storage().await {
+        tracing::warn!(error = %err, "Failed to load identities from storage");
+    }
+
+    // Load projects from storage (if configured)
+    if let Err(err) = state.load_projects_from_storage().await {
+        tracing::warn!(error = %err, "Failed to load projects from storage");
+    }
+
+    // Load jobs from storage (if configured)
+    if let Err(err) = state.load_jobs_from_storage().await {
+        tracing::warn!(error = %err, "Failed to load jobs from storage");
     }
 
     // Create router
@@ -177,7 +206,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Register builtin tools with the unified registry
-async fn register_builtin_tools(state: &AppState) {
+async fn register_builtin_tools(state: &AppState<TokioRuntime>) {
     let registry = state.tool_registry();
 
     // Register shell tool

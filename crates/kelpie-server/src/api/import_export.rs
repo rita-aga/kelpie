@@ -15,6 +15,7 @@ use kelpie_server::models::{
     AgentState, CreateAgentRequest, CreateBlockRequest, ExportAgentResponse, ImportAgentRequest,
     Message,
 };
+use kelpie_core::TokioRuntime;
 use kelpie_server::state::AppState;
 use serde::Deserialize;
 use tracing::instrument;
@@ -36,7 +37,7 @@ const EXPORT_MESSAGES_MAX: usize = 10000;
 /// GET /v1/agents/{agent_id}/export
 #[instrument(skip(state), fields(agent_id = %agent_id, include_messages = query.include_messages), level = "info")]
 pub async fn export_agent(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(agent_id): Path<String>,
     Query(query): Query<ExportQuery>,
 ) -> Result<Json<ExportAgentResponse>, ApiError> {
@@ -75,7 +76,7 @@ pub async fn export_agent(
 /// POST /v1/agents/import
 #[instrument(skip(state, request), fields(agent_name = %request.agent.name, message_count = request.messages.len()), level = "info")]
 pub async fn import_agent(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Json(request): Json<ImportAgentRequest>,
 ) -> Result<Json<AgentState>, ApiError> {
     let agent_data = request.agent;
@@ -156,7 +157,7 @@ pub async fn import_agent(
 ///
 /// TigerStyle: Separate function for clarity and error isolation.
 fn import_messages(
-    state: &AppState,
+    state: &AppState<TokioRuntime>,
     agent_id: &str,
     messages: Vec<kelpie_server::models::MessageImportData>,
 ) -> Result<usize, String> {
@@ -194,6 +195,7 @@ fn import_messages(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kelpie_core::Runtime;
     use crate::api;
     use async_trait::async_trait;
     use axum::body::Body;
@@ -255,19 +257,22 @@ mod tests {
         let storage = SimStorage::new(rng.fork(), faults);
         let kv = Arc::new(storage);
 
-        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState>::new(
+        let runtime = kelpie_core::TokioRuntime;
+
+        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState, _>::new(
             factory,
             kv,
             DispatcherConfig::default(),
+            runtime.clone(),
         );
         let handle = dispatcher.handle();
 
-        tokio::spawn(async move {
+        runtime.spawn(async move {
             dispatcher.run().await;
         });
 
         let service = service::AgentService::new(handle.clone());
-        let state = AppState::with_agent_service(service, handle);
+        let state = AppState::with_agent_service(runtime, service, handle);
 
         api::router(state)
     }

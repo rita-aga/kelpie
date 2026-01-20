@@ -8,6 +8,7 @@ use axum::{
     Json,
 };
 use kelpie_server::models::{Block, UpdateBlockRequest};
+use kelpie_core::TokioRuntime;
 use kelpie_server::state::AppState;
 use serde::Deserialize;
 use tracing::instrument;
@@ -30,7 +31,7 @@ pub struct ListBlocksParams {
 /// Supports Letta SDK pagination via `after` parameter.
 #[instrument(skip(state), fields(agent_id = %agent_id, after = ?query.after), level = "info")]
 pub async fn list_blocks(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(agent_id): Path<String>,
     Query(query): Query<ListBlocksParams>,
 ) -> Result<Json<Vec<Block>>, ApiError> {
@@ -72,7 +73,7 @@ pub async fn list_blocks(
 /// GET /v1/agents/{agent_id}/blocks/{block_id}
 #[instrument(skip(state), fields(agent_id = %agent_id, block_id = %block_id), level = "info")]
 pub async fn get_block(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path((agent_id, block_id)): Path<(String, String)>,
 ) -> Result<Json<Block>, ApiError> {
     // Phase 6: Get agent from actor system (or HashMap fallback)
@@ -97,7 +98,7 @@ pub async fn get_block(
 /// PATCH /v1/agents/{agent_id}/blocks/{block_id}
 #[instrument(skip(state, request), fields(agent_id = %agent_id, block_id = %block_id), level = "info")]
 pub async fn update_block(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path((agent_id, block_id)): Path<(String, String)>,
     Json(request): Json<UpdateBlockRequest>,
 ) -> Result<Json<Block>, ApiError> {
@@ -176,7 +177,7 @@ pub async fn update_block(
 /// GET /v1/agents/{agent_id}/core-memory/blocks/{label}
 #[instrument(skip(state), fields(agent_id = %agent_id, label = %label), level = "info")]
 pub async fn get_block_by_label(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path((agent_id, label)): Path<(String, String)>,
 ) -> Result<Json<Block>, ApiError> {
     // Get agent (works with both HashMap and AgentService)
@@ -201,7 +202,7 @@ pub async fn get_block_by_label(
 /// PATCH /v1/agents/{agent_id}/core-memory/blocks/{label}
 #[instrument(skip(state, request), fields(agent_id = %agent_id, label = %label), level = "info")]
 pub async fn update_block_by_label(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path((agent_id, label)): Path<(String, String)>,
     Json(request): Json<UpdateBlockRequest>,
 ) -> Result<Json<Block>, ApiError> {
@@ -281,7 +282,7 @@ pub async fn update_block_by_label(
 /// - Otherwise, treat it as a label
 #[instrument(skip(state), fields(agent_id = %agent_id, param = %id_or_label), level = "info")]
 pub async fn get_block_or_label(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path((agent_id, id_or_label)): Path<(String, String)>,
 ) -> Result<Json<Block>, ApiError> {
     // Try to parse as UUID - if successful, it's a block ID
@@ -303,7 +304,7 @@ pub async fn get_block_or_label(
 /// - Otherwise, treat it as a label
 #[instrument(skip(state, request), fields(agent_id = %agent_id, param = %id_or_label), level = "info")]
 pub async fn update_block_or_label(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path((agent_id, id_or_label)): Path<(String, String)>,
     Json(request): Json<UpdateBlockRequest>,
 ) -> Result<Json<Block>, ApiError> {
@@ -320,6 +321,7 @@ pub async fn update_block_or_label(
 #[cfg(test)]
 mod tests {
     use crate::api;
+    use kelpie_core::Runtime;
     use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
@@ -329,7 +331,8 @@ mod tests {
     use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
     use kelpie_server::models::AgentState;
     use kelpie_server::service;
-    use kelpie_server::state::AppState;
+    use kelpie_core::TokioRuntime;
+use kelpie_server::state::AppState;
     use kelpie_server::tools::UnifiedToolRegistry;
     use std::sync::Arc;
     use tower::ServiceExt;
@@ -381,19 +384,22 @@ mod tests {
         let storage = SimStorage::new(rng.fork(), faults);
         let kv = Arc::new(storage);
 
-        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState>::new(
+        let runtime = kelpie_core::TokioRuntime;
+
+        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState, _>::new(
             factory,
             kv,
             DispatcherConfig::default(),
+            runtime.clone(),
         );
         let handle = dispatcher.handle();
 
-        tokio::spawn(async move {
+        runtime.spawn(async move {
             dispatcher.run().await;
         });
 
         let service = service::AgentService::new(handle.clone());
-        let state = AppState::with_agent_service(service, handle);
+        let state = AppState::with_agent_service(runtime, service, handle);
 
         // Create agent with a block
         let body = serde_json::json!({

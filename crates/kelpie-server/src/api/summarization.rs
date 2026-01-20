@@ -10,6 +10,7 @@ use axum::{extract::Path, routing::post, Router};
 use axum::{extract::State, Json};
 use kelpie_server::llm::ChatMessage;
 use kelpie_server::models::MessageRole;
+use kelpie_core::TokioRuntime;
 use kelpie_server::state::AppState;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -57,7 +58,7 @@ pub struct SummarizationResponse {
 }
 
 /// Create summarization routes
-pub fn router() -> Router<AppState> {
+pub fn router() -> Router<AppState<TokioRuntime>> {
     Router::new()
         .route("/:agent_id/messages/summarize", post(summarize_messages))
         .route("/:agent_id/memory/summarize", post(summarize_memory))
@@ -68,7 +69,7 @@ pub fn router() -> Router<AppState> {
 /// POST /v1/agents/{agent_id}/messages/summarize
 #[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
 async fn summarize_messages(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(agent_id): Path<String>,
     Json(request): Json<SummarizeMessagesRequest>,
 ) -> Result<Json<SummarizationResponse>, ApiError> {
@@ -164,7 +165,7 @@ async fn summarize_messages(
 /// POST /v1/agents/{agent_id}/memory/summarize
 #[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
 async fn summarize_memory(
-    State(state): State<AppState>,
+    State(state): State<AppState<TokioRuntime>>,
     Path(agent_id): Path<String>,
     Json(request): Json<SummarizeMemoryRequest>,
 ) -> Result<Json<SummarizationResponse>, ApiError> {
@@ -291,7 +292,7 @@ mod tests {
     /// LLM integration is tested separately with real LLM clients in integration tests.
     async fn test_app() -> Router {
         // Use basic AppState without LLM for these tests
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
 
         api::router(state)
     }
