@@ -1,11 +1,15 @@
 # Task: DST Phase 2 - Runtime Determinism (The "Real" Fix)
 
 **Created:** 2026-01-19
-**State:** ✅ COMPLETE (100% - All DST tests migrated to madsim)
+**State:** 🔶 MOSTLY COMPLETE (95% - DST tests done, production integration remains)
 **Priority:** CRITICAL - Wall-clock runtime breaks true determinism
 **Plan Number:** 024
 **Parent Plan:** 020_dst_remediation_plan.md
 **Depends On:** Phase 1 (Storage Unification) - COMPLETE
+
+**IMPORTANT LIMITATION**: kelpie-dst tests are fully deterministic (✅), but kelpie-server
+production code still uses tokio::spawn/sleep directly. Phase 2.6 (Production Integration)
+requires refactoring kelpie-runtime and kelpie-server - see "Remaining Gap" section below.
 
 ## Problem Statement
 
@@ -321,13 +325,95 @@ async fn test_with_spawn() {
 - No changes to test logic required (just attribute change)
 - Massive speedup: Tests run >12x faster than before
 
-### Phase 2.6: Production Code Integration (FUTURE)
-- [ ] Identify production code that needs Runtime
-- [ ] Add Runtime parameters where needed
-- [ ] Ensure production uses TokioRuntime
-- [ ] Ensure tests use MadsimRuntime
+### Phase 2.6: Production Code Integration ⏸️ BLOCKED - Scope Too Large
 
-**Note:** Most production code doesn't need changes - only test infrastructure
+**Status**: NOT STARTED - Requires significant architectural changes
+
+**Original Assumption**: "Most production code doesn't need changes - only test infrastructure"
+
+**Reality Check**: Production code (kelpie-runtime, kelpie-server) is tightly coupled to tokio:
+- kelpie-runtime: 10 direct tokio usages (Dispatcher, Handle, runtime.rs)
+- kelpie-server: 12 direct tokio usages (state.rs, api/, http.rs)
+
+**What This Means**:
+- kelpie-dst tests using `#[madsim::test]`: ✅ Fully deterministic
+- kelpie-server tests using `#[tokio::test]`: ❌ Still non-deterministic
+- Production code internally spawns tokio tasks even in DST context
+
+**Why This Is Blocked**:
+1. **Dispatcher Refactoring Required**: Core Dispatcher uses tokio::spawn for actor tasks
+2. **API Layer Refactoring**: Agent/Block/Import APIs spawn background tokio tasks
+3. **Breaking Changes**: Runtime parameter needs to thread through entire call stack
+4. **Test Migration**: 26 kelpie-server test files need Runtime integration
+5. **Backwards Compatibility**: Production deployments expect tokio runtime
+
+**Estimated Scope**: 20-30 hours of refactoring work
+
+**Alternative Approach (Recommended)**:
+- Keep production code on tokio (it works fine in production)
+- Accept that kelpie-server DST tests have limited determinism
+- Focus DST efforts on kelpie-dst tests which ARE fully deterministic
+- Only integrate Runtime if we discover bugs that require full determinism
+
+**Tasks If We Proceed**:
+- [ ] Add madsim to kelpie-server dev-dependencies
+- [ ] Refactor Dispatcher to accept Runtime<R: Runtime> parameter
+- [ ] Refactor DispatcherHandle to use Runtime for spawn operations
+- [ ] Update AgentService, AgentState to propagate Runtime
+- [ ] Update all API handlers (agents, blocks, import_export) to use Runtime
+- [ ] Update http.rs NetworkDelay to use Runtime.sleep instead of tokio::time::sleep
+- [ ] Port 26 kelpie-server test files from #[tokio::test] to #[madsim::test]
+- [ ] Verify all tests pass with both TokioRuntime (production) and MadsimRuntime (DST)
+
+**Decision**: Defer Phase 2.6 until we have evidence that it's needed.
+
+## Remaining Gap: Production Code vs Test Code
+
+### What's Deterministic ✅
+
+| Component | Status | Determinism | Notes |
+|-----------|--------|-------------|-------|
+| kelpie-dst tests | ✅ COMPLETE | Fully deterministic | All 53 tests use #[madsim::test], run on madsim executor |
+| kelpie-dst components | ✅ COMPLETE | Fully deterministic | SimStorage, SimSandboxIO, SimClock, DeterministicRng |
+| kelpie-core Runtime trait | ✅ COMPLETE | Abstraction ready | TokioRuntime, MadsimRuntime implementations |
+
+### What's Not Deterministic ❌
+
+| Component | Status | Issue | Impact |
+|-----------|--------|-------|--------|
+| kelpie-runtime (Dispatcher) | ❌ USES TOKIO | Uses tokio::spawn for actor tasks | Actor spawning not deterministic |
+| kelpie-server (state.rs) | ❌ USES TOKIO | Uses tokio::spawn for background tasks | Background operations not deterministic |
+| kelpie-server (API layer) | ❌ USES TOKIO | Uses tokio::spawn for async operations | API operations not fully deterministic |
+| kelpie-server tests | ❌ USES #[tokio::test] | 26 test files still use tokio runtime | Tests not reproducible with seed |
+
+### Practical Impact
+
+**For kelpie-dst Tests** (✅ Deterministic):
+- Sandbox lifecycle tests: ✅ Reproducible
+- Storage fault injection tests: ✅ Reproducible
+- Teleport operation tests: ✅ Reproducible
+- Agent integration tests (SimAgentEnv): ✅ Reproducible
+
+**For kelpie-server Tests** (❌ Partial):
+- Tests that don't spawn tasks: ✅ Reproducible
+- Tests that spawn Dispatcher/actors: ❌ Task ordering non-deterministic
+- Tests with tokio::time::sleep: ❌ Real delays, not virtual time
+- Integration tests using full server: ❌ Background tasks non-deterministic
+
+### Why This Is (Mostly) OK
+
+1. **Separation of Concerns**: kelpie-dst provides fully deterministic simulation primitives
+2. **Where It Matters**: Storage, sandbox operations, fault injection ARE deterministic
+3. **Production Reality**: Real production code will use tokio anyway
+4. **Cost vs Benefit**: 20-30 hours of refactoring for marginal testing benefit
+
+### When Phase 2.6 Would Be Needed
+
+Only proceed with Phase 2.6 if we encounter:
+- Bugs in actor spawning/scheduling that require reproducible tests
+- Race conditions in Dispatcher that need deterministic debugging
+- Production issues that can't be reproduced without full runtime determinism
+- Compliance/safety requirements mandating full deterministic testing
 
 ## Instance Log
 
