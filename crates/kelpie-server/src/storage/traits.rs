@@ -303,7 +303,10 @@ pub trait AgentStorage: Send + Sync {
     async fn save_mcp_server(&self, server: &crate::models::MCPServer) -> Result<(), StorageError>;
 
     /// Load MCP server by ID
-    async fn load_mcp_server(&self, id: &str) -> Result<Option<crate::models::MCPServer>, StorageError>;
+    async fn load_mcp_server(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::MCPServer>, StorageError>;
 
     /// Delete MCP server
     async fn delete_mcp_server(&self, id: &str) -> Result<(), StorageError>;
@@ -316,10 +319,14 @@ pub trait AgentStorage: Send + Sync {
     // =========================================================================
 
     /// Save agent group
-    async fn save_agent_group(&self, group: &crate::models::AgentGroup) -> Result<(), StorageError>;
+    async fn save_agent_group(&self, group: &crate::models::AgentGroup)
+        -> Result<(), StorageError>;
 
     /// Load agent group by ID
-    async fn load_agent_group(&self, id: &str) -> Result<Option<crate::models::AgentGroup>, StorageError>;
+    async fn load_agent_group(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::AgentGroup>, StorageError>;
 
     /// Delete agent group
     async fn delete_agent_group(&self, id: &str) -> Result<(), StorageError>;
@@ -335,7 +342,10 @@ pub trait AgentStorage: Send + Sync {
     async fn save_identity(&self, identity: &crate::models::Identity) -> Result<(), StorageError>;
 
     /// Load identity by ID
-    async fn load_identity(&self, id: &str) -> Result<Option<crate::models::Identity>, StorageError>;
+    async fn load_identity(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::Identity>, StorageError>;
 
     /// Delete identity
     async fn delete_identity(&self, id: &str) -> Result<(), StorageError>;

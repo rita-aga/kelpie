@@ -7,8 +7,8 @@ use axum::{
     extract::{Path, Query, State},
     Json,
 };
-use kelpie_server::models::ArchivalEntry;
 use kelpie_core::Runtime;
+use kelpie_server::models::ArchivalEntry;
 use kelpie_server::state::AppState;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -151,7 +151,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use axum::Router;
     use kelpie_core::Runtime;
-use kelpie_server::state::AppState;
+    use kelpie_server::state::AppState;
     use tower::ServiceExt;
 
     async fn test_app_with_agent() -> (Router, String) {

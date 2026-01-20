@@ -4,10 +4,10 @@
 
 pub mod agent_groups;
 pub mod agents;
-pub mod groups;
-pub mod identities;
 pub mod archival;
 pub mod blocks;
+pub mod groups;
+pub mod identities;
 pub mod import_export;
 pub mod mcp_servers;
 pub mod messages;
@@ -105,7 +105,9 @@ struct CapabilitiesResponse {
 }
 
 /// Health check endpoint
-async fn health_check<R: Runtime + 'static>(State(state): State<AppState<R>>) -> Json<HealthResponse> {
+async fn health_check<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
+) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),

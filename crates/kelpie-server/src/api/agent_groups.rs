@@ -9,12 +9,12 @@ use axum::{
     Json, Router,
 };
 use chrono::Utc;
+use kelpie_core::Runtime;
 use kelpie_server::llm::ChatMessage;
 use kelpie_server::models::{
     AgentGroup, CreateAgentGroupRequest, CreateMessageRequest, RoutingPolicy,
     UpdateAgentGroupRequest,
 };
-use kelpie_core::Runtime;
 use kelpie_server::state::AppState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -226,8 +226,11 @@ async fn send_group_message<R: Runtime + 'static>(
             vec![GroupMessageItem { agent_id, response }]
         }
         // Letta compatibility - these types fall back to round_robin for now
-        RoutingPolicy::Supervisor | RoutingPolicy::Dynamic | RoutingPolicy::Sleeptime |
-        RoutingPolicy::VoiceSleeptime | RoutingPolicy::Swarm => {
+        RoutingPolicy::Supervisor
+        | RoutingPolicy::Dynamic
+        | RoutingPolicy::Sleeptime
+        | RoutingPolicy::VoiceSleeptime
+        | RoutingPolicy::Swarm => {
             let agent_id = select_round_robin(&mut group)?;
             let response =
                 send_to_agent(&state, &agent_id, &content_with_context, request.clone()).await?;

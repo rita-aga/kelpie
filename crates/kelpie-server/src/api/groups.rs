@@ -12,7 +12,10 @@ use kelpie_server::state::AppState;
 /// Create router for groups endpoints (Letta compatibility)
 pub fn router<R: Runtime + 'static>() -> Router<AppState<R>> {
     Router::new()
-        .route("/groups", axum::routing::get(list_groups).post(create_group))
+        .route(
+            "/groups",
+            axum::routing::get(list_groups).post(create_group),
+        )
         .route(
             "/groups/:group_id",
             axum::routing::get(get_group)

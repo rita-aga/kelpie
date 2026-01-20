@@ -9,8 +9,8 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use kelpie_server::models::{MCPServer, MCPServerConfig};
 use kelpie_core::Runtime;
+use kelpie_server::models::{MCPServer, MCPServerConfig};
 use kelpie_server::state::AppState;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -74,7 +74,9 @@ pub fn router<R: Runtime + 'static>() -> Router<AppState<R>> {
 ///
 /// GET /v1/mcp-servers/
 #[instrument(skip(state), level = "info")]
-async fn list_servers<R: Runtime + 'static>(State(state): State<AppState<R>>) -> Json<Vec<MCPServerResponse>> {
+async fn list_servers<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
+) -> Json<Vec<MCPServerResponse>> {
     let servers = state.list_mcp_servers().await;
     let items: Vec<MCPServerResponse> = servers.into_iter().map(MCPServerResponse::from).collect();
 
@@ -259,7 +261,7 @@ async fn run_server_tool<R: Runtime + 'static>(
     // Tool ID format: mcp_{server_id}_{tool_name}
     let tool_name = tool_id
         .strip_prefix(&format!("mcp_{}_", server_id))
-        .ok_or_else(|| ApiError::bad_request(&format!("Invalid tool ID format: {}", tool_id)))?;
+        .ok_or_else(|| ApiError::bad_request(format!("Invalid tool ID format: {}", tool_id)))?;
 
     // Execute the tool
     let result = state
@@ -285,7 +287,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use axum::Router;
     use kelpie_core::Runtime;
-use kelpie_server::state::AppState;
+    use kelpie_server::state::AppState;
     use tower::ServiceExt;
 
     async fn test_app() -> Router {

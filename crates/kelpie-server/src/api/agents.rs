@@ -8,8 +8,8 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use kelpie_server::models::{AgentState, CreateAgentRequest, ListResponse, UpdateAgentRequest};
 use kelpie_core::Runtime;
+use kelpie_server::models::{AgentState, CreateAgentRequest, ListResponse, UpdateAgentRequest};
 use kelpie_server::state::AppState;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -513,11 +513,11 @@ async fn delete_agent<R: Runtime + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kelpie_core::Runtime;
     use crate::api;
     use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use kelpie_core::Runtime;
     use kelpie_dst::{DeterministicRng, FaultInjector, SimStorage};
     use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
     use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -585,9 +585,9 @@ mod tests {
         );
         let handle = dispatcher.handle();
 
-        runtime.spawn(async move {
+        drop(runtime.spawn(async move {
             dispatcher.run().await;
-        });
+        }));
 
         let service = service::AgentService::new(handle.clone());
         let state = AppState::with_agent_service(runtime, service, handle);

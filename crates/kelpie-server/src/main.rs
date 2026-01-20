@@ -108,7 +108,11 @@ async fn main() -> anyhow::Result<()> {
     // Create application state
     #[cfg(feature = "otel")]
     let state = if let Some(storage) = storage {
-        AppState::with_storage_and_registry(runtime.clone(), storage, _telemetry_guard.registry().cloned())
+        AppState::with_storage_and_registry(
+            runtime.clone(),
+            storage,
+            _telemetry_guard.registry().cloned(),
+        )
     } else {
         AppState::with_registry(runtime.clone(), _telemetry_guard.registry())
     };

@@ -5,11 +5,11 @@
 use crate::api::ApiError;
 use axum::{
     extract::{Path, Query, State},
-    routing::{get, post},
+    routing::get,
     Json, Router,
 };
-use kelpie_server::models::{CreateIdentityRequest, Identity, UpdateIdentityRequest};
 use kelpie_core::Runtime;
+use kelpie_server::models::{CreateIdentityRequest, Identity, UpdateIdentityRequest};
 use kelpie_server::state::AppState;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -39,7 +39,9 @@ pub fn router<R: Runtime + 'static>() -> Router<AppState<R>> {
         .route("/identities", get(list_identities).post(create_identity))
         .route(
             "/identities/:identity_id",
-            get(get_identity).patch(update_identity).delete(delete_identity),
+            get(get_identity)
+                .patch(update_identity)
+                .delete(delete_identity),
         )
 }
 
@@ -96,7 +98,11 @@ pub async fn list_identities<R: Runtime + 'static>(
         0
     };
 
-    let page: Vec<_> = identities.into_iter().skip(start_idx).take(limit + 1).collect();
+    let page: Vec<_> = identities
+        .into_iter()
+        .skip(start_idx)
+        .take(limit + 1)
+        .collect();
     let (items, next_cursor) = if page.len() > limit {
         let items: Vec<_> = page.into_iter().take(limit).collect();
         let next_cursor = items.last().map(|i| i.id.clone());

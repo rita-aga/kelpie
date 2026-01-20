@@ -671,7 +671,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use axum::Router;
     use kelpie_core::Runtime;
-use kelpie_server::state::AppState;
+    use kelpie_server::state::AppState;
     use tower::ServiceExt;
 
     async fn test_app() -> Router {

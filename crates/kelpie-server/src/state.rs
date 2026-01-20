@@ -155,13 +155,14 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             let kv = Arc::new(MemoryKV::new());
 
             // Create Dispatcher
-            let mut dispatcher = Dispatcher::new(factory, kv, DispatcherConfig::default(), runtime.clone());
+            let mut dispatcher =
+                Dispatcher::new(factory, kv, DispatcherConfig::default(), runtime.clone());
             let handle = dispatcher.handle();
 
             // Spawn dispatcher runtime
-            runtime.spawn(async move {
+            drop(runtime.spawn(async move {
                 dispatcher.run().await;
-            });
+            }));
 
             // Create service
             let service = AgentService::new(handle.clone());
@@ -235,13 +236,14 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             let kv = Arc::new(MemoryKV::new());
 
             // Create Dispatcher
-            let mut dispatcher = Dispatcher::new(factory, kv, DispatcherConfig::default(), runtime.clone());
+            let mut dispatcher =
+                Dispatcher::new(factory, kv, DispatcherConfig::default(), runtime.clone());
             let handle = dispatcher.handle();
 
             // Spawn dispatcher runtime
-            runtime.spawn(async move {
+            drop(runtime.spawn(async move {
                 dispatcher.run().await;
-            });
+            }));
 
             // Create service
             let service = AgentService::new(handle.clone());
@@ -470,7 +472,11 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
     ///
     /// Note: This constructor is used for DST testing and will eventually
     /// replace the HashMap-based constructors after Phase 6 migration.
-    pub fn with_agent_service(runtime: R, agent_service: AgentService<R>, dispatcher: DispatcherHandle<R>) -> Self {
+    pub fn with_agent_service(
+        runtime: R,
+        agent_service: AgentService<R>,
+        dispatcher: DispatcherHandle<R>,
+    ) -> Self {
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
         let (shutdown_tx, _rx) = tokio::sync::broadcast::channel(1);
 
@@ -1569,6 +1575,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
     ///
     /// This is the primary method for tool registration, supporting both
     /// server-side and client-side tools.
+    #[allow(clippy::too_many_arguments)]
     pub async fn upsert_tool(
         &self,
         id: String,
@@ -2737,7 +2744,10 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
     }
 
     /// Get identity by ID
-    pub fn get_identity(&self, identity_id: &str) -> Result<Option<crate::models::Identity>, StateError> {
+    pub fn get_identity(
+        &self,
+        identity_id: &str,
+    ) -> Result<Option<crate::models::Identity>, StateError> {
         if self.should_inject_fault("identity_read").is_some() {
             return Err(StateError::FaultInjected {
                 operation: "identity_read".to_string(),
@@ -2789,7 +2799,10 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
     }
 
     /// Update an identity
-    pub async fn update_identity(&self, identity: crate::models::Identity) -> Result<(), StateError> {
+    pub async fn update_identity(
+        &self,
+        identity: crate::models::Identity,
+    ) -> Result<(), StateError> {
         if self.should_inject_fault("identity_write").is_some() {
             return Err(StateError::FaultInjected {
                 operation: "identity_write".to_string(),
@@ -3301,7 +3314,7 @@ mod tests {
                 role: crate::models::MessageRole::User,
                 content: format!("Message {}", i),
                 tool_call_id: None,
-                tool_calls: None,
+                tool_call: None,
                 created_at: chrono::Utc::now(),
             };
             state.add_message(&agent_id, msg).unwrap();

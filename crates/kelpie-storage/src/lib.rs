@@ -13,12 +13,12 @@
 //!
 //! - `fdb` - FoundationDB backend (default, requires FDB C client installed)
 
+pub mod fdb;
 pub mod kv;
 pub mod memory;
 pub mod transaction;
-pub mod fdb;
 
+pub use fdb::{FdbActorTransaction, FdbKV};
 pub use kv::{ActorKV, ActorTransaction, KVOperation, ScopedKV};
 pub use memory::MemoryKV;
 pub use transaction::Transaction;
-pub use fdb::{FdbActorTransaction, FdbKV};

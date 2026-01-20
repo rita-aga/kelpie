@@ -7,8 +7,8 @@ use axum::{
     extract::{Path, Query, State},
     Json,
 };
-use kelpie_server::models::{Block, UpdateBlockRequest};
 use kelpie_core::Runtime;
+use kelpie_server::models::{Block, UpdateBlockRequest};
 use kelpie_server::state::AppState;
 use serde::Deserialize;
 use tracing::instrument;
@@ -393,9 +393,9 @@ mod tests {
         );
         let handle = dispatcher.handle();
 
-        runtime.spawn(async move {
+        drop(runtime.spawn(async move {
             dispatcher.run().await;
-        });
+        }));
 
         let service = service::AgentService::new(handle.clone());
         let state = AppState::with_agent_service(runtime, service, handle);

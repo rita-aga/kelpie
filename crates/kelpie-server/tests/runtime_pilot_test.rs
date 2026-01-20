@@ -6,9 +6,9 @@
 //! TigerStyle: Explicit test, demonstrates contract, no complex setup.
 
 use async_trait::async_trait;
-use kelpie_core::{current_runtime, CurrentRuntime, Result, Runtime};
 #[cfg(madsim)]
 use kelpie_core::MadsimRuntime;
+use kelpie_core::{current_runtime, CurrentRuntime, Result, Runtime};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
 use kelpie_server::models::{AgentType, CreateAgentRequest, CreateBlockRequest};
@@ -55,9 +55,7 @@ impl LlmClient for MockLlmClient {
 }
 
 /// Helper to create AgentService with generic Runtime
-async fn create_agent_service<R: Runtime + 'static>(
-    runtime: R,
-) -> Result<AgentService<R>> {
+async fn create_agent_service<R: Runtime + 'static>(runtime: R) -> Result<AgentService<R>> {
     let llm: Arc<dyn LlmClient> = Arc::new(MockLlmClient);
     let actor = AgentActor::new(llm, Arc::new(UnifiedToolRegistry::new()));
     let factory = Arc::new(CloneFactory::new(actor));

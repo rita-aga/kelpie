@@ -57,6 +57,7 @@ pub enum DispatcherCommand {
 #[derive(Clone)]
 pub struct DispatcherHandle<R: kelpie_core::Runtime> {
     command_tx: mpsc::Sender<DispatcherCommand>,
+    #[allow(dead_code)]
     runtime: R,
 }
 

@@ -19,10 +19,10 @@
 //! 3. **DST-first** - All operations can have faults injected
 
 mod adapter;
+mod fdb;
 mod teleport;
 mod traits;
 mod types;
-mod fdb;
 
 pub use adapter::KvAdapter;
 pub use fdb::FdbAgentRegistry;

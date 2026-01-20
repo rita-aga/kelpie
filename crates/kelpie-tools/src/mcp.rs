@@ -950,7 +950,9 @@ impl McpClient {
 
         debug!(server = %self.config.name, "Discovering tools");
 
-        let request = McpRequest::new(self.next_request_id(), "tools/list");
+        // MCP protocol requires params field with cursor (null for first request)
+        let request = McpRequest::new(self.next_request_id(), "tools/list")
+            .with_params(serde_json::json!({"cursor": null}));
         let response = self.send_request(request).await?;
 
         if let Some(error) = response.error {

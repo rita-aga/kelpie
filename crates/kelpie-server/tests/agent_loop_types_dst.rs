@@ -221,7 +221,8 @@ fn test_sim_memgpt_agent_loop_with_storage_faults() {
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.2).with_filter("block_write"))
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.1).with_filter("agent_read"))
         .run(|env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), env.faults.clone());
+            let state =
+                AppState::with_fault_injector(kelpie_core::current_runtime(), env.faults.clone());
             setup_state_with_tools(&state).await;
 
             // Create MemGPT agent
@@ -288,7 +289,8 @@ fn test_sim_react_agent_loop_tool_filtering() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.1))
         .run(|env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), env.faults.clone());
+            let state =
+                AppState::with_fault_injector(kelpie_core::current_runtime(), env.faults.clone());
             setup_state_with_tools(&state).await;
 
             // Create React agent
@@ -386,7 +388,8 @@ fn test_sim_letta_v1_agent_loop_simplified_tools() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.15))
         .run(|env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), env.faults.clone());
+            let state =
+                AppState::with_fault_injector(kelpie_core::current_runtime(), env.faults.clone());
             setup_state_with_tools(&state).await;
 
             // Create LettaV1 agent
@@ -570,7 +573,8 @@ fn test_sim_multiple_agent_types_under_faults() {
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.2))
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.1))
         .run(|env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), env.faults.clone());
+            let state =
+                AppState::with_fault_injector(kelpie_core::current_runtime(), env.faults.clone());
             setup_state_with_tools(&state).await;
 
             // Create agents of each type
@@ -645,7 +649,10 @@ fn test_sim_agent_loop_determinism() {
         Simulation::new(config)
             .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.3))
             .run(|env| async move {
-                let state = AppState::with_fault_injector(kelpie_core::current_runtime(), env.faults.clone());
+                let state = AppState::with_fault_injector(
+                    kelpie_core::current_runtime(),
+                    env.faults.clone(),
+                );
                 setup_state_with_tools(&state).await;
 
                 let mut results = Vec::new();
@@ -692,7 +699,8 @@ fn test_sim_high_load_mixed_agent_types() {
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.1))
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.05))
         .run(|env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), env.faults.clone());
+            let state =
+                AppState::with_fault_injector(kelpie_core::current_runtime(), env.faults.clone());
             setup_state_with_tools(&state).await;
 
             let success_count = Arc::new(AtomicU32::new(0));
@@ -758,7 +766,8 @@ fn test_sim_tool_execution_results_under_faults() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.3).with_filter("block_write"))
         .run(|env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), env.faults.clone());
+            let state =
+                AppState::with_fault_injector(kelpie_core::current_runtime(), env.faults.clone());
             setup_state_with_tools(&state).await;
 
             // Create MemGPT agent (has memory tools)

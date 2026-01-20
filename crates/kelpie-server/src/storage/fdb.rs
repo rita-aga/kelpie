@@ -229,11 +229,11 @@ impl FdbAgentRegistry {
 
     /// Serialize identity to bytes
     fn serialize_identity(identity: &crate::models::Identity) -> Result<Bytes, StorageError> {
-        serde_json::to_vec(identity)
-            .map(Bytes::from)
-            .map_err(|e| StorageError::SerializationFailed {
+        serde_json::to_vec(identity).map(Bytes::from).map_err(|e| {
+            StorageError::SerializationFailed {
                 reason: e.to_string(),
-            })
+            }
+        })
     }
 
     /// Deserialize identity from bytes
@@ -245,11 +245,11 @@ impl FdbAgentRegistry {
 
     /// Serialize project to bytes
     fn serialize_project(project: &crate::models::Project) -> Result<Bytes, StorageError> {
-        serde_json::to_vec(project)
-            .map(Bytes::from)
-            .map_err(|e| StorageError::SerializationFailed {
+        serde_json::to_vec(project).map(Bytes::from).map_err(|e| {
+            StorageError::SerializationFailed {
                 reason: e.to_string(),
-            })
+            }
+        })
     }
 
     /// Deserialize project from bytes
@@ -880,7 +880,10 @@ impl AgentStorage for FdbAgentRegistry {
         Ok(())
     }
 
-    async fn load_mcp_server(&self, id: &str) -> Result<Option<crate::models::MCPServer>, StorageError> {
+    async fn load_mcp_server(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::MCPServer>, StorageError> {
         assert!(!id.is_empty(), "server id cannot be empty");
 
         let registry_id = Self::mcp_registry_actor_id().map_err(Self::map_core_error)?;
@@ -934,7 +937,10 @@ impl AgentStorage for FdbAgentRegistry {
     // Agent Group Operations
     // =========================================================================
 
-    async fn save_agent_group(&self, group: &crate::models::AgentGroup) -> Result<(), StorageError> {
+    async fn save_agent_group(
+        &self,
+        group: &crate::models::AgentGroup,
+    ) -> Result<(), StorageError> {
         assert!(!group.id.is_empty(), "group id cannot be empty");
 
         let registry_id = Self::group_registry_actor_id().map_err(Self::map_core_error)?;
@@ -949,7 +955,10 @@ impl AgentStorage for FdbAgentRegistry {
         Ok(())
     }
 
-    async fn load_agent_group(&self, id: &str) -> Result<Option<crate::models::AgentGroup>, StorageError> {
+    async fn load_agent_group(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::AgentGroup>, StorageError> {
         assert!(!id.is_empty(), "group id cannot be empty");
 
         let registry_id = Self::group_registry_actor_id().map_err(Self::map_core_error)?;
@@ -1018,7 +1027,10 @@ impl AgentStorage for FdbAgentRegistry {
         Ok(())
     }
 
-    async fn load_identity(&self, id: &str) -> Result<Option<crate::models::Identity>, StorageError> {
+    async fn load_identity(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::Identity>, StorageError> {
         assert!(!id.is_empty(), "identity id cannot be empty");
 
         let registry_id = Self::identity_registry_actor_id().map_err(Self::map_core_error)?;

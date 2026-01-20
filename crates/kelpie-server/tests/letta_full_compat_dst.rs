@@ -178,7 +178,10 @@ async fn test_dst_scheduling_job_write_fault() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("job_write"))
         .run_async(|_sim_env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), _sim_env.faults.clone());
+            let state = AppState::with_fault_injector(
+                kelpie_core::current_runtime(),
+                _sim_env.faults.clone(),
+            );
             let app = api::router(state);
 
             let response = app
@@ -221,7 +224,10 @@ async fn test_dst_projects_write_fault() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("project_write"))
         .run_async(|sim_env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), sim_env.faults.clone());
+            let state = AppState::with_fault_injector(
+                kelpie_core::current_runtime(),
+                sim_env.faults.clone(),
+            );
             let app = api::router(state);
 
             let response = app
@@ -260,7 +266,10 @@ async fn test_dst_batch_status_write_fault() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("batch_write"))
         .run_async(|sim_env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), sim_env.faults.clone());
+            let state = AppState::with_fault_injector(
+                kelpie_core::current_runtime(),
+                sim_env.faults.clone(),
+            );
             let app = api::router(state);
 
             let response = app
@@ -304,7 +313,10 @@ async fn test_dst_agent_group_write_fault() {
             FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("agent_group_write"),
         )
         .run_async(|sim_env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), sim_env.faults.clone());
+            let state = AppState::with_fault_injector(
+                kelpie_core::current_runtime(),
+                sim_env.faults.clone(),
+            );
             let app = api::router(state);
 
             let response = app
@@ -349,7 +361,7 @@ async fn test_dst_custom_tool_storage_fault() {
             let state = AppState::with_storage_and_faults(
                 kelpie_core::current_runtime(),
                 storage,
-                sim_env.faults.clone()
+                sim_env.faults.clone(),
             );
 
             let result = state
@@ -378,7 +390,10 @@ async fn test_dst_conversation_search_date_with_faults() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.5).with_filter("message_read"))
         .run_async(|sim_env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), sim_env.faults.clone());
+            let state = AppState::with_fault_injector(
+                kelpie_core::current_runtime(),
+                sim_env.faults.clone(),
+            );
             let registry = state.tool_registry();
             register_memory_tools(registry, state.clone()).await;
 
@@ -547,7 +562,10 @@ async fn test_dst_export_with_message_read_fault() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 1.0).with_filter("message_read"))
         .run_async(|sim_env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), sim_env.faults.clone());
+            let state = AppState::with_fault_injector(
+                kelpie_core::current_runtime(),
+                sim_env.faults.clone(),
+            );
             let agent = state
                 .create_agent_async(CreateAgentRequest {
                     name: "export-fault-agent".to_string(),
@@ -636,7 +654,10 @@ async fn test_dst_import_with_message_write_fault() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("message_write"))
         .run_async(|sim_env| async move {
-            let state = AppState::with_fault_injector(kelpie_core::current_runtime(), sim_env.faults.clone());
+            let state = AppState::with_fault_injector(
+                kelpie_core::current_runtime(),
+                sim_env.faults.clone(),
+            );
             let app = api::router(state);
 
             let response = app

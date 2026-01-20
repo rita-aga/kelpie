@@ -1,0 +1,7 @@
+{
+  "version": "1.0.0",
+  "description": "Test index with categorization: unit, integration, DST, chaos",
+  "built_at": null,
+  "git_sha": null,
+  "tests": []
+}

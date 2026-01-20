@@ -4,7 +4,7 @@
 #![cfg(feature = "dst")]
 
 use async_trait::async_trait;
-use kelpie_core::{Result, Runtime, CurrentRuntime};
+use kelpie_core::{CurrentRuntime, Result, Runtime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -465,7 +465,10 @@ impl LlmClient for SimLlmClientAdapter {
 }
 
 /// Create AgentService from simulation environment
-fn create_service<R: Runtime + 'static>(runtime: R, sim_env: &SimEnvironment) -> Result<AgentService<R>> {
+fn create_service<R: Runtime + 'static>(
+    runtime: R,
+    sim_env: &SimEnvironment,
+) -> Result<AgentService<R>> {
     // Create SimLlmClient from environment
     let sim_llm = SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone());
 
@@ -484,8 +487,12 @@ fn create_service<R: Runtime + 'static>(runtime: R, sim_env: &SimEnvironment) ->
     let kv = Arc::new(sim_env.storage.clone());
 
     // Create dispatcher
-    let mut dispatcher =
-        Dispatcher::<AgentActor, AgentActorState, _>::new(factory, kv, DispatcherConfig::default(), runtime.clone());
+    let mut dispatcher = Dispatcher::<AgentActor, AgentActorState, _>::new(
+        factory,
+        kv,
+        DispatcherConfig::default(),
+        runtime.clone(),
+    );
 
     let handle = dispatcher.handle();
 

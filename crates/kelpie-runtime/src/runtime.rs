@@ -135,7 +135,9 @@ where
     /// Runtime for spawning tasks
     runtime: R,
     /// Background task handle
-    task: Option<Pin<Box<dyn Future<Output = std::result::Result<(), kelpie_core::JoinError>> + Send>>>,
+    task: Option<
+        Pin<Box<dyn Future<Output = std::result::Result<(), kelpie_core::JoinError>> + Send>>,
+    >,
     /// Configuration
     config: RuntimeConfig,
 }

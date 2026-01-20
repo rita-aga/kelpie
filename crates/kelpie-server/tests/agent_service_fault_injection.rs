@@ -660,7 +660,7 @@ fn create_service(sim_env: &SimEnvironment) -> Result<AgentService<kelpie_core::
             factory,
             kv,
             DispatcherConfig::default(),
-            kelpie_core::current_runtime()
+            kelpie_core::current_runtime(),
         );
     let handle = dispatcher.handle();
     kelpie_core::current_runtime().spawn(async move {

@@ -70,10 +70,7 @@ impl Instant {
 
     /// Get duration elapsed since this instant
     pub fn elapsed(&self, now: Instant) -> Duration {
-        assert!(
-            now.millis >= self.millis,
-            "now must be >= self for elapsed"
-        );
+        assert!(now.millis >= self.millis, "now must be >= self for elapsed");
         Duration::from_millis(now.millis - self.millis)
     }
 }
@@ -172,15 +169,13 @@ impl Runtime for TokioRuntime {
     {
         let handle = tokio::spawn(future);
         Box::pin(async move {
-            handle
-                .await
-                .map_err(|e| {
-                    if e.is_panic() {
-                        JoinError::Panicked
-                    } else {
-                        JoinError::Cancelled
-                    }
-                })
+            handle.await.map_err(|e| {
+                if e.is_panic() {
+                    JoinError::Panicked
+                } else {
+                    JoinError::Cancelled
+                }
+            })
         })
     }
 }
@@ -226,9 +221,7 @@ impl Runtime for MadsimRuntime {
         F::Output: Send + 'static,
     {
         let handle = madsim::task::spawn(future);
-        Box::pin(async move {
-            handle.await.map_err(|_| JoinError::Panicked)
-        })
+        Box::pin(async move { handle.await.map_err(|_| JoinError::Panicked) })
     }
 }
 

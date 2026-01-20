@@ -90,7 +90,9 @@ async fn teleport_info() -> Json<TeleportInfoResponse> {
 /// List all teleport packages
 ///
 /// GET /v1/teleport/packages
-async fn list_packages<R: Runtime + 'static>(State(_state): State<AppState<R>>) -> Json<ListPackagesResponse> {
+async fn list_packages<R: Runtime + 'static>(
+    State(_state): State<AppState<R>>,
+) -> Json<ListPackagesResponse> {
     // TODO: When teleport storage is added to AppState, query actual packages
     // For now, return empty list
     Json(ListPackagesResponse {

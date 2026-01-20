@@ -1272,7 +1272,9 @@ impl Identity {
     pub fn from_request(request: CreateIdentityRequest) -> Self {
         let now = Utc::now();
         let id = uuid::Uuid::new_v4().to_string();
-        let identifier_key = request.identifier_key.unwrap_or_else(|| format!("identity-{}", &id[..8]));
+        let identifier_key = request
+            .identifier_key
+            .unwrap_or_else(|| format!("identity-{}", &id[..8]));
 
         Self {
             id,
@@ -1313,7 +1315,8 @@ impl Identity {
         }
 
         // Remove agent IDs
-        self.agent_ids.retain(|id| !request.remove_agent_ids.contains(id));
+        self.agent_ids
+            .retain(|id| !request.remove_agent_ids.contains(id));
 
         // Add block IDs
         for block_id in request.add_block_ids {
@@ -1323,7 +1326,8 @@ impl Identity {
         }
 
         // Remove block IDs
-        self.block_ids.retain(|id| !request.remove_block_ids.contains(id));
+        self.block_ids
+            .retain(|id| !request.remove_block_ids.contains(id));
 
         self.updated_at = Utc::now();
     }
@@ -1352,7 +1356,9 @@ impl AgentGroup {
         let now = Utc::now();
         let id = uuid::Uuid::new_v4().to_string();
         // Auto-generate name if not provided (Letta compatibility)
-        let name = request.name.unwrap_or_else(|| format!("group-{}", &id[..8]));
+        let name = request
+            .name
+            .unwrap_or_else(|| format!("group-{}", &id[..8]));
 
         Self {
             id,

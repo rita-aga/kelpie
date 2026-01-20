@@ -1,0 +1,7 @@
+{
+  "version": "1.0.0",
+  "description": "Crate dependency graph from cargo metadata",
+  "built_at": null,
+  "git_sha": null,
+  "dependencies": {}
+}

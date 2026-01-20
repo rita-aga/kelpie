@@ -890,7 +890,10 @@ impl AgentStorage for KvAdapter {
         Ok(())
     }
 
-    async fn load_mcp_server(&self, id: &str) -> Result<Option<crate::models::MCPServer>, StorageError> {
+    async fn load_mcp_server(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::MCPServer>, StorageError> {
         // Preconditions
         assert!(!id.is_empty(), "mcp server id cannot be empty");
 
@@ -959,7 +962,10 @@ impl AgentStorage for KvAdapter {
     // Agent Group Operations
     // =========================================================================
 
-    async fn save_agent_group(&self, group: &crate::models::AgentGroup) -> Result<(), StorageError> {
+    async fn save_agent_group(
+        &self,
+        group: &crate::models::AgentGroup,
+    ) -> Result<(), StorageError> {
         // Preconditions
         assert!(!group.id.is_empty(), "agent group id cannot be empty");
 
@@ -974,7 +980,10 @@ impl AgentStorage for KvAdapter {
         Ok(())
     }
 
-    async fn load_agent_group(&self, id: &str) -> Result<Option<crate::models::AgentGroup>, StorageError> {
+    async fn load_agent_group(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::AgentGroup>, StorageError> {
         // Preconditions
         assert!(!id.is_empty(), "agent group id cannot be empty");
 
@@ -1058,7 +1067,10 @@ impl AgentStorage for KvAdapter {
         Ok(())
     }
 
-    async fn load_identity(&self, id: &str) -> Result<Option<crate::models::Identity>, StorageError> {
+    async fn load_identity(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::Identity>, StorageError> {
         // Preconditions
         assert!(!id.is_empty(), "identity id cannot be empty");
 
@@ -1392,7 +1404,7 @@ mod tests {
             message_type: "user_message".to_string(),
             role: MessageRole::User,
             content: "Hello".to_string(),
-            tool_calls: None,
+            tool_call: None,
             tool_call_id: None,
             created_at: chrono::Utc::now(),
         };
@@ -1404,7 +1416,7 @@ mod tests {
             message_type: "assistant_message".to_string(),
             role: MessageRole::Assistant,
             content: "Hi there!".to_string(),
-            tool_calls: None,
+            tool_call: None,
             tool_call_id: None,
             created_at: chrono::Utc::now(),
         };
@@ -1527,7 +1539,7 @@ mod tests {
             message_type: "user_message".to_string(),
             role: MessageRole::User,
             content: "Test message".to_string(),
-            tool_calls: None,
+            tool_call: None,
             tool_call_id: None,
             created_at: chrono::Utc::now(),
         };

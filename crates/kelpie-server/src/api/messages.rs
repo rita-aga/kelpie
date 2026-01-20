@@ -13,12 +13,12 @@ use axum::{
 };
 use chrono::Utc;
 use futures::stream::{self, StreamExt};
+use kelpie_core::Runtime;
 use kelpie_server::llm::{ChatMessage, ContentBlock};
 use kelpie_server::models::{
     ApprovalRequest, BatchMessagesRequest, BatchStatus, ClientTool, CreateMessageRequest, Message,
     MessageResponse, MessageRole, UsageStats,
 };
-use kelpie_core::Runtime;
 use kelpie_server::state::AppState;
 use kelpie_server::tools::{parse_pause_signal, ToolSignal, AGENT_LOOP_ITERATIONS_MAX};
 use serde::{Deserialize, Serialize};
@@ -1166,6 +1166,7 @@ pub async fn load_mcp_tool<R: Runtime + 'static>(
     // Note: server_id may contain underscores (e.g., mcp_server-xxx)
     // So we need to find the last underscore to split server_id from tool_name
     if !tool_id.starts_with("mcp_") {
+        tracing::debug!(tool_id = %tool_id, "Not an MCP tool ID");
         return None;
     }
 
@@ -1173,27 +1174,62 @@ pub async fn load_mcp_tool<R: Runtime + 'static>(
     let remainder = &tool_id[4..];
 
     // Find the last underscore to split server_id from tool_name
-    let last_underscore_pos = remainder.rfind('_')?;
+    let last_underscore_pos = match remainder.rfind('_') {
+        Some(pos) => pos,
+        None => {
+            tracing::warn!(tool_id = %tool_id, "Invalid MCP tool ID format: no underscore found");
+            return None;
+        }
+    };
     let server_id = &remainder[..last_underscore_pos];
     let tool_name = &remainder[last_underscore_pos + 1..];
 
+    tracing::debug!(
+        tool_id = %tool_id,
+        server_id = %server_id,
+        tool_name = %tool_name,
+        "Parsing MCP tool ID"
+    );
+
     // Get the MCP server to extract server_name for registration
-    let server = state.get_mcp_server(server_id).await?;
+    let server = match state.get_mcp_server(server_id).await {
+        Some(s) => s,
+        None => {
+            tracing::warn!(server_id = %server_id, "MCP server not found");
+            return None;
+        }
+    };
 
     // List tools from the MCP server
-    let tool_values = state.list_mcp_server_tools(server_id).await.ok()?;
+    let tool_values = match state.list_mcp_server_tools(server_id).await {
+        Ok(tools) => tools,
+        Err(e) => {
+            tracing::warn!(server_id = %server_id, error = ?e, "Failed to list MCP server tools");
+            return None;
+        }
+    };
 
     // Find the matching tool and convert to ToolDefinition
     for value in tool_values {
         if let Ok(tool) = serde_json::from_value::<super::tools::ToolResponse>(value) {
             if tool.name == tool_name {
                 // Register the MCP tool in the tool registry so it can be executed
-                state.tool_registry().register_mcp_tool(
-                    tool.name.clone(),
-                    tool.description.clone(),
-                    tool.input_schema.clone(),
-                    server.server_name.clone(),
-                ).await;
+                state
+                    .tool_registry()
+                    .register_mcp_tool(
+                        tool.name.clone(),
+                        tool.description.clone(),
+                        tool.input_schema.clone(),
+                        server.server_name.clone(),
+                    )
+                    .await;
+
+                tracing::info!(
+                    tool_id = %tool_id,
+                    tool_name = %tool.name,
+                    server = %server.server_name,
+                    "Successfully loaded and registered MCP tool"
+                );
 
                 return Some(crate::llm::ToolDefinition {
                     name: tool.name,
@@ -1203,6 +1239,13 @@ pub async fn load_mcp_tool<R: Runtime + 'static>(
             }
         }
     }
+
+    tracing::warn!(
+        tool_id = %tool_id,
+        tool_name = %tool_name,
+        server_id = %server_id,
+        "MCP tool not found in server's tool list"
+    );
 
     None
 }
@@ -1243,9 +1286,9 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
-    use kelpie_server::models::AgentState;
     use kelpie_core::Runtime;
-use kelpie_server::state::AppState;
+    use kelpie_server::models::AgentState;
+    use kelpie_server::state::AppState;
     use tower::ServiceExt;
 
     async fn test_app_with_agent() -> (Router, String) {
