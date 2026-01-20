@@ -14,7 +14,7 @@ use kelpie_server::models::{
     AgentGroup, CreateAgentGroupRequest, CreateMessageRequest, RoutingPolicy,
     UpdateAgentGroupRequest,
 };
-use kelpie_core::TokioRuntime;
+use kelpie_core::Runtime;
 use kelpie_server::state::AppState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -52,7 +52,7 @@ pub struct GroupMessageItem {
 }
 
 /// Create agent group routes
-pub fn router() -> Router<AppState<TokioRuntime>> {
+pub fn router<R: Runtime + 'static>() -> Router<AppState<R>> {
     Router::new()
         .route("/agent-groups", get(list_groups).post(create_group))
         .route(
@@ -64,8 +64,8 @@ pub fn router() -> Router<AppState<TokioRuntime>> {
 
 /// Create a new agent group
 #[instrument(skip(state, request), level = "info")]
-pub async fn create_group(
-    State(state): State<AppState<TokioRuntime>>,
+pub async fn create_group<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Json(request): Json<CreateAgentGroupRequest>,
 ) -> Result<Json<AgentGroup>, ApiError> {
     // Validate name if provided
@@ -93,8 +93,8 @@ pub async fn create_group(
 
 /// List agent groups
 #[instrument(skip(state, query), level = "info")]
-pub async fn list_groups(
-    State(state): State<AppState<TokioRuntime>>,
+pub async fn list_groups<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Query(query): Query<ListGroupsQuery>,
 ) -> Result<Json<ListGroupsResponse>, ApiError> {
     let (mut groups, _) = state.list_agent_groups(None)?;
@@ -132,8 +132,8 @@ pub async fn list_groups(
 
 /// Get agent group details
 #[instrument(skip(state), fields(group_id = %group_id), level = "info")]
-pub async fn get_group(
-    State(state): State<AppState<TokioRuntime>>,
+pub async fn get_group<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(group_id): Path<String>,
 ) -> Result<Json<AgentGroup>, ApiError> {
     let group = state
@@ -144,8 +144,8 @@ pub async fn get_group(
 
 /// Update agent group
 #[instrument(skip(state, request), fields(group_id = %group_id), level = "info")]
-pub async fn update_group(
-    State(state): State<AppState<TokioRuntime>>,
+pub async fn update_group<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(group_id): Path<String>,
     Json(request): Json<UpdateAgentGroupRequest>,
 ) -> Result<Json<AgentGroup>, ApiError> {
@@ -173,8 +173,8 @@ pub async fn update_group(
 
 /// Delete agent group
 #[instrument(skip(state), fields(group_id = %group_id), level = "info")]
-pub async fn delete_group(
-    State(state): State<AppState<TokioRuntime>>,
+pub async fn delete_group<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(group_id): Path<String>,
 ) -> Result<(), ApiError> {
     state.delete_agent_group(&group_id).await?;
@@ -183,8 +183,8 @@ pub async fn delete_group(
 
 /// Send message to agent group
 #[instrument(skip(state, request), fields(group_id = %group_id), level = "info")]
-async fn send_group_message(
-    State(state): State<AppState<TokioRuntime>>,
+async fn send_group_message<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(group_id): Path<String>,
     Json(request): Json<CreateMessageRequest>,
 ) -> Result<Json<GroupMessageResponse>, ApiError> {
@@ -256,8 +256,8 @@ fn select_round_robin(group: &mut AgentGroup) -> Result<String, ApiError> {
     Ok(agent_id)
 }
 
-async fn select_intelligent(
-    state: &AppState<TokioRuntime>,
+async fn select_intelligent<R: Runtime + 'static>(
+    state: &AppState<R>,
     group: &AgentGroup,
     content: &str,
 ) -> Result<String, ApiError> {
@@ -316,8 +316,8 @@ fn append_shared_state(group: &mut AgentGroup, agent_id: &str, response: &Value)
     }
 }
 
-async fn send_to_agent(
-    state: &AppState<TokioRuntime>,
+async fn send_to_agent<R: Runtime + 'static>(
+    state: &AppState<R>,
     agent_id: &str,
     content: &str,
     request: CreateMessageRequest,

@@ -15,7 +15,7 @@
 
 use async_trait::async_trait;
 use futures::stream::{self, Stream, StreamExt};
-use kelpie_core::Result;
+use kelpie_core::{Result, Runtime, TokioRuntime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
 use kelpie_server::actor::{LlmClient, LlmMessage, LlmResponse, StreamChunk};
 use std::pin::Pin;

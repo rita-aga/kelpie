@@ -9,7 +9,7 @@ use axum::{
     Json, Router,
 };
 use kelpie_server::models::{AgentState, CreateAgentRequest, ListResponse, UpdateAgentRequest};
-use kelpie_core::TokioRuntime;
+use kelpie_core::Runtime;
 use kelpie_server::state::AppState;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -80,7 +80,7 @@ struct BatchDeleteAgentResult {
 }
 
 /// Create agent routes
-pub fn router() -> Router<AppState<TokioRuntime>> {
+pub fn router<R: Runtime + 'static>() -> Router<AppState<R>> {
     Router::new()
         .route("/", get(list_agents).post(create_agent))
         .route(
@@ -153,8 +153,8 @@ pub fn router() -> Router<AppState<TokioRuntime>> {
 ///
 /// POST /v1/agents
 #[instrument(skip(state, request), fields(agent_name = %request.name), level = "info")]
-async fn create_agent(
-    State(state): State<AppState<TokioRuntime>>,
+async fn create_agent<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Json(request): Json<CreateAgentRequest>,
 ) -> Result<Json<AgentState>, ApiError> {
     // Validate request
@@ -206,8 +206,8 @@ pub struct GetAgentQuery {
 /// GET /v1/agents/{agent_id}
 /// GET /v1/agents/{agent_id}?include=agent.tools
 #[instrument(skip(state, query), fields(agent_id = %agent_id), level = "info")]
-async fn get_agent(
-    State(state): State<AppState<TokioRuntime>>,
+async fn get_agent<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
     Query(query): Query<GetAgentQuery>,
 ) -> Result<Json<AgentStateWithTools>, ApiError> {
@@ -248,8 +248,8 @@ pub struct AgentStateWithTools {
 ///
 /// GET /v1/agents/{agent_id}/tools
 #[instrument(skip(state), fields(agent_id = %agent_id), level = "info")]
-async fn list_agent_tools(
-    State(state): State<AppState<TokioRuntime>>,
+async fn list_agent_tools<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<Vec<super::tools::ToolResponse>>, ApiError> {
     let agent = state
@@ -273,8 +273,8 @@ async fn list_agent_tools(
 ///
 /// POST /v1/agents/{agent_id}/tools/{tool_id}
 #[instrument(skip(state), fields(agent_id = %agent_id, tool_id = %tool_id), level = "info")]
-async fn attach_tool(
-    State(state): State<AppState<TokioRuntime>>,
+async fn attach_tool<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path((agent_id, tool_id)): Path<(String, String)>,
 ) -> Result<Json<super::tools::ToolResponse>, ApiError> {
     // Get the tool (by ID or name)
@@ -310,8 +310,8 @@ async fn attach_tool(
 ///
 /// DELETE /v1/agents/{agent_id}/tools/{tool_id}
 #[instrument(skip(state), fields(agent_id = %agent_id, tool_id = %tool_id), level = "info")]
-async fn detach_tool(
-    State(state): State<AppState<TokioRuntime>>,
+async fn detach_tool<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path((agent_id, tool_id)): Path<(String, String)>,
 ) -> Result<(), ApiError> {
     // Verify agent exists
@@ -342,8 +342,8 @@ async fn detach_tool(
 ///
 /// Supports both Kelpie's `cursor` and Letta SDK's `after` parameters for pagination.
 #[instrument(skip(state, query), fields(limit = query.limit, cursor = ?query.cursor, after = ?query.after), level = "info")]
-async fn list_agents(
-    State(state): State<AppState<TokioRuntime>>,
+async fn list_agents<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Query(query): Query<ListAgentsQuery>,
 ) -> Result<Json<ListResponse<AgentState>>, ApiError> {
     let limit = query.limit.min(LIST_LIMIT_MAX);
@@ -393,8 +393,8 @@ async fn list_agents(
 
 /// Batch create agents
 #[instrument(skip(state, request), level = "info")]
-async fn create_agents_batch(
-    State(state): State<AppState<TokioRuntime>>,
+async fn create_agents_batch<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Json(request): Json<BatchCreateAgentsRequest>,
 ) -> Result<Json<BatchAgentsResponse>, ApiError> {
     if request.agents.is_empty() {
@@ -424,8 +424,8 @@ async fn create_agents_batch(
 
 /// Batch delete agents
 #[instrument(skip(state, request), level = "info")]
-async fn delete_agents_batch(
-    State(state): State<AppState<TokioRuntime>>,
+async fn delete_agents_batch<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Json(request): Json<BatchDeleteAgentsRequest>,
 ) -> Result<Json<BatchDeleteAgentsResponse>, ApiError> {
     if request.agent_ids.is_empty() {
@@ -455,8 +455,8 @@ async fn delete_agents_batch(
 ///
 /// PATCH /v1/agents/{agent_id}
 #[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
-async fn update_agent(
-    State(state): State<AppState<TokioRuntime>>,
+async fn update_agent<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
     Json(request): Json<UpdateAgentRequest>,
 ) -> Result<Json<AgentState>, ApiError> {
@@ -485,8 +485,8 @@ async fn update_agent(
 ///
 /// DELETE /v1/agents/{agent_id}
 #[instrument(skip(state), fields(agent_id = %agent_id), level = "info")]
-async fn delete_agent(
-    State(state): State<AppState<TokioRuntime>>,
+async fn delete_agent<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
 ) -> Result<(), ApiError> {
     state.delete_agent_async(&agent_id).await?;

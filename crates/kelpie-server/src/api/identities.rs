@@ -9,7 +9,7 @@ use axum::{
     Json, Router,
 };
 use kelpie_server::models::{CreateIdentityRequest, Identity, UpdateIdentityRequest};
-use kelpie_core::TokioRuntime;
+use kelpie_core::Runtime;
 use kelpie_server::state::AppState;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -34,7 +34,7 @@ pub struct ListIdentitiesResponse {
 }
 
 /// Create identity routes
-pub fn router() -> Router<AppState<TokioRuntime>> {
+pub fn router<R: Runtime + 'static>() -> Router<AppState<R>> {
     Router::new()
         .route("/identities", get(list_identities).post(create_identity))
         .route(
@@ -45,8 +45,8 @@ pub fn router() -> Router<AppState<TokioRuntime>> {
 
 /// Create a new identity
 #[instrument(skip(state, request), level = "info")]
-pub async fn create_identity(
-    State(state): State<AppState<TokioRuntime>>,
+pub async fn create_identity<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Json(request): Json<CreateIdentityRequest>,
 ) -> Result<Json<Identity>, ApiError> {
     // Validate name
@@ -74,8 +74,8 @@ pub async fn create_identity(
 
 /// List identities
 #[instrument(skip(state, query), level = "info")]
-pub async fn list_identities(
-    State(state): State<AppState<TokioRuntime>>,
+pub async fn list_identities<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Query(query): Query<ListIdentitiesQuery>,
 ) -> Result<Json<ListIdentitiesResponse>, ApiError> {
     let (mut identities, _) = state.list_identities(None)?;
@@ -113,8 +113,8 @@ pub async fn list_identities(
 
 /// Get identity details
 #[instrument(skip(state), fields(identity_id = %identity_id), level = "info")]
-pub async fn get_identity(
-    State(state): State<AppState<TokioRuntime>>,
+pub async fn get_identity<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(identity_id): Path<String>,
 ) -> Result<Json<Identity>, ApiError> {
     let identity = state
@@ -125,8 +125,8 @@ pub async fn get_identity(
 
 /// Update identity
 #[instrument(skip(state, request), fields(identity_id = %identity_id), level = "info")]
-pub async fn update_identity(
-    State(state): State<AppState<TokioRuntime>>,
+pub async fn update_identity<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(identity_id): Path<String>,
     Json(request): Json<UpdateIdentityRequest>,
 ) -> Result<Json<Identity>, ApiError> {
@@ -159,8 +159,8 @@ pub async fn update_identity(
 
 /// Delete identity
 #[instrument(skip(state), fields(identity_id = %identity_id), level = "info")]
-pub async fn delete_identity(
-    State(state): State<AppState<TokioRuntime>>,
+pub async fn delete_identity<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(identity_id): Path<String>,
 ) -> Result<(), ApiError> {
     state.delete_identity(&identity_id).await?;

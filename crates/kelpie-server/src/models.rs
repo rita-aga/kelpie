@@ -1152,7 +1152,7 @@ impl Project {
 // Agent Group models (Phase 8)
 // =========================================================================
 
-/// Routing policy for agent groups
+/// Routing policy for agent groups (Letta ManagerType compatibility)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutingPolicy {
@@ -1160,6 +1160,16 @@ pub enum RoutingPolicy {
     RoundRobin,
     Broadcast,
     Intelligent,
+    /// Supervisor-based routing (Letta compatibility)
+    Supervisor,
+    /// Dynamic routing (Letta compatibility)
+    Dynamic,
+    /// Sleeptime-based routing (Letta compatibility)
+    Sleeptime,
+    /// Voice sleeptime routing (Letta compatibility)
+    VoiceSleeptime,
+    /// Swarm routing (Letta compatibility)
+    Swarm,
 }
 
 /// Request to create an agent group
@@ -1171,7 +1181,8 @@ pub struct CreateAgentGroupRequest {
     pub description: Option<String>,
     #[serde(default)]
     pub agent_ids: Vec<String>,
-    #[serde(default)]
+    /// Routing policy (accepted as "manager_type" in JSON for Letta compatibility)
+    #[serde(default, alias = "manager_type")]
     pub routing_policy: RoutingPolicy,
     #[serde(default)]
     pub metadata: serde_json::Value,
@@ -1182,12 +1193,140 @@ pub struct CreateAgentGroupRequest {
 pub struct UpdateAgentGroupRequest {
     pub name: Option<String>,
     pub description: Option<String>,
+    /// Routing policy (accepted as "manager_type" in JSON for Letta compatibility)
+    #[serde(alias = "manager_type")]
     pub routing_policy: Option<RoutingPolicy>,
     #[serde(default)]
     pub add_agent_ids: Vec<String>,
     #[serde(default)]
     pub remove_agent_ids: Vec<String>,
     pub metadata: Option<serde_json::Value>,
+}
+
+// ============================================================================
+// Identities
+// ============================================================================
+
+/// Identity type
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum IdentityType {
+    #[default]
+    User,
+    Org,
+    Other,
+}
+
+/// Request to create an identity
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateIdentityRequest {
+    pub name: String,
+    #[serde(default)]
+    pub identifier_key: Option<String>,
+    #[serde(default)]
+    pub identity_type: IdentityType,
+    #[serde(default)]
+    pub agent_ids: Vec<String>,
+    #[serde(default)]
+    pub block_ids: Vec<String>,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub properties: serde_json::Value,
+}
+
+/// Request to update an identity
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpdateIdentityRequest {
+    pub name: Option<String>,
+    pub identifier_key: Option<String>,
+    pub identity_type: Option<IdentityType>,
+    #[serde(default)]
+    pub add_agent_ids: Vec<String>,
+    #[serde(default)]
+    pub remove_agent_ids: Vec<String>,
+    #[serde(default)]
+    pub add_block_ids: Vec<String>,
+    #[serde(default)]
+    pub remove_block_ids: Vec<String>,
+    pub project_id: Option<String>,
+    pub properties: Option<serde_json::Value>,
+}
+
+/// Identity response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Identity {
+    pub id: String,
+    pub name: String,
+    pub identifier_key: String,
+    pub identity_type: IdentityType,
+    pub agent_ids: Vec<String>,
+    pub block_ids: Vec<String>,
+    pub project_id: Option<String>,
+    pub properties: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl Identity {
+    pub fn from_request(request: CreateIdentityRequest) -> Self {
+        let now = Utc::now();
+        let id = uuid::Uuid::new_v4().to_string();
+        let identifier_key = request.identifier_key.unwrap_or_else(|| format!("identity-{}", &id[..8]));
+
+        Self {
+            id,
+            name: request.name,
+            identifier_key,
+            identity_type: request.identity_type,
+            agent_ids: request.agent_ids,
+            block_ids: request.block_ids,
+            project_id: request.project_id,
+            properties: request.properties,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    pub fn apply_update(&mut self, request: UpdateIdentityRequest) {
+        if let Some(name) = request.name {
+            self.name = name;
+        }
+        if let Some(identifier_key) = request.identifier_key {
+            self.identifier_key = identifier_key;
+        }
+        if let Some(identity_type) = request.identity_type {
+            self.identity_type = identity_type;
+        }
+        if let Some(project_id) = request.project_id {
+            self.project_id = Some(project_id);
+        }
+        if let Some(properties) = request.properties {
+            self.properties = properties;
+        }
+
+        // Add agent IDs
+        for agent_id in request.add_agent_ids {
+            if !self.agent_ids.contains(&agent_id) {
+                self.agent_ids.push(agent_id);
+            }
+        }
+
+        // Remove agent IDs
+        self.agent_ids.retain(|id| !request.remove_agent_ids.contains(id));
+
+        // Add block IDs
+        for block_id in request.add_block_ids {
+            if !self.block_ids.contains(&block_id) {
+                self.block_ids.push(block_id);
+            }
+        }
+
+        // Remove block IDs
+        self.block_ids.retain(|id| !request.remove_block_ids.contains(id));
+
+        self.updated_at = Utc::now();
+    }
 }
 
 /// Agent group response

@@ -163,6 +163,66 @@ impl KvAdapter {
         key.into_bytes()
     }
 
+    /// Generate key for MCP server: `mcp_servers/{id}`
+    fn mcp_server_key(id: &str) -> Vec<u8> {
+        assert!(!id.is_empty(), "mcp server id cannot be empty");
+        let key = format!("mcp_servers/{}", id);
+        assert!(
+            key.len() <= KEY_LENGTH_BYTES_MAX,
+            "mcp server key too long: {} bytes",
+            key.len()
+        );
+        key.into_bytes()
+    }
+
+    /// Generate key for agent group: `agent_groups/{id}`
+    fn agent_group_key(id: &str) -> Vec<u8> {
+        assert!(!id.is_empty(), "agent group id cannot be empty");
+        let key = format!("agent_groups/{}", id);
+        assert!(
+            key.len() <= KEY_LENGTH_BYTES_MAX,
+            "agent group key too long: {} bytes",
+            key.len()
+        );
+        key.into_bytes()
+    }
+
+    /// Generate key for identity: `identities/{id}`
+    fn identity_key(id: &str) -> Vec<u8> {
+        assert!(!id.is_empty(), "identity id cannot be empty");
+        let key = format!("identities/{}", id);
+        assert!(
+            key.len() <= KEY_LENGTH_BYTES_MAX,
+            "identity key too long: {} bytes",
+            key.len()
+        );
+        key.into_bytes()
+    }
+
+    /// Generate key for project: `projects/{id}`
+    fn project_key(id: &str) -> Vec<u8> {
+        assert!(!id.is_empty(), "project id cannot be empty");
+        let key = format!("projects/{}", id);
+        assert!(
+            key.len() <= KEY_LENGTH_BYTES_MAX,
+            "project key too long: {} bytes",
+            key.len()
+        );
+        key.into_bytes()
+    }
+
+    /// Generate key for job: `jobs/{id}`
+    fn job_key(id: &str) -> Vec<u8> {
+        assert!(!id.is_empty(), "job id cannot be empty");
+        let key = format!("jobs/{}", id);
+        assert!(
+            key.len() <= KEY_LENGTH_BYTES_MAX,
+            "job key too long: {} bytes",
+            key.len()
+        );
+        key.into_bytes()
+    }
+
     // =========================================================================
     // Serialization Helpers
     // =========================================================================
@@ -810,6 +870,426 @@ impl AgentStorage for KvAdapter {
 
         Ok(())
     }
+
+    // =========================================================================
+    // MCP Server Operations
+    // =========================================================================
+
+    async fn save_mcp_server(&self, server: &crate::models::MCPServer) -> Result<(), StorageError> {
+        // Preconditions
+        assert!(!server.id.is_empty(), "mcp server id cannot be empty");
+
+        let key = Self::mcp_server_key(&server.id);
+        let value = Self::serialize(server)?;
+
+        self.kv
+            .set(&self.actor_id, &key, &value)
+            .await
+            .map_err(|e| Self::map_kv_error("save_mcp_server", e))?;
+
+        Ok(())
+    }
+
+    async fn load_mcp_server(&self, id: &str) -> Result<Option<crate::models::MCPServer>, StorageError> {
+        // Preconditions
+        assert!(!id.is_empty(), "mcp server id cannot be empty");
+
+        let key = Self::mcp_server_key(id);
+
+        let bytes = self
+            .kv
+            .get(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("load_mcp_server", e))?;
+
+        match bytes {
+            Some(b) => {
+                let server = Self::deserialize(&b)?;
+                Ok(Some(server))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_mcp_server(&self, id: &str) -> Result<(), StorageError> {
+        // Preconditions
+        assert!(!id.is_empty(), "mcp server id cannot be empty");
+
+        let key = Self::mcp_server_key(id);
+
+        // Check if exists
+        if !self
+            .kv
+            .exists(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("delete_mcp_server_exists_check", e))?
+        {
+            return Err(StorageError::NotFound {
+                resource: "mcp_server",
+                id: id.to_string(),
+            });
+        }
+
+        self.kv
+            .delete(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("delete_mcp_server", e))?;
+
+        Ok(())
+    }
+
+    async fn list_mcp_servers(&self) -> Result<Vec<crate::models::MCPServer>, StorageError> {
+        let prefix = b"mcp_servers/";
+        let pairs = self
+            .kv
+            .scan_prefix(&self.actor_id, prefix)
+            .await
+            .map_err(|e| Self::map_kv_error("list_mcp_servers", e))?;
+
+        let mut servers = Vec::with_capacity(pairs.len());
+        for (_key, value) in pairs {
+            let server = Self::deserialize(&value)?;
+            servers.push(server);
+        }
+
+        Ok(servers)
+    }
+
+    // =========================================================================
+    // Agent Group Operations
+    // =========================================================================
+
+    async fn save_agent_group(&self, group: &crate::models::AgentGroup) -> Result<(), StorageError> {
+        // Preconditions
+        assert!(!group.id.is_empty(), "agent group id cannot be empty");
+
+        let key = Self::agent_group_key(&group.id);
+        let value = Self::serialize(group)?;
+
+        self.kv
+            .set(&self.actor_id, &key, &value)
+            .await
+            .map_err(|e| Self::map_kv_error("save_agent_group", e))?;
+
+        Ok(())
+    }
+
+    async fn load_agent_group(&self, id: &str) -> Result<Option<crate::models::AgentGroup>, StorageError> {
+        // Preconditions
+        assert!(!id.is_empty(), "agent group id cannot be empty");
+
+        let key = Self::agent_group_key(id);
+
+        let bytes = self
+            .kv
+            .get(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("load_agent_group", e))?;
+
+        match bytes {
+            Some(b) => {
+                let group = Self::deserialize(&b)?;
+                Ok(Some(group))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_agent_group(&self, id: &str) -> Result<(), StorageError> {
+        // Preconditions
+        assert!(!id.is_empty(), "agent group id cannot be empty");
+
+        let key = Self::agent_group_key(id);
+
+        // Check if exists
+        if !self
+            .kv
+            .exists(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("delete_agent_group_exists_check", e))?
+        {
+            return Err(StorageError::NotFound {
+                resource: "agent_group",
+                id: id.to_string(),
+            });
+        }
+
+        self.kv
+            .delete(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("delete_agent_group", e))?;
+
+        Ok(())
+    }
+
+    async fn list_agent_groups(&self) -> Result<Vec<crate::models::AgentGroup>, StorageError> {
+        let prefix = b"agent_groups/";
+        let pairs = self
+            .kv
+            .scan_prefix(&self.actor_id, prefix)
+            .await
+            .map_err(|e| Self::map_kv_error("list_agent_groups", e))?;
+
+        let mut groups = Vec::with_capacity(pairs.len());
+        for (_key, value) in pairs {
+            let group = Self::deserialize(&value)?;
+            groups.push(group);
+        }
+
+        Ok(groups)
+    }
+
+    // =========================================================================
+    // Identity Operations
+    // =========================================================================
+
+    async fn save_identity(&self, identity: &crate::models::Identity) -> Result<(), StorageError> {
+        // Preconditions
+        assert!(!identity.id.is_empty(), "identity id cannot be empty");
+
+        let key = Self::identity_key(&identity.id);
+        let value = Self::serialize(identity)?;
+
+        self.kv
+            .set(&self.actor_id, &key, &value)
+            .await
+            .map_err(|e| Self::map_kv_error("save_identity", e))?;
+
+        Ok(())
+    }
+
+    async fn load_identity(&self, id: &str) -> Result<Option<crate::models::Identity>, StorageError> {
+        // Preconditions
+        assert!(!id.is_empty(), "identity id cannot be empty");
+
+        let key = Self::identity_key(id);
+
+        let bytes = self
+            .kv
+            .get(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("load_identity", e))?;
+
+        match bytes {
+            Some(b) => {
+                let identity = Self::deserialize(&b)?;
+                Ok(Some(identity))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_identity(&self, id: &str) -> Result<(), StorageError> {
+        // Preconditions
+        assert!(!id.is_empty(), "identity id cannot be empty");
+
+        let key = Self::identity_key(id);
+
+        // Check if exists
+        if !self
+            .kv
+            .exists(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("delete_identity_exists_check", e))?
+        {
+            return Err(StorageError::NotFound {
+                resource: "identity",
+                id: id.to_string(),
+            });
+        }
+
+        self.kv
+            .delete(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("delete_identity", e))?;
+
+        Ok(())
+    }
+
+    async fn list_identities(&self) -> Result<Vec<crate::models::Identity>, StorageError> {
+        let prefix = b"identities/";
+        let pairs = self
+            .kv
+            .scan_prefix(&self.actor_id, prefix)
+            .await
+            .map_err(|e| Self::map_kv_error("list_identities", e))?;
+
+        let mut identities = Vec::with_capacity(pairs.len());
+        for (_key, value) in pairs {
+            let identity = Self::deserialize(&value)?;
+            identities.push(identity);
+        }
+
+        Ok(identities)
+    }
+
+    // =========================================================================
+    // Project Operations
+    // =========================================================================
+
+    async fn save_project(&self, project: &crate::models::Project) -> Result<(), StorageError> {
+        // Preconditions
+        assert!(!project.id.is_empty(), "project id cannot be empty");
+
+        let key = Self::project_key(&project.id);
+        let value = Self::serialize(project)?;
+
+        self.kv
+            .set(&self.actor_id, &key, &value)
+            .await
+            .map_err(|e| Self::map_kv_error("save_project", e))?;
+
+        Ok(())
+    }
+
+    async fn load_project(&self, id: &str) -> Result<Option<crate::models::Project>, StorageError> {
+        // Preconditions
+        assert!(!id.is_empty(), "project id cannot be empty");
+
+        let key = Self::project_key(id);
+
+        let bytes = self
+            .kv
+            .get(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("load_project", e))?;
+
+        match bytes {
+            Some(b) => {
+                let project = Self::deserialize(&b)?;
+                Ok(Some(project))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_project(&self, id: &str) -> Result<(), StorageError> {
+        // Preconditions
+        assert!(!id.is_empty(), "project id cannot be empty");
+
+        let key = Self::project_key(id);
+
+        // Check if exists
+        if !self
+            .kv
+            .exists(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("delete_project_exists_check", e))?
+        {
+            return Err(StorageError::NotFound {
+                resource: "project",
+                id: id.to_string(),
+            });
+        }
+
+        self.kv
+            .delete(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("delete_project", e))?;
+
+        Ok(())
+    }
+
+    async fn list_projects(&self) -> Result<Vec<crate::models::Project>, StorageError> {
+        let prefix = b"projects/";
+        let pairs = self
+            .kv
+            .scan_prefix(&self.actor_id, prefix)
+            .await
+            .map_err(|e| Self::map_kv_error("list_projects", e))?;
+
+        let mut projects = Vec::with_capacity(pairs.len());
+        for (_key, value) in pairs {
+            let project = Self::deserialize(&value)?;
+            projects.push(project);
+        }
+
+        Ok(projects)
+    }
+
+    // =========================================================================
+    // Job Operations
+    // =========================================================================
+
+    async fn save_job(&self, job: &crate::models::Job) -> Result<(), StorageError> {
+        // Preconditions
+        assert!(!job.id.is_empty(), "job id cannot be empty");
+
+        let key = Self::job_key(&job.id);
+        let value = Self::serialize(job)?;
+
+        self.kv
+            .set(&self.actor_id, &key, &value)
+            .await
+            .map_err(|e| Self::map_kv_error("save_job", e))?;
+
+        Ok(())
+    }
+
+    async fn load_job(&self, id: &str) -> Result<Option<crate::models::Job>, StorageError> {
+        // Preconditions
+        assert!(!id.is_empty(), "job id cannot be empty");
+
+        let key = Self::job_key(id);
+
+        let bytes = self
+            .kv
+            .get(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("load_job", e))?;
+
+        match bytes {
+            Some(b) => {
+                let job = Self::deserialize(&b)?;
+                Ok(Some(job))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_job(&self, id: &str) -> Result<(), StorageError> {
+        // Preconditions
+        assert!(!id.is_empty(), "job id cannot be empty");
+
+        let key = Self::job_key(id);
+
+        // Check if exists
+        if !self
+            .kv
+            .exists(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("delete_job_exists_check", e))?
+        {
+            return Err(StorageError::NotFound {
+                resource: "job",
+                id: id.to_string(),
+            });
+        }
+
+        self.kv
+            .delete(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("delete_job", e))?;
+
+        Ok(())
+    }
+
+    async fn list_jobs(&self) -> Result<Vec<crate::models::Job>, StorageError> {
+        let prefix = b"jobs/";
+        let pairs = self
+            .kv
+            .scan_prefix(&self.actor_id, prefix)
+            .await
+            .map_err(|e| Self::map_kv_error("list_jobs", e))?;
+
+        let mut jobs = Vec::with_capacity(pairs.len());
+        for (_key, value) in pairs {
+            let job = Self::deserialize(&value)?;
+            jobs.push(job);
+        }
+
+        Ok(jobs)
+    }
 }
 
 #[cfg(test)]
@@ -1074,5 +1554,180 @@ mod tests {
         // Test empty id assertions
         let result = std::panic::catch_unwind(|| KvAdapter::agent_key(""));
         assert!(result.is_err(), "should panic on empty agent id");
+    }
+
+    #[tokio::test]
+    async fn test_adapter_mcp_server_crud() {
+        let adapter = test_adapter();
+
+        // Create MCP server
+        use crate::models::{MCPServer, MCPServerConfig};
+        let server = MCPServer::new(
+            "test-server",
+            MCPServerConfig::Stdio {
+                command: "python".to_string(),
+                args: vec!["-m".to_string(), "mcp_server".to_string()],
+                env: None,
+            },
+        );
+        adapter.save_mcp_server(&server).await.unwrap();
+
+        // Load server
+        let loaded = adapter.load_mcp_server(&server.id).await.unwrap();
+        assert!(loaded.is_some());
+        assert_eq!(loaded.unwrap().server_name, "test-server");
+
+        // List servers
+        let servers = adapter.list_mcp_servers().await.unwrap();
+        assert_eq!(servers.len(), 1);
+
+        // Delete server
+        adapter.delete_mcp_server(&server.id).await.unwrap();
+
+        // Verify deleted
+        let loaded = adapter.load_mcp_server(&server.id).await.unwrap();
+        assert!(loaded.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_adapter_agent_group_crud() {
+        let adapter = test_adapter();
+
+        // Create agent group
+        use crate::models::{AgentGroup, CreateAgentGroupRequest, RoutingPolicy};
+        let request = CreateAgentGroupRequest {
+            name: Some("test-group".to_string()),
+            description: Some("Test group".to_string()),
+            agent_ids: vec!["agent-1".to_string(), "agent-2".to_string()],
+            routing_policy: RoutingPolicy::RoundRobin,
+            metadata: serde_json::json!({}),
+        };
+        let group = AgentGroup::from_request(request);
+        adapter.save_agent_group(&group).await.unwrap();
+
+        // Load group
+        let loaded = adapter.load_agent_group(&group.id).await.unwrap();
+        assert!(loaded.is_some());
+        let loaded_group = loaded.unwrap();
+        assert_eq!(loaded_group.name, "test-group");
+        assert_eq!(loaded_group.agent_ids.len(), 2);
+
+        // List groups
+        let groups = adapter.list_agent_groups().await.unwrap();
+        assert_eq!(groups.len(), 1);
+
+        // Delete group
+        adapter.delete_agent_group(&group.id).await.unwrap();
+
+        // Verify deleted
+        let loaded = adapter.load_agent_group(&group.id).await.unwrap();
+        assert!(loaded.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_adapter_identity_crud() {
+        let adapter = test_adapter();
+
+        // Create identity
+        use crate::models::{CreateIdentityRequest, Identity, IdentityType};
+        let request = CreateIdentityRequest {
+            name: "Test User".to_string(),
+            identifier_key: Some("user-123".to_string()),
+            identity_type: IdentityType::User,
+            agent_ids: vec!["agent-1".to_string()],
+            block_ids: vec![],
+            project_id: None,
+            properties: serde_json::json!({"email": "test@example.com"}),
+        };
+        let identity = Identity::from_request(request);
+        adapter.save_identity(&identity).await.unwrap();
+
+        // Load identity
+        let loaded = adapter.load_identity(&identity.id).await.unwrap();
+        assert!(loaded.is_some());
+        let loaded_identity = loaded.unwrap();
+        assert_eq!(loaded_identity.name, "Test User");
+        assert_eq!(loaded_identity.identifier_key, "user-123");
+
+        // List identities
+        let identities = adapter.list_identities().await.unwrap();
+        assert_eq!(identities.len(), 1);
+
+        // Delete identity
+        adapter.delete_identity(&identity.id).await.unwrap();
+
+        // Verify deleted
+        let loaded = adapter.load_identity(&identity.id).await.unwrap();
+        assert!(loaded.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_adapter_project_crud() {
+        let adapter = test_adapter();
+
+        // Create project
+        use crate::models::{CreateProjectRequest, Project};
+        let request = CreateProjectRequest {
+            name: "Test Project".to_string(),
+            description: Some("A test project".to_string()),
+            tags: vec!["test".to_string()],
+            metadata: serde_json::json!({}),
+        };
+        let project = Project::from_request(request);
+        adapter.save_project(&project).await.unwrap();
+
+        // Load project
+        let loaded = adapter.load_project(&project.id).await.unwrap();
+        assert!(loaded.is_some());
+        let loaded_project = loaded.unwrap();
+        assert_eq!(loaded_project.name, "Test Project");
+        assert_eq!(loaded_project.tags.len(), 1);
+
+        // List projects
+        let projects = adapter.list_projects().await.unwrap();
+        assert_eq!(projects.len(), 1);
+
+        // Delete project
+        adapter.delete_project(&project.id).await.unwrap();
+
+        // Verify deleted
+        let loaded = adapter.load_project(&project.id).await.unwrap();
+        assert!(loaded.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_adapter_job_crud() {
+        let adapter = test_adapter();
+
+        // Create job
+        use crate::models::{CreateJobRequest, Job, JobAction, ScheduleType};
+        let request = CreateJobRequest {
+            agent_id: "agent-1".to_string(),
+            schedule_type: ScheduleType::Interval,
+            schedule: "3600".to_string(), // Every hour
+            action: JobAction::SendMessage,
+            action_params: serde_json::json!({"message": "Hello"}),
+            description: Some("Test job".to_string()),
+        };
+        let job = Job::from_request(request);
+        adapter.save_job(&job).await.unwrap();
+
+        // Load job
+        let loaded = adapter.load_job(&job.id).await.unwrap();
+        assert!(loaded.is_some());
+        let loaded_job = loaded.unwrap();
+        assert_eq!(loaded_job.agent_id, "agent-1");
+        assert_eq!(loaded_job.schedule, "3600");
+
+        // List jobs
+        let jobs = adapter.list_jobs().await.unwrap();
+        assert_eq!(jobs.len(), 1);
+
+        // Delete job
+        adapter.delete_job(&job.id).await.unwrap();
+
+        // Verify deleted
+        let loaded = adapter.load_job(&job.id).await.unwrap();
+        assert!(loaded.is_none());
     }
 }

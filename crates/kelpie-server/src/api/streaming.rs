@@ -12,7 +12,7 @@ use futures::stream::{self, Stream, StreamExt};
 use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
 use kelpie_server::llm::{ChatMessage, ContentBlock};
 use kelpie_server::models::{CreateMessageRequest, Message, MessageRole};
-use kelpie_core::TokioRuntime;
+use kelpie_core::Runtime;
 use kelpie_server::state::AppState;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
@@ -86,8 +86,8 @@ struct StopReasonEvent {
 ///
 /// POST /v1/agents/{agent_id}/messages/stream
 #[instrument(skip(state, _query, request), fields(agent_id = %agent_id), level = "info")]
-pub async fn send_message_stream(
-    State(state): State<AppState<TokioRuntime>>,
+pub async fn send_message_stream<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
     Query(_query): Query<StreamQuery>,
     axum::Json(request): axum::Json<CreateMessageRequest>,
@@ -169,8 +169,8 @@ pub async fn send_message_stream(
 }
 
 /// Generate all SSE events for a response
-async fn generate_response_events(
-    state: &AppState<TokioRuntime>,
+async fn generate_response_events<R: Runtime + 'static>(
+    state: &AppState<R>,
     agent_id: &str,
     agent: &kelpie_server::models::AgentState,
     llm: &crate::llm::LlmClient,
@@ -375,8 +375,8 @@ async fn generate_response_events(
 /// Generate streaming SSE events using real LLM token streaming (Phase 7.9)
 ///
 /// Returns stream of SSE events as tokens arrive from LLM.
-async fn generate_streaming_response_events(
-    state: &AppState<TokioRuntime>,
+async fn generate_streaming_response_events<R: Runtime + 'static>(
+    state: &AppState<R>,
     agent_id: &str,
     agent: &kelpie_server::models::AgentState,
     llm: &crate::llm::LlmClient,

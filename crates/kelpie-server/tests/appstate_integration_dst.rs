@@ -13,7 +13,7 @@
 #![cfg(feature = "dst")]
 
 use async_trait::async_trait;
-use kelpie_core::{Result, TimeProvider};
+use kelpie_core::{Result, Runtime, TimeProvider, TokioRuntime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -46,7 +46,7 @@ async fn test_appstate_init_crash() {
 
             // Try to create AppState 20 times with 50% crash rate
             for i in 0..20 {
-                let app_state_result = create_appstate_with_service(&sim_env).await;
+                let app_state_result = create_appstate_with_service(TokioRuntime, &sim_env).await;
 
                 match app_state_result {
                     Ok(app_state) => {
@@ -139,7 +139,8 @@ async fn test_concurrent_agent_creation_race() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::CrashAfterWrite, 0.4))
         .run_async(|sim_env| async move {
-            let app_state = match create_appstate_with_service(&sim_env).await {
+            let runtime = TokioRuntime;
+            let app_state = match create_appstate_with_service(runtime.clone(), &sim_env).await {
                 Ok(a) => a,
                 Err(e) => {
                     println!("Skipping test - couldn't create AppState: {}", e);
@@ -151,7 +152,7 @@ async fn test_concurrent_agent_creation_race() {
             let mut handles = vec![];
             for i in 0..10 {
                 let app_clone = app_state.clone();
-                let handle = tokio::spawn(async move {
+                let handle = runtime.spawn(async move {
                     let request = CreateAgentRequest {
                         name: "concurrent-test".to_string(), // Same name!
                         agent_type: AgentType::LettaV1Agent,
@@ -262,7 +263,8 @@ async fn test_shutdown_with_inflight_requests() {
         ))
         .run_async(|sim_env| async move {
             let time = sim_env.io_context.time.clone();
-            let app_state = match create_appstate_with_service(&sim_env).await {
+            let runtime = TokioRuntime;
+            let app_state = match create_appstate_with_service(runtime.clone(), &sim_env).await {
                 Ok(a) => a,
                 Err(e) => {
                     println!("Skipping test - couldn't create AppState: {}", e);
@@ -274,7 +276,7 @@ async fn test_shutdown_with_inflight_requests() {
             let mut handles = vec![];
             for i in 0..5 {
                 let app_clone = app_state.clone();
-                let handle = tokio::spawn(async move {
+                let handle = runtime.spawn(async move {
                     let request = CreateAgentRequest {
                         name: format!("inflight-{}", i),
                         agent_type: AgentType::LettaV1Agent,
@@ -373,7 +375,8 @@ async fn test_service_invoke_during_shutdown() {
         .with_fault(FaultConfig::new(FaultType::CrashDuringTransaction, 0.4))
         .run_async(|sim_env| async move {
             let time = sim_env.io_context.time.clone();
-            let app_state = match create_appstate_with_service(&sim_env).await {
+            let runtime = TokioRuntime;
+            let app_state = match create_appstate_with_service(runtime.clone(), &sim_env).await {
                 Ok(a) => a,
                 Err(e) => {
                     println!("Skipping test - couldn't create AppState: {}", e);
@@ -384,7 +387,7 @@ async fn test_service_invoke_during_shutdown() {
             // Start shutdown in background (deterministic sleep)
             let app_clone = app_state.clone();
             let time_clone = time.clone();
-            tokio::spawn(async move {
+            runtime.spawn(async move {
                 time_clone.sleep_ms(10).await;
                 let _ = app_clone.shutdown(Duration::from_secs(2)).await;
             });
@@ -465,7 +468,7 @@ async fn test_first_invoke_after_creation() {
         .with_fault(FaultConfig::new(FaultType::CrashDuringTransaction, 0.5))
         .run_async(|sim_env| async move {
             let time = sim_env.io_context.time.clone();
-            let app_state = match create_appstate_with_service(&sim_env).await {
+            let app_state = match create_appstate_with_service(TokioRuntime, &sim_env).await {
                 Ok(a) => a,
                 Err(e) => {
                     println!("Skipping test - couldn't create AppState: {}", e);
@@ -621,7 +624,10 @@ async fn test_first_invoke_after_creation() {
 ///
 /// TigerStyle: Verifies service is operational before returning.
 /// Returns error if dispatcher initialization fails.
-async fn create_appstate_with_service(sim_env: &SimEnvironment) -> Result<AppState> {
+async fn create_appstate_with_service<R: Runtime + 'static>(
+    runtime: R,
+    sim_env: &SimEnvironment,
+) -> Result<AppState<R>> {
     // Create SimLlmClient adapter
     let sim_llm = SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone());
     let llm_adapter: Arc<dyn LlmClient> = Arc::new(SimLlmClientAdapter {
@@ -638,14 +644,18 @@ async fn create_appstate_with_service(sim_env: &SimEnvironment) -> Result<AppSta
     let kv = Arc::new(sim_env.storage.clone());
 
     // Create Dispatcher with default config
-    let mut dispatcher =
-        Dispatcher::<AgentActor, AgentActorState>::new(factory, kv, DispatcherConfig::default());
+    let mut dispatcher = Dispatcher::<AgentActor, AgentActorState, _>::new(
+        factory,
+        kv,
+        DispatcherConfig::default(),
+        runtime.clone(),
+    );
 
     // Get handle before spawning
     let handle = dispatcher.handle();
 
     // Spawn dispatcher runtime
-    tokio::spawn(async move {
+    runtime.spawn(async move {
         dispatcher.run().await;
     });
 
@@ -676,7 +686,7 @@ async fn create_appstate_with_service(sim_env: &SimEnvironment) -> Result<AppSta
 
     // Service verified operational - NOW create AppState
     // This ensures AppState is only created if service is functional
-    Ok(AppState::with_agent_service(service, handle))
+    Ok(AppState::with_agent_service(runtime, service, handle))
 }
 
 /// Test if AppState's service is operational
@@ -716,12 +726,12 @@ async fn test_service_operational(app_state: &AppState) -> Result<()> {
 ///
 /// Phase 5.2: These methods are now implemented on AppState itself,
 /// but we keep this trait for backward compatibility with tests.
-trait AppStateServiceExt {
-    fn agent_service_required(&self) -> &AgentService;
+trait AppStateServiceExt<R: Runtime> {
+    fn agent_service_required(&self) -> &AgentService<R>;
 }
 
-impl AppStateServiceExt for AppState {
-    fn agent_service_required(&self) -> &AgentService {
+impl<R: Runtime + 'static> AppStateServiceExt<R> for AppState<R> {
+    fn agent_service_required(&self) -> &AgentService<R> {
         // Panic if agent_service not configured (test helper, not production code)
         self.agent_service().expect(
             "AppState not configured with agent_service. \

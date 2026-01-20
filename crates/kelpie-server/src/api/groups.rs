@@ -6,11 +6,11 @@
 
 use super::agent_groups::*;
 use axum::Router;
-use kelpie_core::TokioRuntime;
+use kelpie_core::Runtime;
 use kelpie_server::state::AppState;
 
 /// Create router for groups endpoints (Letta compatibility)
-pub fn router() -> Router<AppState<TokioRuntime>> {
+pub fn router<R: Runtime + 'static>() -> Router<AppState<R>> {
     Router::new()
         .route("/groups", axum::routing::get(list_groups).post(create_group))
         .route(

@@ -15,7 +15,7 @@ use kelpie_server::models::{
     AgentState, CreateAgentRequest, CreateBlockRequest, ExportAgentResponse, ImportAgentRequest,
     Message,
 };
-use kelpie_core::TokioRuntime;
+use kelpie_core::Runtime;
 use kelpie_server::state::AppState;
 use serde::Deserialize;
 use tracing::instrument;
@@ -36,8 +36,8 @@ const EXPORT_MESSAGES_MAX: usize = 10000;
 ///
 /// GET /v1/agents/{agent_id}/export
 #[instrument(skip(state), fields(agent_id = %agent_id, include_messages = query.include_messages), level = "info")]
-pub async fn export_agent(
-    State(state): State<AppState<TokioRuntime>>,
+pub async fn export_agent<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
     Query(query): Query<ExportQuery>,
 ) -> Result<Json<ExportAgentResponse>, ApiError> {
@@ -75,8 +75,8 @@ pub async fn export_agent(
 ///
 /// POST /v1/agents/import
 #[instrument(skip(state, request), fields(agent_name = %request.agent.name, message_count = request.messages.len()), level = "info")]
-pub async fn import_agent(
-    State(state): State<AppState<TokioRuntime>>,
+pub async fn import_agent<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Json(request): Json<ImportAgentRequest>,
 ) -> Result<Json<AgentState>, ApiError> {
     let agent_data = request.agent;
@@ -156,8 +156,8 @@ pub async fn import_agent(
 /// Helper function to import messages into an agent
 ///
 /// TigerStyle: Separate function for clarity and error isolation.
-fn import_messages(
-    state: &AppState<TokioRuntime>,
+fn import_messages<R: Runtime + 'static>(
+    state: &AppState<R>,
     agent_id: &str,
     messages: Vec<kelpie_server::models::MessageImportData>,
 ) -> Result<usize, String> {

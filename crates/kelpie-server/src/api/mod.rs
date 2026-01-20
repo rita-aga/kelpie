@@ -26,7 +26,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use kelpie_core::TokioRuntime;
+use kelpie_core::Runtime;
 use kelpie_server::models::{ErrorResponse, HealthResponse};
 use kelpie_server::state::{AppState, StateError};
 use serde::Serialize;
@@ -34,7 +34,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 /// Create the API router with all routes
-pub fn router(state: AppState<TokioRuntime>) -> Router {
+pub fn router<R: Runtime + 'static>(state: AppState<R>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -105,7 +105,7 @@ struct CapabilitiesResponse {
 }
 
 /// Health check endpoint
-async fn health_check(State(state): State<AppState<TokioRuntime>>) -> Json<HealthResponse> {
+async fn health_check<R: Runtime + 'static>(State(state): State<AppState<R>>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -117,7 +117,7 @@ async fn health_check(State(state): State<AppState<TokioRuntime>>) -> Json<Healt
 ///
 /// Returns metrics in Prometheus text format.
 /// This is scraped by Prometheus servers for monitoring.
-async fn metrics(State(state): State<AppState<TokioRuntime>>) -> Response {
+async fn metrics<R: Runtime + 'static>(State(state): State<AppState<R>>) -> Response {
     // Calculate and record memory metrics
     let _ = state.record_memory_metrics();
 

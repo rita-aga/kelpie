@@ -18,7 +18,7 @@ use kelpie_server::models::{
     ApprovalRequest, BatchMessagesRequest, BatchStatus, ClientTool, CreateMessageRequest, Message,
     MessageResponse, MessageRole, UsageStats,
 };
-use kelpie_core::TokioRuntime;
+use kelpie_core::Runtime;
 use kelpie_server::state::AppState;
 use kelpie_server::tools::{parse_pause_signal, ToolSignal, AGENT_LOOP_ITERATIONS_MAX};
 use serde::{Deserialize, Serialize};
@@ -116,10 +116,10 @@ struct StopReasonEvent {
 /// Returns true if:
 /// - Tool name is in the client_tools array from the request, OR
 /// - Tool has default_requires_approval=true in its registration
-async fn tool_requires_approval(
+async fn tool_requires_approval<R: Runtime + 'static>(
     tool_name: &str,
     client_tools: &[ClientTool],
-    state: &AppState<TokioRuntime>,
+    state: &AppState<R>,
 ) -> bool {
     // Check if tool is in client_tools array from request
     if client_tools.iter().any(|ct| ct.name == tool_name) {
@@ -140,8 +140,8 @@ async fn tool_requires_approval(
 ///
 /// GET /v1/agents/{agent_id}/messages
 #[instrument(skip(state, query), fields(agent_id = %agent_id, limit = query.limit), level = "info")]
-pub async fn list_messages(
-    State(state): State<AppState<TokioRuntime>>,
+pub async fn list_messages<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
     Query(query): Query<ListMessagesQuery>,
 ) -> Result<Json<Vec<Message>>, ApiError> {
@@ -160,8 +160,8 @@ pub async fn list_messages(
 /// Supports SSE streaming when stream_steps=true query parameter is set,
 /// OR when streaming=true is passed in the request body (Letta SDK compatibility).
 #[instrument(skip(state, query, request), fields(agent_id = %agent_id), level = "info")]
-pub async fn send_message(
-    State(state): State<AppState<TokioRuntime>>,
+pub async fn send_message<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
     Query(query): Query<SendMessageQuery>,
     Json(request): Json<CreateMessageRequest>,
@@ -183,8 +183,8 @@ pub async fn send_message(
 
 /// Send a message with JSON response (non-streaming)
 #[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
-async fn send_message_json(
-    state: AppState<TokioRuntime>,
+async fn send_message_json<R: Runtime + 'static>(
+    state: AppState<R>,
     agent_id: String,
     request: CreateMessageRequest,
 ) -> Result<Response, ApiError> {
@@ -193,8 +193,8 @@ async fn send_message_json(
 }
 
 /// Shared handler for message processing (non-streaming)
-pub async fn handle_message_request(
-    state: AppState<TokioRuntime>,
+pub async fn handle_message_request<R: Runtime + 'static>(
+    state: AppState<R>,
     agent_id: String,
     request: CreateMessageRequest,
 ) -> Result<MessageResponse, ApiError> {
@@ -583,8 +583,8 @@ pub async fn handle_message_request(
 
 /// Send a batch of messages
 #[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
-pub async fn send_messages_batch(
-    State(state): State<AppState<TokioRuntime>>,
+pub async fn send_messages_batch<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
     Json(request): Json<BatchMessagesRequest>,
 ) -> Result<Json<BatchStatus>, ApiError> {
@@ -665,8 +665,8 @@ pub async fn send_messages_batch(
 
 /// Get batch status
 #[instrument(skip(state), fields(agent_id = %agent_id, batch_id = %batch_id), level = "info")]
-pub async fn get_batch_status(
-    State(state): State<AppState<TokioRuntime>>,
+pub async fn get_batch_status<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path((agent_id, batch_id)): Path<(String, String)>,
 ) -> Result<Json<BatchStatus>, ApiError> {
     let status = state
@@ -682,8 +682,8 @@ pub async fn get_batch_status(
 
 /// Send a message with SSE streaming response
 #[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
-async fn send_message_streaming(
-    state: AppState<TokioRuntime>,
+async fn send_message_streaming<R: Runtime + 'static>(
+    state: AppState<R>,
     agent_id: String,
     request: CreateMessageRequest,
 ) -> Result<Response, ApiError> {
@@ -755,8 +755,8 @@ async fn send_message_streaming(
     fields(agent_id),
     level = "debug"
 )]
-async fn generate_sse_events(
-    state: &AppState<TokioRuntime>,
+async fn generate_sse_events<R: Runtime + 'static>(
+    state: &AppState<R>,
     agent_id: &str,
     agent: &kelpie_server::models::AgentState,
     llm: &crate::llm::LlmClient,
@@ -1094,7 +1094,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use axum::Router;
     use kelpie_server::models::AgentState;
-    use kelpie_core::TokioRuntime;
+    use kelpie_core::Runtime;
 use kelpie_server::state::AppState;
     use tower::ServiceExt;
 

@@ -34,6 +34,11 @@ use super::types::{AgentMetadata, CustomToolRecord, SessionState};
 const REGISTRY_NAMESPACE: &str = "system";
 const REGISTRY_ID: &str = "agent_registry";
 const TOOL_REGISTRY_ID: &str = "tool_registry";
+const MCP_REGISTRY_ID: &str = "mcp_registry";
+const GROUP_REGISTRY_ID: &str = "group_registry";
+const IDENTITY_REGISTRY_ID: &str = "identity_registry";
+const PROJECT_REGISTRY_ID: &str = "project_registry";
+const JOB_REGISTRY_ID: &str = "job_registry";
 
 /// Key prefixes for per-agent data
 const KEY_PREFIX_BLOCKS: &[u8] = b"blocks";
@@ -41,6 +46,11 @@ const KEY_PREFIX_SESSION: &[u8] = b"session:";
 const KEY_PREFIX_MESSAGE: &[u8] = b"message:";
 const KEY_PREFIX_MESSAGE_COUNT: &[u8] = b"message_count";
 const KEY_PREFIX_TOOL: &[u8] = b"tool:";
+const KEY_PREFIX_MCP: &[u8] = b"mcp:";
+const KEY_PREFIX_GROUP: &[u8] = b"group:";
+const KEY_PREFIX_IDENTITY: &[u8] = b"identity:";
+const KEY_PREFIX_PROJECT: &[u8] = b"project:";
+const KEY_PREFIX_JOB: &[u8] = b"job:";
 
 // =============================================================================
 // FdbAgentRegistry Implementation
@@ -73,6 +83,31 @@ impl FdbAgentRegistry {
     /// Get registry actor ID for tools
     fn tool_registry_actor_id() -> CoreResult<ActorId> {
         ActorId::new(REGISTRY_NAMESPACE, TOOL_REGISTRY_ID)
+    }
+
+    /// Get registry actor ID for MCP servers
+    fn mcp_registry_actor_id() -> CoreResult<ActorId> {
+        ActorId::new(REGISTRY_NAMESPACE, MCP_REGISTRY_ID)
+    }
+
+    /// Get registry actor ID for agent groups
+    fn group_registry_actor_id() -> CoreResult<ActorId> {
+        ActorId::new(REGISTRY_NAMESPACE, GROUP_REGISTRY_ID)
+    }
+
+    /// Get registry actor ID for identities
+    fn identity_registry_actor_id() -> CoreResult<ActorId> {
+        ActorId::new(REGISTRY_NAMESPACE, IDENTITY_REGISTRY_ID)
+    }
+
+    /// Get registry actor ID for projects
+    fn project_registry_actor_id() -> CoreResult<ActorId> {
+        ActorId::new(REGISTRY_NAMESPACE, PROJECT_REGISTRY_ID)
+    }
+
+    /// Get registry actor ID for jobs
+    fn job_registry_actor_id() -> CoreResult<ActorId> {
+        ActorId::new(REGISTRY_NAMESPACE, JOB_REGISTRY_ID)
     }
 
     /// Get actor ID for an agent
@@ -155,6 +190,86 @@ impl FdbAgentRegistry {
 
     /// Deserialize custom tool from bytes
     fn deserialize_custom_tool(bytes: &Bytes) -> Result<CustomToolRecord, StorageError> {
+        serde_json::from_slice(bytes).map_err(|e| StorageError::DeserializationFailed {
+            reason: e.to_string(),
+        })
+    }
+
+    /// Serialize MCP server to bytes
+    fn serialize_mcp_server(server: &crate::models::MCPServer) -> Result<Bytes, StorageError> {
+        serde_json::to_vec(server)
+            .map(Bytes::from)
+            .map_err(|e| StorageError::SerializationFailed {
+                reason: e.to_string(),
+            })
+    }
+
+    /// Deserialize MCP server from bytes
+    fn deserialize_mcp_server(bytes: &Bytes) -> Result<crate::models::MCPServer, StorageError> {
+        serde_json::from_slice(bytes).map_err(|e| StorageError::DeserializationFailed {
+            reason: e.to_string(),
+        })
+    }
+
+    /// Serialize agent group to bytes
+    fn serialize_agent_group(group: &crate::models::AgentGroup) -> Result<Bytes, StorageError> {
+        serde_json::to_vec(group)
+            .map(Bytes::from)
+            .map_err(|e| StorageError::SerializationFailed {
+                reason: e.to_string(),
+            })
+    }
+
+    /// Deserialize agent group from bytes
+    fn deserialize_agent_group(bytes: &Bytes) -> Result<crate::models::AgentGroup, StorageError> {
+        serde_json::from_slice(bytes).map_err(|e| StorageError::DeserializationFailed {
+            reason: e.to_string(),
+        })
+    }
+
+    /// Serialize identity to bytes
+    fn serialize_identity(identity: &crate::models::Identity) -> Result<Bytes, StorageError> {
+        serde_json::to_vec(identity)
+            .map(Bytes::from)
+            .map_err(|e| StorageError::SerializationFailed {
+                reason: e.to_string(),
+            })
+    }
+
+    /// Deserialize identity from bytes
+    fn deserialize_identity(bytes: &Bytes) -> Result<crate::models::Identity, StorageError> {
+        serde_json::from_slice(bytes).map_err(|e| StorageError::DeserializationFailed {
+            reason: e.to_string(),
+        })
+    }
+
+    /// Serialize project to bytes
+    fn serialize_project(project: &crate::models::Project) -> Result<Bytes, StorageError> {
+        serde_json::to_vec(project)
+            .map(Bytes::from)
+            .map_err(|e| StorageError::SerializationFailed {
+                reason: e.to_string(),
+            })
+    }
+
+    /// Deserialize project from bytes
+    fn deserialize_project(bytes: &Bytes) -> Result<crate::models::Project, StorageError> {
+        serde_json::from_slice(bytes).map_err(|e| StorageError::DeserializationFailed {
+            reason: e.to_string(),
+        })
+    }
+
+    /// Serialize job to bytes
+    fn serialize_job(job: &crate::models::Job) -> Result<Bytes, StorageError> {
+        serde_json::to_vec(job)
+            .map(Bytes::from)
+            .map_err(|e| StorageError::SerializationFailed {
+                reason: e.to_string(),
+            })
+    }
+
+    /// Deserialize job from bytes
+    fn deserialize_job(bytes: &Bytes) -> Result<crate::models::Job, StorageError> {
         serde_json::from_slice(bytes).map_err(|e| StorageError::DeserializationFailed {
             reason: e.to_string(),
         })
@@ -744,6 +859,351 @@ impl AgentStorage for FdbAgentRegistry {
         // Need to expose begin_transaction() on FdbKV
 
         Ok(())
+    }
+
+    // =========================================================================
+    // MCP Server Operations
+    // =========================================================================
+
+    async fn save_mcp_server(&self, server: &crate::models::MCPServer) -> Result<(), StorageError> {
+        assert!(!server.id.is_empty(), "server id cannot be empty");
+
+        let registry_id = Self::mcp_registry_actor_id().map_err(Self::map_core_error)?;
+        let key = [KEY_PREFIX_MCP, server.id.as_bytes()].concat();
+        let value = Self::serialize_mcp_server(server)?;
+
+        self.fdb
+            .set(&registry_id, &key, &value)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
+    }
+
+    async fn load_mcp_server(&self, id: &str) -> Result<Option<crate::models::MCPServer>, StorageError> {
+        assert!(!id.is_empty(), "server id cannot be empty");
+
+        let registry_id = Self::mcp_registry_actor_id().map_err(Self::map_core_error)?;
+        let key = [KEY_PREFIX_MCP, id.as_bytes()].concat();
+
+        match self.fdb.get(&registry_id, &key).await {
+            Ok(Some(bytes)) => {
+                let server = Self::deserialize_mcp_server(&bytes)?;
+                Ok(Some(server))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(Self::map_core_error(e)),
+        }
+    }
+
+    async fn delete_mcp_server(&self, id: &str) -> Result<(), StorageError> {
+        assert!(!id.is_empty(), "server id cannot be empty");
+
+        let registry_id = Self::mcp_registry_actor_id().map_err(Self::map_core_error)?;
+        let key = [KEY_PREFIX_MCP, id.as_bytes()].concat();
+
+        self.fdb
+            .delete(&registry_id, &key)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
+    }
+
+    async fn list_mcp_servers(&self) -> Result<Vec<crate::models::MCPServer>, StorageError> {
+        let registry_id = Self::mcp_registry_actor_id().map_err(Self::map_core_error)?;
+        let keys = self
+            .fdb
+            .list_keys(&registry_id, KEY_PREFIX_MCP)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        let mut servers = Vec::new();
+        for key in keys {
+            if let Ok(Some(bytes)) = self.fdb.get(&registry_id, &key).await {
+                if let Ok(server) = Self::deserialize_mcp_server(&bytes) {
+                    servers.push(server);
+                }
+            }
+        }
+
+        Ok(servers)
+    }
+
+    // =========================================================================
+    // Agent Group Operations
+    // =========================================================================
+
+    async fn save_agent_group(&self, group: &crate::models::AgentGroup) -> Result<(), StorageError> {
+        assert!(!group.id.is_empty(), "group id cannot be empty");
+
+        let registry_id = Self::group_registry_actor_id().map_err(Self::map_core_error)?;
+        let key = [KEY_PREFIX_GROUP, group.id.as_bytes()].concat();
+        let value = Self::serialize_agent_group(group)?;
+
+        self.fdb
+            .set(&registry_id, &key, &value)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
+    }
+
+    async fn load_agent_group(&self, id: &str) -> Result<Option<crate::models::AgentGroup>, StorageError> {
+        assert!(!id.is_empty(), "group id cannot be empty");
+
+        let registry_id = Self::group_registry_actor_id().map_err(Self::map_core_error)?;
+        let key = [KEY_PREFIX_GROUP, id.as_bytes()].concat();
+
+        match self.fdb.get(&registry_id, &key).await {
+            Ok(Some(bytes)) => {
+                let group = Self::deserialize_agent_group(&bytes)?;
+                Ok(Some(group))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(Self::map_core_error(e)),
+        }
+    }
+
+    async fn delete_agent_group(&self, id: &str) -> Result<(), StorageError> {
+        assert!(!id.is_empty(), "group id cannot be empty");
+
+        let registry_id = Self::group_registry_actor_id().map_err(Self::map_core_error)?;
+        let key = [KEY_PREFIX_GROUP, id.as_bytes()].concat();
+
+        self.fdb
+            .delete(&registry_id, &key)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
+    }
+
+    async fn list_agent_groups(&self) -> Result<Vec<crate::models::AgentGroup>, StorageError> {
+        let registry_id = Self::group_registry_actor_id().map_err(Self::map_core_error)?;
+        let keys = self
+            .fdb
+            .list_keys(&registry_id, KEY_PREFIX_GROUP)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        let mut groups = Vec::new();
+        for key in keys {
+            if let Ok(Some(bytes)) = self.fdb.get(&registry_id, &key).await {
+                if let Ok(group) = Self::deserialize_agent_group(&bytes) {
+                    groups.push(group);
+                }
+            }
+        }
+
+        Ok(groups)
+    }
+
+    // =========================================================================
+    // Identity Operations
+    // =========================================================================
+
+    async fn save_identity(&self, identity: &crate::models::Identity) -> Result<(), StorageError> {
+        assert!(!identity.id.is_empty(), "identity id cannot be empty");
+
+        let registry_id = Self::identity_registry_actor_id().map_err(Self::map_core_error)?;
+        let key = [KEY_PREFIX_IDENTITY, identity.id.as_bytes()].concat();
+        let value = Self::serialize_identity(identity)?;
+
+        self.fdb
+            .set(&registry_id, &key, &value)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
+    }
+
+    async fn load_identity(&self, id: &str) -> Result<Option<crate::models::Identity>, StorageError> {
+        assert!(!id.is_empty(), "identity id cannot be empty");
+
+        let registry_id = Self::identity_registry_actor_id().map_err(Self::map_core_error)?;
+        let key = [KEY_PREFIX_IDENTITY, id.as_bytes()].concat();
+
+        match self.fdb.get(&registry_id, &key).await {
+            Ok(Some(bytes)) => {
+                let identity = Self::deserialize_identity(&bytes)?;
+                Ok(Some(identity))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(Self::map_core_error(e)),
+        }
+    }
+
+    async fn delete_identity(&self, id: &str) -> Result<(), StorageError> {
+        assert!(!id.is_empty(), "identity id cannot be empty");
+
+        let registry_id = Self::identity_registry_actor_id().map_err(Self::map_core_error)?;
+        let key = [KEY_PREFIX_IDENTITY, id.as_bytes()].concat();
+
+        self.fdb
+            .delete(&registry_id, &key)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
+    }
+
+    async fn list_identities(&self) -> Result<Vec<crate::models::Identity>, StorageError> {
+        let registry_id = Self::identity_registry_actor_id().map_err(Self::map_core_error)?;
+        let keys = self
+            .fdb
+            .list_keys(&registry_id, KEY_PREFIX_IDENTITY)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        let mut identities = Vec::new();
+        for key in keys {
+            if let Ok(Some(bytes)) = self.fdb.get(&registry_id, &key).await {
+                if let Ok(identity) = Self::deserialize_identity(&bytes) {
+                    identities.push(identity);
+                }
+            }
+        }
+
+        Ok(identities)
+    }
+
+    // =========================================================================
+    // Project Operations
+    // =========================================================================
+
+    async fn save_project(&self, project: &crate::models::Project) -> Result<(), StorageError> {
+        assert!(!project.id.is_empty(), "project id cannot be empty");
+
+        let registry_id = Self::project_registry_actor_id().map_err(Self::map_core_error)?;
+        let key = [KEY_PREFIX_PROJECT, project.id.as_bytes()].concat();
+        let value = Self::serialize_project(project)?;
+
+        self.fdb
+            .set(&registry_id, &key, &value)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
+    }
+
+    async fn load_project(&self, id: &str) -> Result<Option<crate::models::Project>, StorageError> {
+        assert!(!id.is_empty(), "project id cannot be empty");
+
+        let registry_id = Self::project_registry_actor_id().map_err(Self::map_core_error)?;
+        let key = [KEY_PREFIX_PROJECT, id.as_bytes()].concat();
+
+        match self.fdb.get(&registry_id, &key).await {
+            Ok(Some(bytes)) => {
+                let project = Self::deserialize_project(&bytes)?;
+                Ok(Some(project))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(Self::map_core_error(e)),
+        }
+    }
+
+    async fn delete_project(&self, id: &str) -> Result<(), StorageError> {
+        assert!(!id.is_empty(), "project id cannot be empty");
+
+        let registry_id = Self::project_registry_actor_id().map_err(Self::map_core_error)?;
+        let key = [KEY_PREFIX_PROJECT, id.as_bytes()].concat();
+
+        self.fdb
+            .delete(&registry_id, &key)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
+    }
+
+    async fn list_projects(&self) -> Result<Vec<crate::models::Project>, StorageError> {
+        let registry_id = Self::project_registry_actor_id().map_err(Self::map_core_error)?;
+        let keys = self
+            .fdb
+            .list_keys(&registry_id, KEY_PREFIX_PROJECT)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        let mut projects = Vec::new();
+        for key in keys {
+            if let Ok(Some(bytes)) = self.fdb.get(&registry_id, &key).await {
+                if let Ok(project) = Self::deserialize_project(&bytes) {
+                    projects.push(project);
+                }
+            }
+        }
+
+        Ok(projects)
+    }
+
+    // =========================================================================
+    // Job Operations
+    // =========================================================================
+
+    async fn save_job(&self, job: &crate::models::Job) -> Result<(), StorageError> {
+        assert!(!job.id.is_empty(), "job id cannot be empty");
+
+        let registry_id = Self::job_registry_actor_id().map_err(Self::map_core_error)?;
+        let key = [KEY_PREFIX_JOB, job.id.as_bytes()].concat();
+        let value = Self::serialize_job(job)?;
+
+        self.fdb
+            .set(&registry_id, &key, &value)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
+    }
+
+    async fn load_job(&self, id: &str) -> Result<Option<crate::models::Job>, StorageError> {
+        assert!(!id.is_empty(), "job id cannot be empty");
+
+        let registry_id = Self::job_registry_actor_id().map_err(Self::map_core_error)?;
+        let key = [KEY_PREFIX_JOB, id.as_bytes()].concat();
+
+        match self.fdb.get(&registry_id, &key).await {
+            Ok(Some(bytes)) => {
+                let job = Self::deserialize_job(&bytes)?;
+                Ok(Some(job))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(Self::map_core_error(e)),
+        }
+    }
+
+    async fn delete_job(&self, id: &str) -> Result<(), StorageError> {
+        assert!(!id.is_empty(), "job id cannot be empty");
+
+        let registry_id = Self::job_registry_actor_id().map_err(Self::map_core_error)?;
+        let key = [KEY_PREFIX_JOB, id.as_bytes()].concat();
+
+        self.fdb
+            .delete(&registry_id, &key)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
+    }
+
+    async fn list_jobs(&self) -> Result<Vec<crate::models::Job>, StorageError> {
+        let registry_id = Self::job_registry_actor_id().map_err(Self::map_core_error)?;
+        let keys = self
+            .fdb
+            .list_keys(&registry_id, KEY_PREFIX_JOB)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        let mut jobs = Vec::new();
+        for key in keys {
+            if let Ok(Some(bytes)) = self.fdb.get(&registry_id, &key).await {
+                if let Ok(job) = Self::deserialize_job(&bytes) {
+                    jobs.push(job);
+                }
+            }
+        }
+
+        Ok(jobs)
     }
 }
 
