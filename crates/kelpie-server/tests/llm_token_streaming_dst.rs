@@ -14,7 +14,7 @@
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
-use kelpie_core::{Result, Runtime, TokioRuntime};
+use kelpie_core::{Result, Runtime, CurrentRuntime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{
@@ -102,7 +102,7 @@ async fn test_dst_llm_token_streaming_basic() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(TokioRuntime, &sim_env)?;
+            let service = create_service(CurrentRuntime, &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -188,7 +188,7 @@ async fn test_dst_llm_streaming_with_network_delay() {
             0.5, // 50% of operations delayed
         ))
         .run_async(|sim_env| async move {
-            let service = create_service(TokioRuntime, &sim_env)?;
+            let service = create_service(CurrentRuntime, &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -251,7 +251,7 @@ async fn test_dst_llm_streaming_cancellation() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(TokioRuntime, &sim_env)?;
+            let service = create_service(CurrentRuntime, &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -311,7 +311,7 @@ async fn test_dst_llm_streaming_with_tool_calls() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(TokioRuntime, &sim_env)?;
+            let service = create_service(CurrentRuntime, &sim_env)?;
 
             // Create agent with tool
             let request = CreateAgentRequest {
@@ -382,7 +382,7 @@ async fn test_dst_llm_streaming_concurrent() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let runtime = TokioRuntime;
+            let runtime = current_runtime();
             let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create 3 agents
@@ -479,7 +479,7 @@ async fn test_dst_llm_streaming_with_comprehensive_faults() {
             0.3,
         ))
         .run_async(|sim_env| async move {
-            let service = create_service(TokioRuntime, &sim_env)?;
+            let service = create_service(CurrentRuntime, &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {

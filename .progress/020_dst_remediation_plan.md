@@ -28,7 +28,11 @@ Currently, tests use `tokio::time::sleep`, which is wall-clock based and ignores
 
 ## Execution Order
 
-1.  [ ] Create `kelpie-server/src/storage/adapter.rs` (KV Adapter)
-2.  [ ] Swap `SimStorage` implementation.
-3.  [ ] Verify existing tests pass (fixing "fake" determinism later).
-4.  [ ] Prototype `madsim` integration in a new test file.
+1.  [x] Create `kelpie-server/src/storage/adapter.rs` (KV Adapter)
+2.  [x] Swap `SimStorage` implementation.
+3.  [x] Verify existing tests pass (fixing "fake" determinism later).
+4.  [x] Prototype `madsim` integration in a new test file.
+5.  [x] Implement `Runtime` abstraction in `kelpie-core`.
+6.  [x] Implement `CurrentRuntime` factory for feature-flagged switching.
+7.  [x] Update `kelpie-server` tests to use `CurrentRuntime`.
+8.  [x] Create `check_dst.sh` monitoring script.

@@ -10,7 +10,7 @@
 #![cfg(feature = "dst")]
 
 use async_trait::async_trait;
-use kelpie_core::{Result, Runtime, TokioRuntime};
+use kelpie_core::{Result, Runtime, CurrentRuntime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{
@@ -162,7 +162,7 @@ async fn test_dst_send_message_full_typed_response() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(TokioRuntime, &sim_env)?;
+            let service = create_service(CurrentRuntime, &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -238,7 +238,7 @@ async fn test_dst_send_message_full_storage_faults() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.3))
         .run_async(|sim_env| async move {
-            let service = create_service(TokioRuntime, &sim_env)?;
+            let service = create_service(CurrentRuntime, &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -309,7 +309,7 @@ async fn test_dst_send_message_full_network_delay() {
             0.5,
         ))
         .run_async(|sim_env| async move {
-            let service = create_service(TokioRuntime, &sim_env)?;
+            let service = create_service(CurrentRuntime, &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -360,7 +360,7 @@ async fn test_dst_send_message_full_concurrent_with_faults() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let runtime = TokioRuntime;
+            let runtime = current_runtime();
             let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create 3 agents
@@ -435,7 +435,7 @@ async fn test_dst_send_message_full_invalid_agent() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(TokioRuntime, &sim_env)?;
+            let service = create_service(CurrentRuntime, &sim_env)?;
 
             // Try to send message to non-existent agent
             let response_result = service

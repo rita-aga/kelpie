@@ -15,7 +15,7 @@
 
 use async_trait::async_trait;
 use futures::stream::{self, Stream, StreamExt};
-use kelpie_core::{Result, Runtime, TokioRuntime};
+use kelpie_core::{Result, Runtime, CurrentRuntime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
 use kelpie_server::actor::{LlmClient, LlmMessage, LlmResponse, StreamChunk};
 use std::pin::Pin;
@@ -276,8 +276,8 @@ async fn test_dst_llm_client_concurrent() {
 
     let result = Simulation::new(config)
         .run_async(|_sim_env| async move {
-            use kelpie_core::{Runtime, TokioRuntime};
-            let runtime = TokioRuntime;
+            use kelpie_core::{Runtime, CurrentRuntime};
+            let runtime = current_runtime();
 
             // Create 3 clients with different token sets
             let mut handles = Vec::new();

@@ -5,7 +5,7 @@
 #![cfg(feature = "dst")]
 
 use async_trait::async_trait;
-use kelpie_core::{Result, Runtime, TimeProvider, TokioRuntime};
+use kelpie_core::{Result, Runtime, TimeProvider, CurrentRuntime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -98,7 +98,7 @@ async fn test_dst_streaming_basic() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let runtime = TokioRuntime;
+            let runtime = current_runtime();
             let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create agent
@@ -213,7 +213,7 @@ async fn test_dst_streaming_with_network_delay() {
             0.3,
         ))
         .run_async(|sim_env| async move {
-            let runtime = TokioRuntime;
+            let runtime = current_runtime();
             let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create agent
@@ -310,7 +310,7 @@ async fn test_dst_streaming_cancellation() {
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
             let time = sim_env.io_context.time.clone();
-            let runtime = TokioRuntime;
+            let runtime = current_runtime();
             let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create agent
@@ -403,7 +403,7 @@ async fn test_dst_streaming_backpressure() {
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
             let time = sim_env.io_context.time.clone();
-            let runtime = TokioRuntime;
+            let runtime = current_runtime();
             let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create agent
@@ -503,7 +503,7 @@ async fn test_dst_streaming_with_tool_calls() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let runtime = TokioRuntime;
+            let runtime = current_runtime();
             let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create agent with tools

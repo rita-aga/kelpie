@@ -344,8 +344,8 @@ async fn test_dst_mcp_server_concurrent_creates() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.1))
         .run_async(|_env| async move {
-            use kelpie_core::{Runtime, TokioRuntime};
-            let runtime = TokioRuntime;
+            use kelpie_core::{Runtime, CurrentRuntime};
+            let runtime = current_runtime();
             let state = AppState::new(runtime.clone());
 
             // Create multiple servers concurrently

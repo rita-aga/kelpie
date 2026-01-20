@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::actor::ActorId;
-use kelpie_core::{Result, Runtime, TokioRuntime};
+use kelpie_core::{Result, Runtime, CurrentRuntime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig, DispatcherHandle};
 use kelpie_server::actor::{
@@ -192,7 +192,7 @@ async fn test_dst_agent_actor_activation_basic() {
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
             // Create dispatcher
-            let dispatcher = create_dispatcher(TokioRuntime, &sim_env)?;
+            let dispatcher = create_dispatcher(CurrentRuntime, &sim_env)?;
 
             // Create agent
             let actor_id = ActorId::new("agents", "agent-test-001")?;
@@ -244,7 +244,7 @@ async fn test_dst_agent_actor_activation_with_storage_fail() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.2))
         .run_async(|sim_env| async move {
-            let dispatcher = create_dispatcher(TokioRuntime, &sim_env)?;
+            let dispatcher = create_dispatcher(CurrentRuntime, &sim_env)?;
 
             let mut success_count = 0;
             let mut failure_count = 0;
@@ -307,7 +307,7 @@ async fn test_dst_agent_actor_deactivation_persists_state() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let dispatcher = create_dispatcher(TokioRuntime, &sim_env)?;
+            let dispatcher = create_dispatcher(CurrentRuntime, &sim_env)?;
             let actor_id = ActorId::new("agents", "agent-persistent")?;
 
             // Create and activate
@@ -366,7 +366,7 @@ async fn test_dst_agent_actor_deactivation_with_storage_fail() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.2))
         .run_async(|sim_env| async move {
-            let dispatcher = create_dispatcher(TokioRuntime, &sim_env)?;
+            let dispatcher = create_dispatcher(CurrentRuntime, &sim_env)?;
 
             let mut success_count = 0;
             let mut failure_count = 0;
@@ -449,7 +449,7 @@ async fn test_dst_agent_actor_crash_recovery() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::CrashAfterWrite, 0.1))
         .run_async(|sim_env| async move {
-            let dispatcher = create_dispatcher(TokioRuntime, &sim_env)?;
+            let dispatcher = create_dispatcher(CurrentRuntime, &sim_env)?;
             let actor_id = ActorId::new("agents", "agent-crash-test")?;
 
             // Create agent
@@ -520,7 +520,7 @@ async fn test_dst_agent_memory_tools() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let dispatcher = create_dispatcher(TokioRuntime, &sim_env)?;
+            let dispatcher = create_dispatcher(CurrentRuntime, &sim_env)?;
             let actor_id = ActorId::new("agents", "agent-memory-test")?;
 
             // Create agent
@@ -601,7 +601,7 @@ async fn test_dst_agent_handle_message_basic() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let dispatcher = create_dispatcher(TokioRuntime, &sim_env)?;
+            let dispatcher = create_dispatcher(CurrentRuntime, &sim_env)?;
             let actor_id = ActorId::new("agents", "agent-chat-test")?;
 
             // Create agent
@@ -665,7 +665,7 @@ async fn test_dst_agent_handle_message_with_llm_timeout() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::LlmTimeout, 0.3))
         .run_async(|sim_env| async move {
-            let dispatcher = create_dispatcher(TokioRuntime, &sim_env)?;
+            let dispatcher = create_dispatcher(CurrentRuntime, &sim_env)?;
             let actor_id = ActorId::new("agents", "agent-timeout-test")?;
 
             // Create agent
@@ -695,7 +695,7 @@ async fn test_dst_agent_handle_message_with_llm_timeout() {
                     role: "user".to_string(),
                     content: format!("Message {}", i),
                 };
-                match invoke_deserialize::<MessageResponse, TokioRuntime>(
+                match invoke_deserialize::<MessageResponse, CurrentRuntime>(
                     &dispatcher,
                     actor_id.clone(),
                     "handle_message",
@@ -742,7 +742,7 @@ async fn test_dst_agent_handle_message_with_llm_failure() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::LlmFailure, 0.5))
         .run_async(|sim_env| async move {
-            let dispatcher = create_dispatcher(TokioRuntime, &sim_env)?;
+            let dispatcher = create_dispatcher(CurrentRuntime, &sim_env)?;
             let actor_id = ActorId::new("agents", "agent-failure-test")?;
 
             // Create agent
@@ -772,7 +772,7 @@ async fn test_dst_agent_handle_message_with_llm_failure() {
                     role: "user".to_string(),
                     content: format!("Message {}", i),
                 };
-                match invoke_deserialize::<MessageResponse, TokioRuntime>(
+                match invoke_deserialize::<MessageResponse, CurrentRuntime>(
                     &dispatcher,
                     actor_id.clone(),
                     "handle_message",
@@ -822,7 +822,7 @@ async fn test_dst_agent_tool_execution() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let dispatcher = create_dispatcher(TokioRuntime, &sim_env)?;
+            let dispatcher = create_dispatcher(CurrentRuntime, &sim_env)?;
             let actor_id = ActorId::new("agents", "agent-tool-test")?;
 
             // Create agent with tools

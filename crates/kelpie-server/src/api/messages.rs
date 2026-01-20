@@ -256,6 +256,9 @@ pub async fn handle_message_request<R: Runtime + 'static>(
         )
     })?;
 
+    // Track all intermediate messages (tool calls and returns) for Letta compatibility
+    let mut all_intermediate_messages: Vec<Message> = Vec::new();
+
     let (response_content, prompt_tokens, completion_tokens, final_stop_reason, pause_info) = {
         // Build messages for LLM
         let mut messages = Vec::new();
@@ -305,19 +308,50 @@ pub async fn handle_message_request<R: Runtime + 'static>(
             content: content.clone(),
         });
 
-        // Get available tools from registry, filtered by agent type capabilities
+        // Get available tools for this agent
+        // Priority: 1) agent.tool_ids (if set), 2) agent type capabilities
         let capabilities = agent.agent_type.capabilities();
-        let all_tools = state.tool_registry().get_tool_definitions().await;
-        let tools: Vec<_> = all_tools
-            .into_iter()
-            .filter(|t| capabilities.allowed_tools.contains(&t.name))
-            .collect();
+        let tools = if !agent.tool_ids.is_empty() {
+            // Agent has specific tools attached - use those
+            let mut agent_tools = Vec::new();
+            for tool_id in &agent.tool_ids {
+                // Try MCP tool first (format: mcp_{server_id}_{tool_name})
+                if let Some(tool_def) = load_mcp_tool(&state, tool_id).await {
+                    agent_tools.push(tool_def);
+                }
+                // Try regular tool by ID
+                else if let Some(tool_info) = state.get_tool_by_id(tool_id).await {
+                    agent_tools.push(crate::llm::ToolDefinition {
+                        name: tool_info.name,
+                        description: tool_info.description,
+                        input_schema: tool_info.input_schema,
+                    });
+                }
+                // Fallback: try by name (tool_id might be a name, not UUID)
+                else if let Some(tool_info) = state.get_tool(tool_id).await {
+                    agent_tools.push(crate::llm::ToolDefinition {
+                        name: tool_info.name,
+                        description: tool_info.description,
+                        input_schema: tool_info.input_schema,
+                    });
+                }
+            }
+            agent_tools
+        } else {
+            // No specific tools - use all tools filtered by agent type capabilities
+            let all_tools = state.tool_registry().get_tool_definitions().await;
+            all_tools
+                .into_iter()
+                .filter(|t| capabilities.allowed_tools.contains(&t.name))
+                .collect()
+        };
 
         tracing::debug!(
             agent_id = %agent_id,
             agent_type = ?agent.agent_type,
             tool_count = tools.len(),
-            "Filtered tools by agent type capabilities"
+            has_tool_ids = !agent.tool_ids.is_empty(),
+            "Loaded tools for agent"
         );
 
         // Call LLM with tools
@@ -389,6 +423,27 @@ pub async fn handle_message_request<R: Runtime + 'static>(
                         });
                     }
 
+                    // Create tool_call message for this iteration (before execution)
+                    if !server_tools.is_empty() {
+                        let tool_call_msg = Message {
+                            id: Uuid::new_v4().to_string(),
+                            agent_id: agent_id.clone(),
+                            message_type: "tool_call_message".to_string(),
+                            role: MessageRole::Assistant,
+                            content: response.content.clone(),
+                            tool_call_id: None,
+                            tool_calls: Some(
+                                response.tool_calls.iter().map(|tc| kelpie_server::models::ToolCall {
+                                    id: tc.id.clone(),
+                                    name: tc.name.clone(),
+                                    arguments: tc.input.clone(),
+                                }).collect()
+                            ),
+                            created_at: Utc::now(),
+                        };
+                        all_intermediate_messages.push(tool_call_msg);
+                    }
+
                     // Execute server-side tools only
                     let mut tool_results = Vec::new();
                     let mut should_break = false;
@@ -409,6 +464,19 @@ pub async fn handle_message_request<R: Runtime + 'static>(
                             duration_ms = exec_result.duration_ms,
                             "Tool executed"
                         );
+
+                        // Create tool_return message for this tool call
+                        let tool_return_msg = Message {
+                            id: Uuid::new_v4().to_string(),
+                            agent_id: agent_id.clone(),
+                            message_type: "tool_return_message".to_string(),
+                            role: MessageRole::Tool,
+                            content: exec_result.output.clone(),
+                            tool_call_id: Some(tool_call.id.clone()),
+                            tool_calls: None,
+                            created_at: Utc::now(),
+                        };
+                        all_intermediate_messages.push(tool_return_msg);
 
                         // Check for pause_heartbeats signal
                         if let Some((minutes, pause_until_ms)) =
@@ -569,8 +637,13 @@ pub async fn handle_message_request<R: Runtime + 'static>(
         "processed message"
     );
 
+    // Build complete message list: user, tool_calls, tool_returns, assistant
+    let mut response_messages = vec![stored_user_msg];
+    response_messages.extend(all_intermediate_messages);
+    response_messages.push(stored_assistant_msg);
+
     Ok(MessageResponse {
-        messages: vec![stored_user_msg, stored_assistant_msg],
+        messages: response_messages,
         usage: Some(UsageStats {
             prompt_tokens,
             completion_tokens,
@@ -809,8 +882,38 @@ async fn generate_sse_events<R: Runtime + 'static>(
         content: content.clone(),
     });
 
-    // Get available tools from registry
-    let tools = state.tool_registry().get_tool_definitions().await;
+    // Get available tools for this agent (same logic as non-streaming)
+    // Priority: 1) agent.tool_ids (if set), 2) all tools from registry
+    let tools = if !agent.tool_ids.is_empty() {
+        // Agent has specific tools attached - use those
+        let mut agent_tools = Vec::new();
+        for tool_id in &agent.tool_ids {
+            // Try MCP tool first (format: mcp_{server_id}_{tool_name})
+            if let Some(tool_def) = load_mcp_tool(state, tool_id).await {
+                agent_tools.push(tool_def);
+            }
+            // Try regular tool by ID
+            else if let Some(tool_info) = state.get_tool_by_id(tool_id).await {
+                agent_tools.push(crate::llm::ToolDefinition {
+                    name: tool_info.name,
+                    description: tool_info.description,
+                    input_schema: tool_info.input_schema,
+                });
+            }
+            // Fallback: try by name (tool_id might be a name, not UUID)
+            else if let Some(tool_info) = state.get_tool(tool_id).await {
+                agent_tools.push(crate::llm::ToolDefinition {
+                    name: tool_info.name,
+                    description: tool_info.description,
+                    input_schema: tool_info.input_schema,
+                });
+            }
+        }
+        agent_tools
+    } else {
+        // No specific tools - use all tools from registry
+        state.tool_registry().get_tool_definitions().await
+    };
 
     // Call LLM
     match llm
@@ -1055,6 +1158,56 @@ async fn generate_sse_events<R: Runtime + 'static>(
     events.push(Ok(Event::default().data("[DONE]")));
 
     events
+}
+
+/// Load an MCP tool by parsing its ID and discovering from the server
+async fn load_mcp_tool<R: Runtime + 'static>(
+    state: &AppState<R>,
+    tool_id: &str,
+) -> Option<crate::llm::ToolDefinition> {
+    // Parse MCP tool ID format: mcp_{server_id}_{tool_name}
+    // Note: server_id may contain underscores (e.g., mcp_server-xxx)
+    // So we need to find the last underscore to split server_id from tool_name
+    if !tool_id.starts_with("mcp_") {
+        return None;
+    }
+
+    // Remove "mcp_" prefix
+    let remainder = &tool_id[4..];
+
+    // Find the last underscore to split server_id from tool_name
+    let last_underscore_pos = remainder.rfind('_')?;
+    let server_id = &remainder[..last_underscore_pos];
+    let tool_name = &remainder[last_underscore_pos + 1..];
+
+    // Get the MCP server to extract server_name for registration
+    let server = state.get_mcp_server(server_id).await?;
+
+    // List tools from the MCP server
+    let tool_values = state.list_mcp_server_tools(server_id).await.ok()?;
+
+    // Find the matching tool and convert to ToolDefinition
+    for value in tool_values {
+        if let Ok(tool) = serde_json::from_value::<super::tools::ToolResponse>(value) {
+            if tool.name == tool_name {
+                // Register the MCP tool in the tool registry so it can be executed
+                state.tool_registry().register_mcp_tool(
+                    tool.name.clone(),
+                    tool.description.clone(),
+                    tool.input_schema.clone(),
+                    server.server_name.clone(),
+                ).await;
+
+                return Some(crate::llm::ToolDefinition {
+                    name: tool.name,
+                    description: tool.description,
+                    input_schema: tool.input_schema,
+                });
+            }
+        }
+    }
+
+    None
 }
 
 /// Build system prompt from agent's system message and memory blocks

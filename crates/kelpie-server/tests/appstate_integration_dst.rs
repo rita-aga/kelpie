@@ -13,7 +13,7 @@
 #![cfg(feature = "dst")]
 
 use async_trait::async_trait;
-use kelpie_core::{Result, Runtime, TimeProvider, TokioRuntime};
+use kelpie_core::{current_runtime, Result, Runtime, TimeProvider};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -46,7 +46,7 @@ async fn test_appstate_init_crash() {
 
             // Try to create AppState 20 times with 50% crash rate
             for i in 0..20 {
-                let app_state_result = create_appstate_with_service(TokioRuntime, &sim_env).await;
+                let app_state_result = create_appstate_with_service(current_runtime(), &sim_env).await;
 
                 match app_state_result {
                     Ok(app_state) => {
@@ -139,7 +139,7 @@ async fn test_concurrent_agent_creation_race() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::CrashAfterWrite, 0.4))
         .run_async(|sim_env| async move {
-            let runtime = TokioRuntime;
+            let runtime = current_runtime();
             let app_state = match create_appstate_with_service(runtime.clone(), &sim_env).await {
                 Ok(a) => a,
                 Err(e) => {
@@ -263,7 +263,7 @@ async fn test_shutdown_with_inflight_requests() {
         ))
         .run_async(|sim_env| async move {
             let time = sim_env.io_context.time.clone();
-            let runtime = TokioRuntime;
+            let runtime = current_runtime();
             let app_state = match create_appstate_with_service(runtime.clone(), &sim_env).await {
                 Ok(a) => a,
                 Err(e) => {
@@ -375,7 +375,7 @@ async fn test_service_invoke_during_shutdown() {
         .with_fault(FaultConfig::new(FaultType::CrashDuringTransaction, 0.4))
         .run_async(|sim_env| async move {
             let time = sim_env.io_context.time.clone();
-            let runtime = TokioRuntime;
+            let runtime = current_runtime();
             let app_state = match create_appstate_with_service(runtime.clone(), &sim_env).await {
                 Ok(a) => a,
                 Err(e) => {
@@ -468,7 +468,7 @@ async fn test_first_invoke_after_creation() {
         .with_fault(FaultConfig::new(FaultType::CrashDuringTransaction, 0.5))
         .run_async(|sim_env| async move {
             let time = sim_env.io_context.time.clone();
-            let app_state = match create_appstate_with_service(TokioRuntime, &sim_env).await {
+            let app_state = match create_appstate_with_service(current_runtime(), &sim_env).await {
                 Ok(a) => a,
                 Err(e) => {
                     println!("Skipping test - couldn't create AppState: {}", e);

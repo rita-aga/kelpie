@@ -1,12 +1,12 @@
 //! Pilot test for DST Phase 2.6.4 - Runtime integration
 //!
-//! This test demonstrates that AgentService works with both TokioRuntime
+//! This test demonstrates that AgentService works with both CurrentRuntime
 //! and MadsimRuntime, proving the Runtime generic parameter integration.
 //!
 //! TigerStyle: Explicit test, demonstrates contract, no complex setup.
 
 use async_trait::async_trait;
-use kelpie_core::{Result, Runtime, TokioRuntime};
+use kelpie_core::{current_runtime, CurrentRuntime, Result, Runtime};
 #[cfg(madsim)]
 use kelpie_core::MadsimRuntime;
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
@@ -79,10 +79,10 @@ async fn create_agent_service<R: Runtime + 'static>(
     Ok(AgentService::new(handle))
 }
 
-/// Test AgentService with TokioRuntime (production)
+/// Test AgentService with CurrentRuntime (production)
 #[tokio::test]
 async fn test_agent_service_tokio_runtime() {
-    let runtime = TokioRuntime;
+    let runtime = current_runtime();
     let service = create_agent_service(runtime).await.unwrap();
 
     // Create agent
