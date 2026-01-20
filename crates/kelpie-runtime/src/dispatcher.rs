@@ -55,11 +55,12 @@ pub enum DispatcherCommand {
 
 /// Handle to send commands to the dispatcher
 #[derive(Clone)]
-pub struct DispatcherHandle {
+pub struct DispatcherHandle<R: kelpie_core::Runtime> {
     command_tx: mpsc::Sender<DispatcherCommand>,
+    runtime: R,
 }
 
-impl DispatcherHandle {
+impl<R: kelpie_core::Runtime> DispatcherHandle<R> {
     /// Invoke an actor
     pub async fn invoke(
         &self,
@@ -140,10 +141,11 @@ where
 /// Dispatcher for routing messages to actors
 ///
 /// Manages actor lifecycle and message routing.
-pub struct Dispatcher<A, S>
+pub struct Dispatcher<A, S, R>
 where
     A: Actor<State = S>,
     S: Serialize + DeserializeOwned + Default + Send + Sync,
+    R: kelpie_core::Runtime,
 {
     /// Actor factory
     factory: Arc<dyn ActorFactory<A>>,
@@ -151,6 +153,8 @@ where
     kv: Arc<dyn ActorKV>,
     /// Configuration
     config: DispatcherConfig,
+    /// Runtime for spawning tasks
+    runtime: R,
     /// Active actors
     actors: HashMap<String, ActiveActor<A, S>>,
     /// Command receiver
@@ -159,16 +163,18 @@ where
     command_tx: mpsc::Sender<DispatcherCommand>,
 }
 
-impl<A, S> Dispatcher<A, S>
+impl<A, S, R> Dispatcher<A, S, R>
 where
     A: Actor<State = S>,
     S: Serialize + DeserializeOwned + Default + Send + Sync + Clone + 'static,
+    R: kelpie_core::Runtime,
 {
     /// Create a new dispatcher
     pub fn new(
         factory: Arc<dyn ActorFactory<A>>,
         kv: Arc<dyn ActorKV>,
         config: DispatcherConfig,
+        runtime: R,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(config.command_buffer_size);
 
@@ -176,6 +182,7 @@ where
             factory,
             kv,
             config,
+            runtime: runtime.clone(),
             actors: HashMap::new(),
             command_rx,
             command_tx,
@@ -183,9 +190,10 @@ where
     }
 
     /// Get a handle to the dispatcher
-    pub fn handle(&self) -> DispatcherHandle {
+    pub fn handle(&self) -> DispatcherHandle<R> {
         DispatcherHandle {
             command_tx: self.command_tx.clone(),
+            runtime: self.runtime.clone(),
         }
     }
 
@@ -321,6 +329,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use kelpie_core::actor::ActorContext;
+    use kelpie_core::Runtime;
     use kelpie_storage::MemoryKV;
 
     #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
@@ -356,15 +365,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatcher_basic() {
+        use kelpie_core::TokioRuntime;
+
         let factory = Arc::new(CloneFactory::new(CounterActor));
         let kv = Arc::new(MemoryKV::new());
         let config = DispatcherConfig::default();
+        let runtime = TokioRuntime;
 
-        let mut dispatcher = Dispatcher::new(factory, kv, config);
+        let mut dispatcher = Dispatcher::new(factory, kv, config, runtime.clone());
         let handle = dispatcher.handle();
 
         // Run dispatcher in background
-        let dispatcher_task = tokio::spawn(async move {
+        let dispatcher_task = runtime.spawn(async move {
             dispatcher.run().await;
         });
 
@@ -389,14 +401,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatcher_multiple_actors() {
+        use kelpie_core::TokioRuntime;
+
         let factory = Arc::new(CloneFactory::new(CounterActor));
         let kv = Arc::new(MemoryKV::new());
         let config = DispatcherConfig::default();
+        let runtime = TokioRuntime;
 
-        let mut dispatcher = Dispatcher::new(factory, kv, config);
+        let mut dispatcher = Dispatcher::new(factory, kv, config, runtime.clone());
         let handle = dispatcher.handle();
 
-        let dispatcher_task = tokio::spawn(async move {
+        let dispatcher_task = runtime.spawn(async move {
             dispatcher.run().await;
         });
 
@@ -438,14 +453,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatcher_deactivate() {
+        use kelpie_core::TokioRuntime;
+
         let factory = Arc::new(CloneFactory::new(CounterActor));
         let kv = Arc::new(MemoryKV::new());
         let config = DispatcherConfig::default();
+        let runtime = TokioRuntime;
 
-        let mut dispatcher = Dispatcher::new(factory, kv.clone(), config);
+        let mut dispatcher = Dispatcher::new(factory, kv.clone(), config, runtime.clone());
         let handle = dispatcher.handle();
 
-        let dispatcher_task = tokio::spawn(async move {
+        let dispatcher_task = runtime.spawn(async move {
             dispatcher.run().await;
         });
 
@@ -465,7 +483,7 @@ mod tests {
         handle.deactivate(actor_id.clone()).await.unwrap();
 
         // Allow time for deactivation
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        runtime.sleep(std::time::Duration::from_millis(10)).await;
 
         // Invoke again - should reactivate with persisted state
         let result = handle
