@@ -118,12 +118,13 @@ Add to your MCP settings (e.g., Claude Desktop config):
 | `rlm_execute` | Execute code in RLM sandbox with codebase access | `code: string` (Python code to execute) |
 | `rlm_map_reduce` | Execute map-reduce pattern in RLM sandbox | `map_code: string, reduce_code: string, partitions: number` |
 
-### DST Coverage Tools (Phase 4.9)
+### DST Coverage Tools (Phase 4.9 + 4.10)
 
 | Tool | Description | Arguments |
 |------|-------------|-----------|
 | `dst_coverage_check` | Check DST coverage for critical paths | (none) |
 | `dst_gaps_report` | Generate detailed report of DST coverage gaps | (none) |
+| `harness_check` | Check if DST harness supports required fault types | `fault_types: string[]` |
 
 ### Codebase Access Tools
 
@@ -281,7 +282,7 @@ npm start
 - ✅ Phase 4.7: Integrity Tools (2 tools - mark_phase_complete, start_plan_session)
 - ✅ Phase 4.8: Slop Detection Tools (2 tools - dead code, coverage gaps)
 
-**Total: 29 MCP tools implemented**
+**Total: 30 MCP tools implemented**
 
 ## Next Steps
 

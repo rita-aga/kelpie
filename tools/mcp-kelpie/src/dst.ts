@@ -325,5 +325,107 @@ export function createDstTools(context: DstContext): Array<Tool & { handler: (ar
         };
       },
     },
+    {
+      name: "harness_check",
+      description: "Check if DST harness supports required fault types for a feature",
+      inputSchema: {
+        type: "object",
+        properties: {
+          fault_types: {
+            type: "array",
+            description: "List of fault types needed (e.g., StorageWriteFail, NetworkPartition, etc.)",
+            items: {
+              type: "string",
+            },
+          },
+        },
+        required: ["fault_types"],
+      },
+      handler: async (args: { fault_types: string[] }) => {
+        // Known fault types in kelpie-dst per CONSTRAINTS.md
+        const supportedFaults = new Set([
+          // Storage faults
+          "StorageWriteFail",
+          "StorageReadFail",
+          "StorageCorruption",
+          "StorageLatency",
+          "DiskFull",
+          // Crash faults
+          "CrashBeforeWrite",
+          "CrashAfterWrite",
+          "CrashDuringTransaction",
+          // Network faults
+          "NetworkPartition",
+          "NetworkDelay",
+          "NetworkPacketLoss",
+          "NetworkMessageReorder",
+          // Time faults
+          "ClockSkew",
+          "ClockJump",
+          // Resource faults
+          "OutOfMemory",
+          "CPUStarvation",
+        ]);
+
+        const results: Array<{
+          fault_type: string;
+          supported: boolean;
+          category?: string;
+          needs_extension?: boolean;
+        }> = [];
+
+        for (const faultType of args.fault_types) {
+          const isSupported = supportedFaults.has(faultType);
+
+          // Determine category
+          let category = "unknown";
+          if (faultType.toLowerCase().includes("storage") || faultType.toLowerCase().includes("disk")) {
+            category = "storage";
+          } else if (faultType.toLowerCase().includes("crash")) {
+            category = "crash";
+          } else if (faultType.toLowerCase().includes("network")) {
+            category = "network";
+          } else if (faultType.toLowerCase().includes("clock") || faultType.toLowerCase().includes("time")) {
+            category = "time";
+          } else if (
+            faultType.toLowerCase().includes("memory") ||
+            faultType.toLowerCase().includes("cpu") ||
+            faultType.toLowerCase().includes("resource")
+          ) {
+            category = "resource";
+          }
+
+          results.push({
+            fault_type: faultType,
+            supported: isSupported,
+            category: isSupported ? category : undefined,
+            needs_extension: !isSupported,
+          });
+        }
+
+        const allSupported = results.every((r) => r.supported);
+        const unsupportedFaults = results.filter((r) => !r.supported);
+
+        context.audit.log("harness_check", {
+          fault_types_requested: args.fault_types.length,
+          all_supported: allSupported,
+          unsupported_count: unsupportedFaults.length,
+        });
+
+        return {
+          success: allSupported,
+          results,
+          summary: {
+            total_requested: args.fault_types.length,
+            supported: results.filter((r) => r.supported).length,
+            unsupported: unsupportedFaults.length,
+          },
+          message: allSupported
+            ? "All requested fault types are supported"
+            : `${unsupportedFaults.length} fault types need harness extension: ${unsupportedFaults.map((f) => f.fault_type).join(", ")}`,
+          next_steps: allSupported ? "Proceed with feature implementation" : "STOP - Extend harness FIRST to support missing faults",
+        };
+      },
+    },
   ];
 }
