@@ -21,6 +21,14 @@ import {
 import { existsSync } from "fs";
 import { join } from "path";
 
+/**
+ * Type definition for MCP tools with handler functions
+ * TigerStyle: Explicit types, no 'any' casts
+ */
+export type ToolWithHandler = Tool & {
+  handler: (args: any) => Promise<any>;
+};
+
 // Import tool handlers
 import { createStateTools, StateContext } from "./state.js";
 import { createIndexTools, IndexContext } from "./indexes.js";
@@ -163,6 +171,23 @@ async function main() {
 
   console.error(`[MCP Kelpie] Registered ${allTools.length} tools`);
 
+  /**
+   * Helper function to execute a tool handler
+   * TigerStyle: DRY principle, type-safe execution
+   */
+  async function executeTool(tools: ToolWithHandler[], name: string, args: any) {
+    const tool = tools.find((t) => t.name === name);
+    if (!tool) {
+      return null; // Tool not found in this collection
+    }
+
+    // TigerStyle: Type assertion eliminated - handler is guaranteed by ToolWithHandler type
+    const result = await tool.handler(args || {});
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+    };
+  }
+
   // List tools handler
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return { tools: allTools };
@@ -176,113 +201,24 @@ async function main() {
     auditContext.log("tool_call", { tool: name, args });
 
     try {
-      // Route to appropriate handler
-      const stateTool = stateTools.find((t) => t.name === name);
-      if (stateTool) {
-        const handler = (stateTool as any).handler;
-        if (!handler) {
-          throw new Error(`Tool ${name} has no handler`);
-        }
-        const result = await handler(args || {});
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        };
-      }
+      // Route to appropriate handler (try each tool collection in order)
+      const toolCollections = [
+        stateTools,
+        indexTools,
+        verificationTools,
+        integrityTools,
+        slopTools,
+        constraintTools,
+        rlmTools,
+        dstTools,
+        codebaseTools,
+      ];
 
-      const indexTool = indexTools.find((t) => t.name === name);
-      if (indexTool) {
-        const handler = (indexTool as any).handler;
-        if (!handler) {
-          throw new Error(`Tool ${name} has no handler`);
+      for (const tools of toolCollections) {
+        const result = await executeTool(tools, name, args);
+        if (result !== null) {
+          return result;
         }
-        const result = await handler(args || {});
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        };
-      }
-
-      const verifyTool = verificationTools.find((t) => t.name === name);
-      if (verifyTool) {
-        const handler = (verifyTool as any).handler;
-        if (!handler) {
-          throw new Error(`Tool ${name} has no handler`);
-        }
-        const result = await handler(args || {});
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        };
-      }
-
-      const integrityTool = integrityTools.find((t) => t.name === name);
-      if (integrityTool) {
-        const handler = (integrityTool as any).handler;
-        if (!handler) {
-          throw new Error(`Tool ${name} has no handler`);
-        }
-        const result = await handler(args || {});
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        };
-      }
-
-      const slopTool = slopTools.find((t) => t.name === name);
-      if (slopTool) {
-        const handler = (slopTool as any).handler;
-        if (!handler) {
-          throw new Error(`Tool ${name} has no handler`);
-        }
-        const result = await handler(args || {});
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        };
-      }
-
-      const constraintTool = constraintTools.find((t) => t.name === name);
-      if (constraintTool) {
-        const handler = (constraintTool as any).handler;
-        if (!handler) {
-          throw new Error(`Tool ${name} has no handler`);
-        }
-        const result = await handler(args || {});
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        };
-      }
-
-      const rlmTool = rlmTools.find((t) => t.name === name);
-      if (rlmTool) {
-        const handler = (rlmTool as any).handler;
-        if (!handler) {
-          throw new Error(`Tool ${name} has no handler`);
-        }
-        const result = await handler(args || {});
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        };
-      }
-
-      const dstTool = dstTools.find((t) => t.name === name);
-      if (dstTool) {
-        const handler = (dstTool as any).handler;
-        if (!handler) {
-          throw new Error(`Tool ${name} has no handler`);
-        }
-        const result = await handler(args || {});
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        };
-      }
-
-      const codebaseTool = codebaseTools.find((t) => t.name === name);
-      if (codebaseTool) {
-        const handler = (codebaseTool as any).handler;
-        if (!handler) {
-          throw new Error(`Tool ${name} has no handler`);
-        }
-        const result = await handler(args || {});
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        };
       }
 
       throw new Error(`Unknown tool: ${name}`);
