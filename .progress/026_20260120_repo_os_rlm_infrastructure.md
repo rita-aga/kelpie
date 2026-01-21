@@ -3682,6 +3682,95 @@ The RLM environment successfully bridges the gap between LLM context limits and 
 
 ---
 
+### Phase 4.1-4.4: MCP Server (Completed 2026-01-20)
+
+**Status:** MCP server skeleton created with 14 tools implemented
+
+**Package Created:**
+- Built `tools/mcp-kelpie/` TypeScript package
+- Package name: `@kelpie/mcp-server`
+- Version: 0.1.0
+- Dependencies: @modelcontextprotocol/sdk, better-sqlite3
+
+**Modules Implemented:**
+
+1. **index.ts** (Main MCP server)
+   - Initializes MCP server with stdio transport
+   - Loads configuration from environment or defaults
+   - Registers 14 tools across 3 categories
+   - Routes tool calls to appropriate handlers
+   - Logs all operations to audit trail
+
+2. **audit.ts** (Audit logging)
+   - Logs every tool call to `agent.db` audit_log table
+   - Tracks: timestamp, event name, data (JSON)
+   - TigerStyle: Immutable audit trail for traceability
+
+3. **state.ts** (Phase 4.2: State Tools - 5 tools)
+   - `state_get(key)` - Retrieve from agent state
+   - `state_set(key, value)` - Store in agent state
+   - `state_task_start(description)` - Start task with audit log
+   - `state_task_complete(task_id, proof)` - Complete task (HARD: requires proof)
+   - `state_verified_fact(claim, method, result)` - Store verified facts
+
+4. **indexes.ts** (Phase 4.3: Index Tools - 5 tools)
+   - `index_symbols(pattern, kind?)` - Find symbols matching pattern
+   - `index_tests(topic?, type?)` - Find tests by topic or type
+   - `index_modules(crate?)` - Get module hierarchy
+   - `index_deps(crate?)` - Get dependency graph
+   - `index_status()` - Check freshness of all indexes
+   - TigerStyle: All queries return freshness information
+
+5. **verify.ts** (Phase 4.4: Verification Tools - 4 tools)
+   - `verify_by_tests(topic, type?)` - Find and run tests for topic
+   - `verify_claim(claim, method)` - Verify by executing command
+   - `verify_all_tests(release?)` - Run cargo test --all
+   - `verify_clippy()` - Run clippy linter
+   - TigerStyle: Verification by execution, not trust
+
+**Hard Controls Implemented:**
+- ✅ **state_task_complete requires proof** - Cannot complete without evidence
+- ✅ **Index freshness warnings** - Stale indexes (>1 hour) trigger warnings
+- ✅ **Audit logging** - Every tool call logged immutably
+- ✅ **Timeout protection** - Commands have max execution time (1-5 minutes)
+
+**What Works:**
+- ✅ MCP server compiles and builds successfully (TypeScript → JavaScript)
+- ✅ 14 tools registered and available
+- ✅ AgentFS integration (state management via SQLite)
+- ✅ Structural index queries (symbols, tests, modules, dependencies)
+- ✅ Verification by execution (running tests, commands)
+- ✅ Audit trail for all operations
+
+**What's Deferred:**
+- ❌ Phase 4.5: Index Management Tools (index_refresh, index_validate)
+- ❌ Phase 4.6: Hard Control Gates (systematic enforcement)
+- ❌ Phase 4.7: Integrity Tools (mark_phase_complete, handoff verification)
+- ❌ Phase 4.8: Slop Detection Tools (dead code, orphaned files)
+- ❌ RLM execution via MCP (rlm_execute tool - needs subprocess integration)
+
+**MCP Configuration Example:**
+```json
+{
+  "mcpServers": {
+    "kelpie": {
+      "command": "node",
+      "args": ["/path/to/kelpie/tools/mcp-kelpie/dist/index.js"],
+      "env": {
+        "KELPIE_CODEBASE_PATH": "/path/to/kelpie",
+        "KELPIE_INDEXES_PATH": "/path/to/kelpie/.kelpie-index",
+        "KELPIE_AGENTFS_PATH": "/path/to/kelpie/.agentfs"
+      }
+    }
+  }
+}
+```
+
+**Key Insight:**
+The MCP server provides a **hard control layer** that agents cannot bypass. Unlike soft controls (prompts, skills), MCP tools enforce verification requirements at the protocol level. For example, `state_task_complete` requires proof - the agent cannot claim completion without providing evidence. Similarly, index queries automatically include freshness checks, warning when data may be stale. This architectural approach ensures verification-first development rather than trust-based development.
+
+---
+
 ## What to Try [UPDATE AFTER EACH PHASE]
 
 ### Works Now ✅
@@ -3713,6 +3802,12 @@ The RLM environment successfully bridges the gap between LLM context limits and 
 | **RLM CLI interface** | `python3 -m py_compile tools/rlm-env/rlm_env/__main__.py` | File compiles successfully (95 lines) |
 | **RLM tests** | `cat tools/rlm-env/tests/test_codebase.py \| wc -l` | 210 lines, 20+ tests for CodebaseContext |
 | **RLM README** | `cat tools/rlm-env/README.md` | See architecture, API docs, examples (280 lines) |
+| **MCP server package** | `ls tools/mcp-kelpie/` | See TypeScript MCP server structure |
+| **MCP server built** | `ls tools/mcp-kelpie/dist/*.js` | See compiled JavaScript files (5 modules) |
+| **State tools** | Check tools/mcp-kelpie/src/state.ts | 5 tools: state_get, state_set, state_task_start, state_task_complete, state_verified_fact |
+| **Index tools** | Check tools/mcp-kelpie/src/indexes.ts | 5 tools: index_symbols, index_tests, index_modules, index_deps, index_status |
+| **Verification tools** | Check tools/mcp-kelpie/src/verify.ts | 4 tools: verify_by_tests, verify_claim, verify_all_tests, verify_clippy |
+| **MCP README** | `cat tools/mcp-kelpie/README.md` | See MCP server documentation with tool descriptions |
 
 ### Doesn't Work Yet ❌
 | What | Why | When Expected |
@@ -3721,9 +3816,12 @@ The RLM environment successfully bridges the gap between LLM context limits and 
 | RLM package installation | Requires virtual environment setup | When needed for MCP integration |
 | RLM test execution | Package not installed yet | When needed for MCP integration |
 | Recursive LLM calls in RLM | Requires Claude API integration | Phase 3b extension or Phase 5 |
-| MCP server | Not implemented | Phase 4 |
+| RLM execution via MCP | Needs rlm-env subprocess integration | Phase 4 extension or Phase 5 |
+| Index refresh tools | Not implemented yet | Phase 4.5 (optional) |
+| Hard control gates | Not implemented yet | Phase 4.6 (optional) |
+| Integrity tools (mark_phase_complete) | Not implemented yet | Phase 4.7 (optional) |
+| Slop detection tools | Not implemented yet | Phase 4.8 (optional) |
 | RLM skills | Not implemented | Phase 5 |
-| Hard controls | Not implemented | Phase 6 |
 
 ### Known Limitations ⚠️
 - Symbol index has line numbers set to 0 (proc-macro2 limitation)
