@@ -29,6 +29,7 @@ import { createIntegrityTools, IntegrityContext } from "./integrity.js";
 import { createSlopTools, SlopContext } from "./slop.js";
 import { createConstraintTools, ConstraintsContext } from "./constraints.js";
 import { createRlmTools, RlmContext } from "./rlm.js";
+import { createDstTools, DstContext } from "./dst.js";
 import { createAuditLogger } from "./audit.js";
 
 /**
@@ -112,6 +113,11 @@ async function main() {
     indexesPath: config.indexesPath,
     audit: auditContext,
   };
+  const dstContext: DstContext = {
+    codebasePath: config.codebasePath,
+    indexesPath: config.indexesPath,
+    audit: auditContext,
+  };
 
   // Create MCP server
   const server = new Server(
@@ -134,6 +140,7 @@ async function main() {
   const slopTools = createSlopTools(slopContext);
   const constraintTools = createConstraintTools(constraintsContext);
   const rlmTools = createRlmTools(rlmContext);
+  const dstTools = createDstTools(dstContext);
 
   const allTools: Tool[] = [
     ...stateTools,
@@ -143,6 +150,7 @@ async function main() {
     ...slopTools,
     ...constraintTools,
     ...rlmTools,
+    ...dstTools,
   ];
 
   console.error(`[MCP Kelpie] Registered ${allTools.length} tools`);
@@ -236,6 +244,18 @@ async function main() {
       const rlmTool = rlmTools.find((t) => t.name === name);
       if (rlmTool) {
         const handler = (rlmTool as any).handler;
+        if (!handler) {
+          throw new Error(`Tool ${name} has no handler`);
+        }
+        const result = await handler(args || {});
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      const dstTool = dstTools.find((t) => t.name === name);
+      if (dstTool) {
+        const handler = (dstTool as any).handler;
         if (!handler) {
           throw new Error(`Tool ${name} has no handler`);
         }

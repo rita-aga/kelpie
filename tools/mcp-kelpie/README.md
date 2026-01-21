@@ -118,6 +118,13 @@ Add to your MCP settings (e.g., Claude Desktop config):
 | `rlm_execute` | Execute code in RLM sandbox with codebase access | `code: string` (Python code to execute) |
 | `rlm_map_reduce` | Execute map-reduce pattern in RLM sandbox | `map_code: string, reduce_code: string, partitions: number` |
 
+### DST Coverage Tools (Phase 4.9)
+
+| Tool | Description | Arguments |
+|------|-------------|-----------|
+| `dst_coverage_check` | Check DST coverage for critical paths | (none) |
+| `dst_gaps_report` | Generate detailed report of DST coverage gaps | (none) |
+
 ## Architecture
 
 ```
@@ -133,7 +140,8 @@ tools/mcp-kelpie/
     ├── integrity.ts      # Hard integrity controls (Phase 4.7)
     ├── slop.ts           # Slop detection tools (Phase 4.8)
     ├── constraints.ts    # P0 constraint enforcement (Phase 4.2)
-    └── rlm.ts            # RLM sandbox execution (Phase 4.7)
+    ├── rlm.ts            # RLM sandbox execution (Phase 4.7)
+    └── dst.ts            # DST coverage checking (Phase 4.9)
 ```
 
 ## Hard Controls
@@ -264,7 +272,7 @@ npm start
 - ✅ Phase 4.7: Integrity Tools (2 tools - mark_phase_complete, start_plan_session)
 - ✅ Phase 4.8: Slop Detection Tools (2 tools - dead code, coverage gaps)
 
-**Total: 24 MCP tools implemented**
+**Total: 26 MCP tools implemented**
 
 ## Next Steps
 
