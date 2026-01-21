@@ -173,7 +173,7 @@ impl SymbolVisitor {
         match vis {
             syn::Visibility::Public(_) => "pub".to_string(),
             syn::Visibility::Restricted(r) => {
-                format!("pub({})", quote::quote!(#r).to_string())
+                format!("pub({})", quote::quote!(#r))
             }
             syn::Visibility::Inherited => "private".to_string(),
         }
@@ -572,7 +572,7 @@ fn update_freshness(workspace_root: &Path, files: &HashMap<String, FileSymbols>)
 
     // Update file hashes
     let file_hashes = freshness["file_hashes"].as_object_mut().unwrap();
-    for (file_path, _) in files {
+    for file_path in files.keys() {
         let full_path = workspace_root.join(file_path);
         if let Ok(hash) = compute_file_hash(&full_path) {
             file_hashes.insert(file_path.clone(), serde_json::Value::String(hash));
@@ -609,13 +609,25 @@ fn build_dependency_graph(workspace_root: &Path) -> Result<DependencyGraph> {
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
 
+    // Get workspace members - build a set of package IDs that are workspace members
+    let workspace_member_ids: std::collections::HashSet<String> = metadata["workspace_members"]
+        .as_array()
+        .map(|members| {
+            members
+                .iter()
+                .filter_map(|m| m.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
     // Extract packages (crates)
     if let Some(packages) = metadata["packages"].as_array() {
         for pkg in packages {
             let name = pkg["name"].as_str().unwrap_or("unknown");
+            let pkg_id = pkg["id"].as_str().unwrap_or("");
 
-            // Only include kelpie crates
-            if !name.starts_with("kelpie") {
+            // Only include workspace member crates
+            if !workspace_member_ids.contains(pkg_id) {
                 continue;
             }
 
@@ -632,20 +644,18 @@ fn build_dependency_graph(workspace_root: &Path) -> Result<DependencyGraph> {
                 for dep in deps {
                     let dep_name = dep["name"].as_str().unwrap_or("unknown");
 
-                    // Only track dependencies between kelpie crates
-                    if dep_name.starts_with("kelpie") {
-                        edges.push(GraphEdge {
-                            from: name.to_string(),
-                            to: dep_name.to_string(),
-                            edge_type: "depends".to_string(),
-                        });
-                    }
+                    // Track all dependencies (both workspace members and external)
+                    edges.push(GraphEdge {
+                        from: name.to_string(),
+                        to: dep_name.to_string(),
+                        edge_type: "depends".to_string(),
+                    });
                 }
             }
         }
     }
 
-    println!("  Found {} kelpie crates", nodes.len());
+    println!("  Found {} crates", nodes.len());
     println!("  Found {} dependencies", edges.len());
 
     Ok(DependencyGraph {
@@ -704,7 +714,7 @@ fn build_test_index(workspace_root: &Path) -> Result<TestIndex> {
         for topic in &test.topics {
             by_topic
                 .entry(topic.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(test.name.clone());
         }
     }
@@ -714,7 +724,7 @@ fn build_test_index(workspace_root: &Path) -> Result<TestIndex> {
     for test in &all_tests {
         by_type
             .entry(test.test_type.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(test.name.clone());
     }
 
@@ -868,10 +878,8 @@ fn collect_modules(
             )?;
 
             // Collect names of immediate children
-            for i in submodules_before..modules.len() {
-                if let Some(child_name) = modules[i]
-                    .path
-                    .strip_prefix(&format!("{}::", submodule_path))
+            for module in modules.iter().skip(submodules_before) {
+                if let Some(child_name) = module.path.strip_prefix(&format!("{}::", submodule_path))
                 {
                     if !child_name.contains("::") {
                         submodule_names.push(child_name.to_string());
@@ -1029,10 +1037,12 @@ fn validate_indexes(
         }
     }
 
-    // Validation 3: Check module count consistency
-    let module_count: usize = modules.crates.iter().map(|c| c.modules.len()).sum();
-    if module_count == 0 && !symbols.files.is_empty() {
-        issues.push("No modules found but symbols index has files".to_string());
+    // Validation 3: Check crate count consistency
+    // Note: module_count can be 0 for single-file crates (no mod declarations)
+    // so we check crate_count instead
+    let crate_count = modules.crates.len();
+    if crate_count == 0 && !symbols.files.is_empty() {
+        issues.push("No crates found but symbols index has files".to_string());
     }
 
     // Validation 4: Check dependency node count vs crate count
@@ -1059,6 +1069,10 @@ fn main() -> Result<()> {
         Commands::Full => {
             // Phase 7.1: Parallel structural index building
             println!("\n=== Building All Indexes in Parallel ===");
+
+            // Ensure output directories exist
+            fs::create_dir_all(workspace_root.join(".kelpie-index/structural"))?;
+            fs::create_dir_all(workspace_root.join(".kelpie-index/meta"))?;
 
             // Phase 7 Review: Initialize build progress tracking
             init_build_progress(&workspace_root)?;
@@ -1305,6 +1319,10 @@ fn main() -> Result<()> {
                 println!("No files changed, nothing to rebuild");
                 return Ok(());
             }
+
+            // Ensure output directories exist
+            fs::create_dir_all(workspace_root.join(".kelpie-index/structural"))?;
+            fs::create_dir_all(workspace_root.join(".kelpie-index/meta"))?;
 
             // Analyze which indexes are affected by these files
             let needs_symbols = files.iter().any(|f| f.ends_with(".rs"));
