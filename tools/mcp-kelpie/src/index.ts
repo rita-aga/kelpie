@@ -25,6 +25,8 @@ import { join } from "path";
 import { createStateTools, StateContext } from "./state.js";
 import { createIndexTools, IndexContext } from "./indexes.js";
 import { createVerificationTools, VerificationContext } from "./verify.js";
+import { createIntegrityTools, IntegrityContext } from "./integrity.js";
+import { createSlopTools, SlopContext } from "./slop.js";
 import { createAuditLogger } from "./audit.js";
 
 /**
@@ -89,6 +91,16 @@ async function main() {
     indexesPath: config.indexesPath,
     audit: auditContext,
   };
+  const integrityContext: IntegrityContext = {
+    codebasePath: config.codebasePath,
+    agentfsPath: config.agentfsPath,
+    audit: auditContext,
+  };
+  const slopContext: SlopContext = {
+    codebasePath: config.codebasePath,
+    indexesPath: config.indexesPath,
+    audit: auditContext,
+  };
 
   // Create MCP server
   const server = new Server(
@@ -107,8 +119,10 @@ async function main() {
   const stateTools = createStateTools(stateContext);
   const indexTools = createIndexTools(indexContext);
   const verificationTools = createVerificationTools(verifyContext);
+  const integrityTools = createIntegrityTools(integrityContext);
+  const slopTools = createSlopTools(slopContext);
 
-  const allTools: Tool[] = [...stateTools, ...indexTools, ...verificationTools];
+  const allTools: Tool[] = [...stateTools, ...indexTools, ...verificationTools, ...integrityTools, ...slopTools];
 
   console.error(`[MCP Kelpie] Registered ${allTools.length} tools`);
 
@@ -153,6 +167,30 @@ async function main() {
       const verifyTool = verificationTools.find((t) => t.name === name);
       if (verifyTool) {
         const handler = (verifyTool as any).handler;
+        if (!handler) {
+          throw new Error(`Tool ${name} has no handler`);
+        }
+        const result = await handler(args || {});
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      const integrityTool = integrityTools.find((t) => t.name === name);
+      if (integrityTool) {
+        const handler = (integrityTool as any).handler;
+        if (!handler) {
+          throw new Error(`Tool ${name} has no handler`);
+        }
+        const result = await handler(args || {});
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      const slopTool = slopTools.find((t) => t.name === name);
+      if (slopTool) {
+        const handler = (slopTool as any).handler;
         if (!handler) {
           throw new Error(`Tool ${name} has no handler`);
         }

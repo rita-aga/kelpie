@@ -6,6 +6,7 @@
 
 import { readFileSync, existsSync, statSync } from "fs";
 import { join } from "path";
+import { execSync } from "child_process";
 import { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { AuditContext } from "./audit.js";
 
@@ -294,6 +295,149 @@ export function createIndexTools(context: IndexContext): Array<Tool & { handler:
           success: true,
           status,
         };
+      },
+    },
+    {
+      name: "index_refresh",
+      description: "Rebuild indexes by running kelpie-indexer (Phase 4.5)",
+      inputSchema: {
+        type: "object",
+        properties: {
+          scope: {
+            type: "string",
+            description: "Optional: which index to rebuild (symbols, tests, modules, dependencies, all)",
+            enum: ["symbols", "tests", "modules", "dependencies", "all"],
+          },
+        },
+      },
+      handler: async (args: { scope?: string }) => {
+        const scope = args.scope || "all";
+        const indexes = scope === "all" ? ["symbols", "dependencies", "tests", "modules"] : [scope];
+
+        const results: Array<{ index: string; success: boolean; output?: string; error?: string }> = [];
+
+        for (const indexName of indexes) {
+          try {
+            const command = `cargo run -p kelpie-indexer -- ${indexName}`;
+            const output = execSync(command, {
+              cwd: context.codebasePath,
+              encoding: "utf-8",
+              timeout: 120000, // 2 minute timeout per index
+            });
+
+            results.push({
+              index: indexName,
+              success: true,
+              output: output.slice(-500), // Last 500 chars
+            });
+          } catch (error: any) {
+            results.push({
+              index: indexName,
+              success: false,
+              error: error.message || String(error),
+            });
+          }
+        }
+
+        const successCount = results.filter((r) => r.success).length;
+        const failedCount = results.length - successCount;
+
+        context.audit.log("index_refresh", {
+          scope,
+          indexes_rebuilt: successCount,
+          failed: failedCount,
+        });
+
+        return {
+          success: failedCount === 0,
+          scope,
+          results,
+          rebuilt: successCount,
+          failed: failedCount,
+        };
+      },
+    },
+    {
+      name: "index_validate",
+      description: "Cross-validate indexes for consistency (Phase 4.5)",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+      handler: async () => {
+        const issues: Array<{ type: string; message: string }> = [];
+
+        try {
+          // Load all indexes
+          const symbols = loadIndex(context.indexesPath, "symbols");
+          const tests = loadIndex(context.indexesPath, "tests");
+          const modules = loadIndex(context.indexesPath, "modules");
+          const deps = loadIndex(context.indexesPath, "dependencies");
+
+          // Validation 1: Check git SHA consistency
+          const gitShas = [symbols.git_sha, tests.git_sha, modules.git_sha, deps.git_sha];
+          const uniqueShas = [...new Set(gitShas.filter((s) => s))];
+
+          if (uniqueShas.length > 1) {
+            issues.push({
+              type: "git_sha_mismatch",
+              message: `Indexes have different git SHAs: ${uniqueShas.join(", ")}. Rebuild needed.`,
+            });
+          }
+
+          // Validation 2: Check that test files exist in symbols index
+          const symbolFiles = new Set(Object.keys(symbols.files || {}));
+          const testFiles = (tests.tests || []).map((t: any) => t.file as string);
+          const testFilesSet = new Set<string>(testFiles);
+
+          let missingTestFiles = 0;
+          for (const testFile of testFilesSet) {
+            if (!symbolFiles.has(testFile)) {
+              missingTestFiles++;
+            }
+          }
+
+          if (missingTestFiles > 0) {
+            issues.push({
+              type: "missing_test_files",
+              message: `${missingTestFiles} test files not found in symbols index`,
+            });
+          }
+
+          // Validation 3: Check module count consistency
+          const moduleCount = (modules.crates || []).reduce((sum: number, c: any) => sum + c.modules.length, 0);
+          if (moduleCount === 0 && Object.keys(symbols.files || {}).length > 0) {
+            issues.push({
+              type: "no_modules",
+              message: "No modules found but symbols index has files",
+            });
+          }
+
+          // Validation 4: Check dependency node count vs crate count
+          const depNodeCount = (deps.nodes || []).length;
+          const crateCount = (modules.crates || []).length;
+          if (Math.abs(depNodeCount - crateCount) > 2) {
+            issues.push({
+              type: "dep_crate_mismatch",
+              message: `Dependency nodes (${depNodeCount}) and crates (${crateCount}) differ significantly`,
+            });
+          }
+
+          context.audit.log("index_validate", {
+            issues_found: issues.length,
+          });
+
+          return {
+            success: issues.length === 0,
+            issues,
+            message: issues.length === 0 ? "All indexes are consistent" : `Found ${issues.length} consistency issues`,
+          };
+        } catch (error) {
+          return {
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
       },
     },
   ];

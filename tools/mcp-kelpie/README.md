@@ -83,6 +83,27 @@ Add to your MCP settings (e.g., Claude Desktop config):
 | `verify_all_tests` | Run all tests (cargo test --all) | `release?: boolean` |
 | `verify_clippy` | Run clippy linter | (none) |
 
+### Index Management Tools (Phase 4.5)
+
+| Tool | Description | Arguments |
+|------|-------------|-----------|
+| `index_refresh` | Rebuild indexes by running kelpie-indexer | `scope?: "symbols" \| "tests" \| "modules" \| "dependencies" \| "all"` |
+| `index_validate` | Cross-validate indexes for consistency | (none) |
+
+### Integrity Tools (Phase 4.7)
+
+| Tool | Description | Arguments |
+|------|-------------|-----------|
+| `mark_phase_complete` | Mark phase complete with verification evidence (HARD) | `phase: string, evidence: Evidence` |
+| `start_plan_session` | Start plan session with automatic re-verification (HARD) | `plan_id: string` |
+
+### Slop Detection Tools (Phase 4.8)
+
+| Tool | Description | Arguments |
+|------|-------------|-----------|
+| `detect_dead_code` | Detect unused dependencies and orphaned files | `check_deps?: boolean, check_orphans?: boolean` |
+| `detect_test_coverage_gaps` | Find modules without tests | (none) |
+
 ## Architecture
 
 ```
@@ -92,9 +113,11 @@ tools/mcp-kelpie/
 └── src/
     ├── index.ts          # MCP server entry point
     ├── audit.ts          # Audit logging (all tool calls)
-    ├── state.ts          # AgentFS state management
-    ├── indexes.ts        # Index query operations
-    └── verify.ts         # Verification by execution
+    ├── state.ts          # AgentFS state management (Phase 4.2)
+    ├── indexes.ts        # Index query & management (Phase 4.3 + 4.5)
+    ├── verify.ts         # Verification by execution (Phase 4.4)
+    ├── integrity.ts      # Hard integrity controls (Phase 4.7)
+    └── slop.ts           # Slop detection tools (Phase 4.8)
 ```
 
 ## Hard Controls
@@ -217,18 +240,20 @@ npm start
 ## Status
 
 - ✅ Phase 4.1: MCP Server Skeleton
-- ✅ Phase 4.2: State Tools (AgentFS)
-- ✅ Phase 4.3: Index Query Tools
-- ✅ Phase 4.4: Verification Tools
-- ❌ Phase 4.5: Index Management Tools (refresh, validate)
-- ❌ Phase 4.6: Hard Control Gates (not yet implemented - future)
-- ❌ Phase 4.7: Integrity Tools (mark_phase_complete, handoff verification - future)
-- ❌ Phase 4.8: Slop Detection Tools (dead code, orphaned files - future)
+- ✅ Phase 4.2: State Tools (5 tools)
+- ✅ Phase 4.3: Index Query Tools (5 tools)
+- ✅ Phase 4.4: Verification Tools (4 tools)
+- ✅ Phase 4.5: Index Management Tools (2 tools - refresh, validate)
+- ✅ Phase 4.6: Hard Control Gates (embedded in other tools)
+- ✅ Phase 4.7: Integrity Tools (2 tools - mark_phase_complete, start_plan_session)
+- ✅ Phase 4.8: Slop Detection Tools (2 tools - dead code, coverage gaps)
+
+**Total: 20 MCP tools implemented**
 
 ## Next Steps
 
-1. **Test MCP server** - Verify tools work end-to-end
-2. **Phase 4.5-4.8** - Add remaining tools (optional, can be added later)
+1. **Test MCP server** - Verify tools work end-to-end with real usage
+2. **Add RLM execution tool** - Integrate rlm-env subprocess invocation
 3. **Phase 5: RLM Skills** - Build agent skills that use RLM pattern
 
 ## References
