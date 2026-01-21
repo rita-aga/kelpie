@@ -291,12 +291,51 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
         let llm = LlmClient::from_env();
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
 
+        // Phase 6.4: Create AgentService and Dispatcher for production
+        let (agent_service, dispatcher, shutdown_tx) = if let Some(ref llm_client) = llm {
+            tracing::info!("Initializing actor-based agent service");
+
+            // Create LLM adapter for actor
+            let llm_adapter: Arc<dyn crate::actor::LlmClient> =
+                Arc::new(RealLlmAdapter::new(llm_client.clone()));
+
+            // Create AgentActor
+            let actor = AgentActor::new(llm_adapter, tool_registry.clone());
+
+            // Create CloneFactory for dispatcher
+            let factory = Arc::new(CloneFactory::new(actor));
+
+            // Use MemoryKV for actor storage (TODO: production will use FDB)
+            let kv = Arc::new(MemoryKV::new());
+
+            // Create Dispatcher
+            let mut dispatcher =
+                Dispatcher::new(factory, kv, DispatcherConfig::default(), runtime.clone());
+            let handle = dispatcher.handle();
+
+            // Spawn dispatcher runtime
+            drop(runtime.spawn(async move {
+                dispatcher.run().await;
+            }));
+
+            // Create service
+            let service = AgentService::new(handle.clone());
+
+            // Create shutdown channel
+            let (tx, _rx) = tokio::sync::broadcast::channel(1);
+
+            (Some(service), Some(handle), Some(tx))
+        } else {
+            tracing::warn!("Actor service disabled - no LLM client configured");
+            (None, None, None)
+        };
+
         Self {
             inner: Arc::new(AppStateInner {
-                agent_service: None,
-                dispatcher: None,
+                agent_service,
+                dispatcher,
                 runtime,
-                shutdown_tx: None,
+                shutdown_tx,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
                 tool_registry,
@@ -330,12 +369,51 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
         let llm = LlmClient::from_env();
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
 
+        // Phase 6.4: Create AgentService and Dispatcher for production (otel)
+        let (agent_service, dispatcher, shutdown_tx) = if let Some(ref llm_client) = llm {
+            tracing::info!("Initializing actor-based agent service (with otel)");
+
+            // Create LLM adapter for actor
+            let llm_adapter: Arc<dyn crate::actor::LlmClient> =
+                Arc::new(RealLlmAdapter::new(llm_client.clone()));
+
+            // Create AgentActor
+            let actor = AgentActor::new(llm_adapter, tool_registry.clone());
+
+            // Create CloneFactory for dispatcher
+            let factory = Arc::new(CloneFactory::new(actor));
+
+            // Use MemoryKV for actor storage (TODO: production will use FDB)
+            let kv = Arc::new(MemoryKV::new());
+
+            // Create Dispatcher
+            let mut dispatcher =
+                Dispatcher::new(factory, kv, DispatcherConfig::default(), runtime.clone());
+            let handle = dispatcher.handle();
+
+            // Spawn dispatcher runtime
+            drop(runtime.spawn(async move {
+                dispatcher.run().await;
+            }));
+
+            // Create service
+            let service = AgentService::new(handle.clone());
+
+            // Create shutdown channel
+            let (tx, _rx) = tokio::sync::broadcast::channel(1);
+
+            (Some(service), Some(handle), Some(tx))
+        } else {
+            tracing::warn!("Actor service disabled - no LLM client configured (otel mode)");
+            (None, None, None)
+        };
+
         Self {
             inner: Arc::new(AppStateInner {
-                agent_service: None,
-                dispatcher: None,
+                agent_service,
+                dispatcher,
                 runtime,
-                shutdown_tx: None,
+                shutdown_tx,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
                 tool_registry,

@@ -110,53 +110,51 @@ async fn create_server<R: Runtime + 'static>(
 
     tracing::info!(server_id = %server.id, server_name = %server.server_name, "Created MCP server");
 
-    // TigerStyle: Pre-register MCP tools at server creation (not lazily per-agent)
-    // This ensures tools are immediately available to all agents that reference them
-    match state.list_mcp_server_tools(&server.id).await {
-        Ok(tools) => {
-            let tool_count = tools.len();
-            tracing::debug!(
-                server_id = %server.id,
-                tool_count = tool_count,
-                "Discovered tools from MCP server"
-            );
-
-            for tool_value in tools {
-                if let Ok(tool) = serde_json::from_value::<super::tools::ToolResponse>(tool_value) {
-                    let tool_id = format!("mcp_{}_{}", server.id, tool.name);
-
-                    state
-                        .tool_registry()
-                        .register_mcp_tool(
-                            tool_id.clone(),
-                            tool.description.clone(),
-                            tool.input_schema.clone(),
-                            request.server_name.clone(),
-                        )
-                        .await;
-
-                    tracing::debug!(
-                        tool_id = %tool_id,
-                        tool_name = %tool.name,
-                        server_id = %server.id,
-                        "Registered MCP tool at server creation"
-                    );
+    // TigerStyle: Connect to MCP server and register tools at creation time
+    // This keeps the client connected for tool execution
+    // Convert server config to McpConfig
+    use kelpie_tools::mcp::McpConfig;
+    let mcp_config = match &server.config {
+        MCPServerConfig::Stdio { command, args, env } => {
+            let mut config = McpConfig::stdio(&server.server_name, command, args.clone());
+            if let Some(env_map) = env {
+                for (k, v) in env_map {
+                    if let Some(v_str) = v.as_str() {
+                        config = config.with_env(k.clone(), v_str.to_string());
+                    }
                 }
             }
+            config
+        }
+        MCPServerConfig::Sse { server_url, .. } => {
+            McpConfig::sse(&server.server_name, server_url)
+        }
+        MCPServerConfig::StreamableHttp { server_url, .. } => {
+            McpConfig::http(&server.server_name, server_url)
+        }
+    };
 
+    // Connect and register tools (keeps client connected)
+    match state
+        .tool_registry()
+        .connect_mcp_server(&server.server_name, mcp_config)
+        .await
+    {
+        Ok(tool_count) => {
             tracing::info!(
                 server_id = %server.id,
+                server_name = %server.server_name,
                 tool_count = tool_count,
-                "Pre-registered MCP server tools in global registry"
+                "Connected to MCP server and registered tools"
             );
         }
         Err(e) => {
             tracing::warn!(
                 server_id = %server.id,
                 error = %e,
-                "Failed to discover tools from MCP server, tools will not be available"
+                "Failed to connect to MCP server or discover tools"
             );
-            // Don't fail server creation if tool discovery fails
+            // Don't fail server creation if connection/discovery fails
         }
     }
 
