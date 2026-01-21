@@ -1,7 +1,12 @@
-/// Integration tests for kelpie-indexer
-///
-/// TigerStyle: Each test verifies specific behavior with explicit assertions.
-/// Tests use fixtures in tests/fixtures/sample_crate/
+// Integration tests for kelpie-indexer
+//
+// TigerStyle: Each test verifies specific behavior with explicit assertions.
+// Tests use fixtures in tests/fixtures/sample_crate/
+//
+// NOTE: These tests share a fixture directory and modify its state.
+// The `#[serial]` attribute ensures tests run sequentially to avoid race conditions.
+
+use serial_test::serial;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -37,6 +42,7 @@ fn run_indexer(fixture_path: &PathBuf, command: &str) -> Result<(), Box<dyn std:
 }
 
 #[test]
+#[serial]
 fn test_fixture_exists() {
     let path = fixture_path();
     assert!(path.exists(), "Fixture directory should exist");
@@ -59,6 +65,7 @@ fn test_fixture_exists() {
 }
 
 #[test]
+#[serial]
 fn test_full_rebuild_creates_indexes() {
     let fixture = fixture_path();
 
@@ -89,6 +96,7 @@ fn test_full_rebuild_creates_indexes() {
 }
 
 #[test]
+#[serial]
 fn test_symbol_index_contains_expected_symbols() {
     let fixture = fixture_path();
 
@@ -126,6 +134,7 @@ fn test_symbol_index_contains_expected_symbols() {
 }
 
 #[test]
+#[serial]
 fn test_dependency_graph_finds_dependencies() {
     let fixture = fixture_path();
 
@@ -150,7 +159,7 @@ fn test_dependency_graph_finds_dependencies() {
 
     // Verify edges include dependencies
     let edges = deps["edges"].as_array().expect("Should have edges array");
-    assert!(edges.len() > 0, "Should have dependency edges");
+    assert!(!edges.is_empty(), "Should have dependency edges");
 
     // Check for serde dependency
     let has_serde = edges.iter().any(|edge| {
@@ -160,6 +169,7 @@ fn test_dependency_graph_finds_dependencies() {
 }
 
 #[test]
+#[serial]
 fn test_test_index_finds_tests() {
     let fixture = fixture_path();
 
@@ -174,7 +184,7 @@ fn test_test_index_finds_tests() {
 
     // Verify tests were found
     let test_array = tests["tests"].as_array().expect("Should have tests array");
-    assert!(test_array.len() > 0, "Should find at least one test");
+    assert!(!test_array.is_empty(), "Should find at least one test");
 
     let test_names: Vec<&str> = test_array
         .iter()
@@ -193,6 +203,7 @@ fn test_test_index_finds_tests() {
 }
 
 #[test]
+#[serial]
 fn test_module_index_finds_modules() {
     let fixture = fixture_path();
 
@@ -209,7 +220,7 @@ fn test_module_index_finds_modules() {
     let crates = modules["crates"]
         .as_array()
         .expect("Should have crates array");
-    assert!(crates.len() > 0, "Should find at least one crate");
+    assert!(!crates.is_empty(), "Should find at least one crate");
 
     let crate_names: Vec<&str> = crates.iter().filter_map(|c| c["name"].as_str()).collect();
 
@@ -243,6 +254,7 @@ fn test_module_index_finds_modules() {
 }
 
 #[test]
+#[serial]
 fn test_freshness_tracking_updated() {
     let fixture = fixture_path();
 
@@ -274,5 +286,8 @@ fn test_freshness_tracking_updated() {
     let file_hashes = freshness["file_hashes"]
         .as_object()
         .expect("file_hashes should be an object");
-    assert!(file_hashes.len() > 0, "Should have at least one file hash");
+    assert!(
+        !file_hashes.is_empty(),
+        "Should have at least one file hash"
+    );
 }

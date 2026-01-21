@@ -15,6 +15,9 @@ sha2 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
 rayon = "1.8"
 
+[dev-dependencies]
+serial_test = "3.0"
+
 [[bin]]
 name = "kelpie-indexer"
 path = "src/main.rs"

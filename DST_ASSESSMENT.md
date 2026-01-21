@@ -17,6 +17,7 @@ The state of Deterministic Simulation Testing (DST) in `kelpie` is **Excellent**
 -   **Fixed**: Removed 5 redundant `.bak` files in `crates/kelpie-server/tests/`.
 -   **Fixed**: Resolved a compilation error in `kelpie-storage` (`foundationdb` import).
 -   **Verified**: `kelpie-cluster` is clean of `tokio` violations (contrary to older notes).
+-   **Fixed**: Resolved `TokioRuntime` trait method resolution errors in `kelpie-runtime` and `kelpie-tools` by using fully qualified syntax.
 
 ## 4. Masquerading Tests
 -   **Status**: **Resolved**.

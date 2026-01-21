@@ -6,7 +6,6 @@ use crate::dispatcher::DispatcherHandle;
 use bytes::Bytes;
 use kelpie_core::actor::{ActorId, ActorRef};
 use kelpie_core::error::{Error, Result};
-use kelpie_core::Runtime;
 use std::time::Duration;
 
 /// Handle to invoke an actor
@@ -54,13 +53,19 @@ impl<R: kelpie_core::Runtime> ActorHandle<R> {
         let operation = operation.into();
 
         match self.default_timeout {
-            Some(timeout) => kelpie_core::current_runtime()
-                .timeout(timeout, self.invoke_inner(&operation, payload))
+            Some(timeout) => {
+                let runtime = kelpie_core::current_runtime();
+                kelpie_core::Runtime::timeout(
+                    &runtime,
+                    timeout,
+                    self.invoke_inner(&operation, payload),
+                )
                 .await
                 .map_err(|_| Error::OperationTimedOut {
                     operation: operation.clone(),
                     timeout_ms: timeout.as_millis() as u64,
-                })?,
+                })?
+            }
             None => self.invoke_inner(&operation, payload).await,
         }
     }

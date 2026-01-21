@@ -40,6 +40,12 @@ import { createRlmTools, RlmContext } from "./rlm.js";
 import { createDstTools, DstContext } from "./dst.js";
 import { createCodebaseTools, CodebaseContext } from "./codebase.js";
 import { createAuditLogger } from "./audit.js";
+import { issueTools, handleIssueTool } from "./issues.js";
+import {
+  createIntelligenceTools,
+  handleIntelligenceTool,
+  IntelligenceContext,
+} from "./intelligence.js";
 
 /**
  * Server configuration
@@ -133,6 +139,12 @@ async function main() {
     indexesPath: config.indexesPath,
     audit: auditContext,
   };
+  const intelligenceContext: IntelligenceContext = {
+    codebasePath: config.codebasePath,
+    indexesPath: config.indexesPath,
+    agentfsPath: config.agentfsPath,
+    rlmEnvPath: join(config.codebasePath, "tools", "rlm-env"),
+  };
 
   // Create MCP server
   const server = new Server(
@@ -157,6 +169,7 @@ async function main() {
   const rlmTools = createRlmTools(rlmContext);
   const dstTools = createDstTools(dstContext);
   const codebaseTools = createCodebaseTools(codebaseContext);
+  const intelligenceTools = createIntelligenceTools(intelligenceContext);
 
   const allTools: Tool[] = [
     ...stateTools,
@@ -168,6 +181,8 @@ async function main() {
     ...rlmTools,
     ...dstTools,
     ...codebaseTools,
+    ...issueTools,
+    ...intelligenceTools,
   ];
 
   console.error(`[MCP Kelpie] Registered ${allTools.length} tools`);
@@ -224,6 +239,30 @@ async function main() {
           // Return MCP response (without the result field)
           return { content: response.content };
         }
+      }
+
+      // Check issue tools separately (they use a different handler pattern)
+      const issueTool = issueTools.find((t) => t.name === name);
+      if (issueTool) {
+        const result = await handleIssueTool(name, args as Record<string, unknown>);
+        auditContext.log("tool_result", { tool: name }, result);
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      // Check intelligence tools (async handlers with context)
+      const intelligenceTool = intelligenceTools.find((t) => t.name === name);
+      if (intelligenceTool) {
+        const result = await handleIntelligenceTool(
+          intelligenceContext,
+          name,
+          args as Record<string, unknown>
+        );
+        auditContext.log("tool_result", { tool: name }, result);
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        };
       }
 
       throw new Error(`Unknown tool: ${name}`);

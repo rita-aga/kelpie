@@ -4,7 +4,6 @@
 
 use crate::error::{ToolError, ToolResult};
 use crate::traits::{DynTool, Tool, ToolInput, ToolMetadata, ToolOutput};
-use kelpie_core::Runtime;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -160,9 +159,9 @@ impl ToolRegistry {
         let start = Instant::now();
 
         // Execute with timeout
-        let result = kelpie_core::current_runtime()
-            .timeout(timeout_duration, tool.execute(input))
-            .await;
+        let runtime = kelpie_core::current_runtime();
+        let result =
+            kelpie_core::Runtime::timeout(&runtime, timeout_duration, tool.execute(input)).await;
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -291,9 +290,8 @@ mod tests {
         }
 
         async fn execute(&self, _input: ToolInput) -> ToolResult<ToolOutput> {
-            kelpie_core::current_runtime()
-                .sleep(std::time::Duration::from_secs(10))
-                .await;
+            let runtime = kelpie_core::current_runtime();
+            kelpie_core::Runtime::sleep(&runtime, std::time::Duration::from_secs(10)).await;
             Ok(ToolOutput::success("done"))
         }
     }

@@ -11,7 +11,6 @@ use crate::traits::{
     ParamType, Tool, ToolCapability, ToolInput, ToolMetadata, ToolOutput, ToolParam,
 };
 use async_trait::async_trait;
-use kelpie_core::Runtime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -369,12 +368,14 @@ impl StdioTransport {
         let (response_tx, response_rx) = mpsc::channel::<McpResponse>(32);
 
         // Spawn writer task
+        let runtime = kelpie_core::current_runtime();
         let _writer_handle =
-            kelpie_core::current_runtime().spawn(Self::writer_task(stdin, request_rx, notify_rx));
+            kelpie_core::Runtime::spawn(&runtime, Self::writer_task(stdin, request_rx, notify_rx));
 
         // Spawn reader task
+        let runtime = kelpie_core::current_runtime();
         let _reader_handle =
-            kelpie_core::current_runtime().spawn(Self::reader_task(stdout, response_tx));
+            kelpie_core::Runtime::spawn(&runtime, Self::reader_task(stdout, response_tx));
 
         // Spawn response router task
         let pending: Arc<RwLock<HashMap<u64, oneshot::Sender<ToolResult<McpResponse>>>>> =
@@ -383,7 +384,8 @@ impl StdioTransport {
 
         // Spawn response router task in background
         #[allow(clippy::let_underscore_future)]
-        let _ = kelpie_core::current_runtime().spawn(async move {
+        let runtime = kelpie_core::current_runtime();
+        let _ = kelpie_core::Runtime::spawn(&runtime, async move {
             let mut response_rx = response_rx;
             while let Some(response) = response_rx.recv().await {
                 let id = response.id;
@@ -401,7 +403,8 @@ impl StdioTransport {
 
         // Spawn request handler task in background
         #[allow(clippy::let_underscore_future)]
-        let _ = kelpie_core::current_runtime().spawn(async move {
+        let runtime = kelpie_core::current_runtime();
+        let _ = kelpie_core::Runtime::spawn(&runtime, async move {
             while let Some((request, response_sender)) = real_request_rx.recv().await {
                 let id = request.id;
                 pending_clone.write().await.insert(id, response_sender);
@@ -541,10 +544,8 @@ impl TransportInner for StdioTransport {
                 reason: "transport channel closed".to_string(),
             })?;
 
-        match kelpie_core::current_runtime()
-            .timeout(timeout, response_rx)
-            .await
-        {
+        let runtime = kelpie_core::current_runtime();
+        match kelpie_core::Runtime::timeout(&runtime, timeout, response_rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(ToolError::McpConnectionError {
                 reason: "response channel closed".to_string(),
@@ -683,7 +684,8 @@ impl SseTransport {
 
         // Spawn SSE listener task in background
         #[allow(clippy::let_underscore_future)]
-        let _ = kelpie_core::current_runtime().spawn(async move {
+        let runtime = kelpie_core::current_runtime();
+        let _ = kelpie_core::Runtime::spawn(&runtime, async move {
             use futures::StreamExt;
             use reqwest_eventsource::{Event, EventSource};
 
@@ -753,10 +755,8 @@ impl TransportInner for SseTransport {
         }
 
         // Wait for response via SSE
-        match kelpie_core::current_runtime()
-            .timeout(timeout, response_rx)
-            .await
-        {
+        let runtime = kelpie_core::current_runtime();
+        match kelpie_core::Runtime::timeout(&runtime, timeout, response_rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => {
                 self.pending.write().await.remove(&id);

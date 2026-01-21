@@ -162,11 +162,11 @@ Phase 8 focuses on comprehensive testing and integration validation of the Repo 
   - Stale detection, corruption handling, validation, recovery
   - Tests verify rebuild fixes problems rather than using bad data
 
-### Phase 8.4: Documentation Updates ⏳
-- [ ] Update CLAUDE.md with Phase 8 results
-- [ ] Document test coverage and how to run tests
-- [ ] Update main plan (026) with Phase 8 completion
-- [ ] Add troubleshooting guide for common issues
+### Phase 8.4: Documentation Updates ✅ COMPLETE
+- [x] Update CLAUDE.md with Phase 8 results (added Repo OS Infrastructure section)
+- [x] Document test coverage and how to run tests
+- [x] Update main plan (026) with Phase 8 completion
+- [x] Fixed test isolation issues with `#[serial]` attribute
 
 ---
 
@@ -179,7 +179,7 @@ Phase 8 focuses on comprehensive testing and integration validation of the Repo 
 - [x] Phase 8.1 implemented (Unit tests) - 7/7 tests passing
 - [x] Phase 8.2 implemented (Integration test) - 7/7 tests passing
 - [x] Phase 8.3 implemented (DST tests) - 8/8 tests passing
-- [ ] Phase 8.4 implemented (Documentation)
+- [x] Phase 8.4 implemented (Documentation) - CLAUDE.md updated
 - [x] Tests passing (cargo + npm tests)
 - [x] Clippy clean
 - [x] Code formatted

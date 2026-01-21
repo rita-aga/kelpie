@@ -310,6 +310,50 @@ pub fn insert(&mut self, key: &[u8], value: &[u8]) {
 }
 ```
 
+## Verification Pyramid (CLI-First)
+
+Kelpie uses a **verification pyramid** with increasing confidence levels. Run these directly via CLI (not through MCP tool wrappers).
+
+### Quick Reference
+
+```bash
+# Level 1: Unit Tests (~1-5 seconds)
+cargo test -p kelpie-core
+cargo test -p kelpie-server --lib
+
+# Level 2: DST - Deterministic Simulation (~5-30 seconds)
+cargo test -p kelpie-dst --release
+DST_SEED=12345 cargo test -p kelpie-dst  # Reproducible
+
+# Level 3: Integration Tests (~30-60 seconds)
+cargo test -p kelpie-server --test '*'
+
+# Level 4: Stateright Model Checking (~60+ seconds)
+cargo test stateright_* -- --ignored
+
+# Level 5: Kani Bounded Proofs (when installed)
+cargo kani --package kelpie-core --harness verify_single_activation
+
+# Full Verification (before commit)
+cargo test --workspace && cargo clippy --workspace -- -D warnings && cargo fmt --check
+```
+
+### When to Use Each Level
+
+| Level | Time | Use When |
+|-------|------|----------|
+| **Unit** | ~5s | After every change |
+| **DST** | ~30s | After logic changes, before commit |
+| **Integration** | ~60s | Before merging PRs |
+| **Stateright** | ~60s+ | For distributed invariants |
+| **Kani** | varies | For critical proofs |
+
+### Hard Controls Enforce This
+
+- Pre-commit hook runs `cargo test` + `cargo clippy`
+- Task completion requires verification evidence
+- Index queries warn if code changed since last test
+
 ## DST (Deterministic Simulation Testing)
 
 ### Core Principles
@@ -411,6 +455,162 @@ Kelpie has two types of tests with distinct purposes and characteristics:
 **Note:** "Chaos" in test names like `integration_chaos_dst.rs` refers to **chaos engineering** (many simultaneous faults), not non-deterministic execution. These are still TRUE DST tests!
 
 **Rule of thumb:** If it uses `Simulation` or DST components (SimStorage, SimClock, etc.), it's a DST test. If it requires real Firecracker, real network, or real external binaries, it's a Chaos test.
+
+## Repo OS Infrastructure
+
+Kelpie includes a **Repo OS** infrastructure for AI agent-driven development. This provides structural indexes, MCP tools, and verification-first workflows.
+
+### Quick Reference
+
+```bash
+# Build all indexes (parallel, ~1s)
+cargo run --release -p kelpie-indexer -- full
+
+# Incremental rebuild after file changes
+cargo run -p kelpie-indexer -- incremental path/to/changed/file.rs
+
+# Run indexer tests
+cargo test -p kelpie-indexer
+
+# Run MCP server tests
+cd tools/mcp-kelpie && npm test
+```
+
+### Structural Indexes
+
+Located in `.kelpie-index/structural/`:
+
+| Index | Description | Query Example |
+|-------|-------------|---------------|
+| `symbols.json` | Functions, structs, traits, impls | Find all `pub async fn` |
+| `dependencies.json` | Crate dependency graph | Which crates depend on kelpie-core? |
+| `tests.json` | All tests with topics and commands | Find tests for "storage" |
+| `modules.json` | Module hierarchy per crate | What modules exist in kelpie-server? |
+
+### MCP Server (Decision: KEEP)
+
+The MCP server (`tools/mcp-kelpie/`) provides tools for AI agent development.
+
+**Why MCP over simpler CLI?**
+- **Hard controls** - MCP tools can gate completion (`state_task_complete` requires proof)
+- **IDE integration** - Works with Cursor, VS Code, and other MCP-compatible editors
+- **Audit trail** - All tool calls logged to AgentFS
+- **Structured I/O** - JSON-RPC protocol handles complex inputs/outputs
+
+**Trade-off acknowledged**: MCP adds complexity vs. a single Python CLI (like VDE). But hard controls require programmatic enforcement that simple CLI can't provide.
+
+**Tool categories:**
+- **Index queries** - `index_symbols`, `index_tests`, `index_modules`, `index_deps`
+- **Verification** - `verify_by_tests`, `verify_claim`
+- **State management** - `state_task_start`, `state_task_complete`, `state_verified_fact`
+- **Codebase exploration** - `codebase_scope`, `issue_dashboard`
+
+**Note**: For verification, prefer CLI commands directly (Phase 16.6) over MCP wrappers. MCP is for state management and hard controls, not for wrapping simple shell commands.
+
+### Hard Controls
+
+The infrastructure enforces verification-first development:
+
+1. **Pre-commit hooks** - Tests, clippy, and formatting must pass
+2. **Index freshness gates** - Stale indexes trigger warnings
+3. **Completion verification** - `state_task_complete` requires proof
+4. **Audit trail** - All MCP operations logged to `.agentfs/agent.db`
+
+### AgentFS Storage
+
+State is stored using [Turso AgentFS](https://github.com/tursodatabase/agentfs) compatible schema:
+
+```bash
+# Namespaced keys (AgentFS KV pattern)
+state:{key}      # General agent state
+task:{id}        # Task tracking
+vfs:fact:{id}    # Verified facts (VFS namespace)
+
+# Tool call timeline (AgentFS pattern)
+tool_calls table # Records all tool invocations for auditability
+```
+
+The `agentfs-sdk` npm package is installed. Full migration to native AgentFS is possible when needed.
+
+### RLM Skills (Verification-First Development)
+
+**Core Principle**: Trust execution, not documentation. Verify before claiming complete.
+
+```
+┌─────────────────────────────────────┐
+│  Trusted Sources                    │
+├─────────────────────────────────────┤
+│  ✅ Test execution output           │
+│  ✅ Command execution results       │
+│  ✅ Actual code (after reading it)  │
+└─────────────────────────────────────┘
+
+┌─────────────────────────────────────┐
+│  Untrusted Sources                  │
+├─────────────────────────────────────┤
+│  ❌ Documentation (might be stale)  │
+│  ❌ Comments (might be outdated)    │
+│  ❌ Plan checkboxes (might be lies) │
+└─────────────────────────────────────┘
+```
+
+#### Task Workflow (`/rlm-task`)
+For any non-trivial task:
+1. **Load constraints** - Read `.vision/CONSTRAINTS.md` (non-negotiable rules)
+2. **Query indexes** - Use `index_symbols`, `index_modules` to understand scope
+3. **Create plan** - Save to `.progress/NNN_YYYYMMDD_task-name.md`
+4. **Execute phases** - Verify each by running tests, not reading docs
+5. **Final verification** - `cargo test`, `cargo clippy`, `cargo fmt`
+
+#### Verification Workflow (`/rlm-verify`)
+When asked "Is X implemented?" or "Does Y work?":
+1. **Find tests** - Search for relevant test files
+2. **Run tests** - Execute and capture output
+3. **Report results** - What you OBSERVED, not what docs claim
+
+```bash
+# Example: Verifying snapshot feature
+cargo test snapshot  # Run relevant tests
+# Report: "Ran 5 snapshot tests, 4 passed, 1 failed (restore_concurrent)"
+```
+
+#### Exploration Workflow (`/rlm-explore`)
+Start broad, narrow down:
+1. **Modules** - `cargo metadata` to see crate structure
+2. **Dependencies** - `index_deps` to understand relationships
+3. **Symbols** - `grep` for specific implementations
+4. **Code reading** - Read the actual implementation
+5. **Test verification** - Run tests to confirm understanding
+
+#### Handoff Protocol (`/rlm-handoff`)
+When taking over from another agent:
+1. **NEVER trust checkboxes** - Re-verify completed phases
+2. **Run the tests** - See if claimed work actually passes
+3. **Check for regressions** - Code may have changed since completion
+4. **Document findings** - Update plan with actual verification status
+
+#### Slop Hunt (`/rlm-slop-hunt`)
+Periodic cleanup for:
+- **Dead code** - Unused functions, dependencies
+- **Orphaned code** - Old implementations not deleted
+- **Duplicates** - Same logic in multiple places
+- **Fake DST** - Tests claiming determinism but aren't
+- **Incomplete code** - TODOs, stubs in production
+
+```bash
+# Detection
+grep -r "TODO\|FIXME" crates/ --include="*.rs"
+grep -r "unwrap()\|expect(" crates/ --include="*.rs"
+cargo clippy --workspace -- -W dead_code
+```
+
+### Test Coverage
+
+| Component | Tests | Command |
+|-----------|-------|---------|
+| Indexer (unit) | 7 | `cargo test -p kelpie-indexer --test indexer_tests` |
+| Indexer (consistency) | 8 | `cargo test -p kelpie-indexer --test consistency_tests` |
+| MCP tools | 25+ | `cd tools/mcp-kelpie && npm test` |
 
 ## Vision-Aligned Planning (MANDATORY)
 

@@ -17,6 +17,73 @@
 
 ---
 
+## VDE Comparison & Evolution (2026-01-21)
+
+**Reference:** QuickHouse's "Verification-Driven Exploration" (VDE) paper - an internal technical report on combining RLM, AgentFS, and formal verification.
+
+### What VDE Does That We Should Adopt
+
+| VDE Feature | Benefit | Kelpie Phase |
+|-------------|---------|--------------|
+| **TLA+ Specifications** | "The spec tells me *what invariants matter*; DST tests tell me *whether they hold*" | Phase 11 |
+| **Verification Pyramid** | Layered confidence: DST (~5s) → Stateright (~60s) → Kani (~60s) → Telemetry | Phase 12 |
+| **Invariant Tracking** | Track which invariants verified for which components | Phase 13 |
+| **Production Telemetry** | Ground analysis in real-world behavior | Phase 14 |
+| **ADR → TLA+ → Rust Pipeline** | Specs match intent, implementations match specs | Phase 15 |
+
+### What Kelpie Has That VDE Lacks (KEEP These)
+
+| Kelpie Feature | VDE Gap | Status | Decision |
+|----------------|---------|--------|----------|
+| **Hard Control Layer** | VDE trusts agent claims; we re-verify | ✅ Implemented | **KEEP** - Kelpie's unique strength |
+| **Thoroughness Verification** | VDE can't prove 100% coverage | ✅ Implemented | **KEEP** |
+| **Structural Indexes** | VDE does ad-hoc exploration | ✅ Implemented | **KEEP** |
+| **Issue Storage** | VDE tracks successes, not gaps | ✅ Implemented | **KEEP** |
+
+### What to Remove (Over-Engineered vs VDE)
+
+| Kelpie Component | Problem | VDE Alternative | Decision |
+|------------------|---------|-----------------|----------|
+| **Spec Adapters** (`specs.py`) | Shallow pattern matching, pretends to verify | Agent reads specs directly via RLM | **REMOVE** in Phase 16.5 |
+| **IS vs SHOULD Framework** (`intelligence.py`) | File-existence checks, not semantic | TLA+ specs + agent reasoning | **REMOVE** in Phase 16.5 |
+| **Custom AgentFS Schema** | 6+ tables, complex | Turso AgentFS SDK with KV namespace | **MIGRATE** in Phase 16.4 |
+
+### What to Reconsider
+
+| Component | Question | Phase | Decision |
+|-----------|----------|-------|----------|
+| **Semantic Summaries (Phase 3)** | TLA+ specs may be better "map" than LLM summaries | Phase 16.3 | DEFER - TLA+ takes priority |
+| **MCP Server Complexity** | Simpler CLI might suffice (VDE uses single Python file) | Phase 16.1 | **KEEP MCP** - needed for hard controls |
+| **Multiple Skills Files** | Consolidate into CLAUDE.md? | Phase 16.2 | EVALUATE |
+
+### RLM Comparison: Original Paper vs VDE vs Kelpie
+
+Reference: [Zhang et al. RLM Paper](https://alexzhang13.github.io/blog/2025/rlm/)
+
+| Aspect | Original RLM (Zhang) | VDE (QuickHouse) | Kelpie |
+|--------|---------------------|------------------|--------|
+| **Core Pattern** | REPL, context as variable | CLI-based exploration | MCP server + REPL |
+| **Recursive LLM Calls** | ✅ `rlm(query, ctx)` spawns sub-LLM | ❌ CLI commands instead | ⚠️ Planned, not implemented |
+| **Termination** | `FINAL(answer)` | Agent decides | Hard controls gate completion |
+| **Persistence** | Not emphasized | Turso AgentFS SDK | Custom schema → **MIGRATE** |
+| **Verification** | Not emphasized | CLI: `cargo test`, `cargo kani`, DDSQL | DST exists, pyramid planned |
+| **Enforcement** | None | None (trusts CLAUDE.md) | **Hard controls (KEEP)** |
+
+**Key Insight:** VDE is simpler because it trusts agent discipline. Kelpie adds hard controls as enforcement layer - this is our differentiator. But VDE's verification pyramid (CLI-based) is superior to our spec adapters.
+
+### Key Insight from VDE
+
+> "Instructions tell the AI *what to do*; verification tells it *whether it worked*. Persistence lets it *remember what it learned*."
+
+Kelpie has:
+- ✅ Hard controls (enforcement)
+- ✅ Thoroughness verification (prove completeness)
+- ❌ Formal specs (what SHOULD be true?) → **Phase 11**
+- ❌ Proof-level verification (is it ACTUALLY true for all cases?) → **Phase 11-12**
+- ❌ Production grounding (does it work in the real world?) → **Phase 14**
+
+---
+
 ## Problem Statement
 
 When coding agents work on kelpie:
@@ -46,17 +113,25 @@ Build an infrastructure layer with **three complementary systems**:
    - Solves: stale MD files, P0 violations, agent lies
 
 3. **Codebase Intelligence Layer** - Thorough, truthful answers
-   - **IS vs SHOULD comparison**: Compare actual code against specs/expectations
-   - **Spec Adapters**: Normalize any spec format (OpenAPI, TLA+, patterns) to requirements
-   - **Agent-driven examination**: Intelligent analysis, not mechanical grep
+   - ~~IS vs SHOULD comparison~~ → **REMOVED** (Phase 16.5) - replaced by TLA+ specs + agent reasoning
+   - ~~Spec Adapters~~ → **REMOVED** (Phase 16.5) - shallow pattern matching, not semantic
+   - **Agent-driven examination**: Intelligent analysis via structured iteration
    - **Issue storage to AgentFS**: Persistent, structural issue tracking across sessions
-   - **Thoroughness verification**: Examination logs prove all partitions were checked
+   - **Thoroughness verification**: Examination logs + hard controls prove all partitions checked
+   - **Verification pyramid**: DST → Stateright → Kani → telemetry (Phase 12)
    - Solves: inconsistent findings, no accumulation, unknown completeness
 
 Together:
 - **RLM** ensures agent CAN explore the codebase efficiently (capability)
-- **Hard Control Layer** ensures agent MUST verify claims (enforcement)
-- **Codebase Intelligence** ensures agent answers TRUTHFULLY with evidence (quality)
+- **Hard Control Layer** ensures agent MUST verify claims AND examine thoroughly (enforcement)
+- **Codebase Intelligence** ensures agent answers TRUTHFULLY with executable evidence (quality)
+
+**Note on Recursive LLM Calls (Decision 10):**
+- Original RLM paper supports `rlm(query, context)` spawning sub-LLM calls
+- VDE chose CLI tools instead (simpler, deterministic)
+- Kelpie uses **structured iteration + hard controls** for thoroughness
+- Hard controls guarantee completeness that VDE achieves through agent discipline
+- Recursive calls deferred until codebase grows significantly (>200K lines)
 
 ---
 
@@ -66,10 +141,17 @@ Together:
 
 **RLM (Recursive Language Model)** is an inference strategy where the LLM **never sees the full context directly**. Instead, context is stored as a variable in a REPL environment, and the LLM writes code to interact with it.
 
-Reference: [alexzhang13.github.io/blog/2025/rlm](https://alexzhang13.github.io/blog/2025/rlm/)
+Reference: [Zhang et al. RLM Paper](https://alexzhang13.github.io/blog/2025/rlm/)
+
+**Kelpie's RLM Approach (Decision 10):**
+- ✅ Context as variable (codebase never loaded into LLM window)
+- ✅ Programmatic exploration (grep, peek, read_section, indexes)
+- ✅ REPL-like pattern (explore → observe → explore more)
+- ⏸️ Recursive LLM calls (`spawn_recursive`) - **DEFERRED** (hard controls provide thoroughness instead)
+- ✅ Hard controls enforce complete examination (Kelpie's unique strength)
 
 ```
-Traditional LM:                              RLM:
+Traditional LM:                              Kelpie RLM (Decision 10):
 ┌────────────────────────────┐              ┌────────────────────────────────────┐
 │  LM(query, context)        │              │  RLM(query, context)               │
 │                            │              │                                    │
@@ -79,14 +161,14 @@ Traditional LM:                              RLM:
 │  LM processes ALL tokens   │              │  Root LM writes code:              │
 │  at once                   │              │    matches = grep(codebase, "Fdb") │
 │                            │              │    subset = read_file(matches[0])  │
-│  ❌ Context rot (quality   │              │    answer = RLM(query, subset)     │
-│     degrades with length)  │              │                    ↑               │
-│  ❌ Token limit hit        │              │            Recursive call!         │
+│  ❌ Context rot (quality   │              │    # Recursive call DEFERRED       │
+│     degrades with length)  │              │    # Instead: structured iteration │
+│  ❌ Token limit hit        │              │    # + hard controls               │
 │  ❌ Expensive (all tokens) │              │                                    │
 │  ❌ Misses things          │              │  ✅ No context rot                 │
 │                            │              │  ✅ Unbounded context              │
 └────────────────────────────┘              │  ✅ Efficient (query what you need)│
-                                            │  ✅ Complete coverage              │
+                                            │  ✅ Complete coverage (hard controls)
                                             └────────────────────────────────────┘
 ```
 
@@ -798,6 +880,86 @@ async function start_plan_session(plan_id: string): SessionResult {
 
 ---
 
+### Decision 10: Recursive LLM Calls vs Structured Iteration
+
+**Context:** The original RLM paper (Zhang et al.) supports recursive LLM calls where `rlm(query, context)` spawns sub-LLM calls for decomposition. VDE chose not to implement this, using CLI tools instead. Does Kelpie need recursive LLM calls?
+
+**Use Cases to Consider:**
+
+| Use Case | Description | Context Size |
+|----------|-------------|--------------|
+| Codebase indexing | Extract symbols, dependencies, tests | N/A (deterministic) |
+| Thorough question answering | "What's the state of DST coverage?" | ~50K lines |
+| Full mapping / issue surfacing | Create map of how everything works | ~50K lines |
+
+**Options:**
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: Full RLM (recursive calls) | `spawn_recursive()` spawns sub-LLM calls | Fresh context per sub-call, atomic thoroughness | Complex, expensive, hard to debug, LLM variance |
+| B: VDE-style (CLI iteration) | Agent iterates across turns, uses CLI tools | Simple, deterministic, cheap | Relies on agent discipline, no completeness guarantee |
+| C: Structured iteration + hard controls | Agent iterates, hard controls enforce completeness | Simple + guaranteed thoroughness | Multiple turns, hard control development |
+
+**Decision:** **Option C** - Structured iteration with hard control enforcement.
+
+**Rationale:**
+
+1. **Kelpie codebase (~50K lines) doesn't need recursive decomposition**
+   - Extended context windows can handle partitioned exploration
+   - Structural indexes enable systematic enumeration without LLM
+
+2. **Hard controls provide completeness guarantees that VDE lacks**
+   ```python
+   # Hard control enforces all partitions examined
+   for crate in required_partitions:
+       if not examined(crate):
+           examine(crate)
+           mark_examined(crate)
+   
+   # BLOCK completion until all examined
+   if not all_partitions_examined():
+       return BLOCK("Cannot complete: missing examination of kelpie-cluster")
+   ```
+
+3. **Verification pyramid provides confidence that LLM reasoning cannot**
+   - DST tests give executable evidence
+   - Stateright/Kani give proofs
+   - These are more trustworthy than recursive LLM synthesis
+
+4. **Simpler to implement, debug, and maintain**
+   - No Claude API integration for recursive calls
+   - Each turn is inspectable in conversation
+   - Failures are obvious
+
+**Implementation:**
+
+- Keep `spawn_recursive()` stub in `tools/rlm-env/rlm_env/environment.py` for future use
+- Focus on hard controls for thoroughness enforcement (existing Phase 6)
+- Use verification pyramid (Phase 12) for confidence
+- Track examination progress in AgentFS examination_log table
+
+**When to Reconsider:**
+
+| Trigger | Action |
+|---------|--------|
+| Codebase grows to >200K lines | Re-evaluate recursive decomposition |
+| Analysis tasks require multi-level reasoning chains | Implement `spawn_recursive()` |
+| Iteration across turns proves too slow/expensive | Consider parallel recursive calls |
+| New models make recursive calls cheaper/more reliable | Re-evaluate cost/benefit |
+
+**Comparison to VDE:**
+
+| Aspect | VDE | Kelpie (with this decision) |
+|--------|-----|----------------------------|
+| Recursive LLM calls | ❌ Not implemented | ❌ Deferred |
+| Thoroughness guarantee | Trust agent discipline | **Hard controls enforce** |
+| Verification | CLI tools (DST, Kani) | CLI tools + hard controls |
+| Cost | Low (CLI tools only) | Low (CLI tools only) |
+
+**Key Insight:** Kelpie's hard controls are the mechanism that makes structured iteration as reliable as recursive LLM calls, without the complexity.
+
+---
+
 ## Quick Decision Log
 
 | Time | Decision | Rationale | Trade-off |
@@ -827,6 +989,21 @@ async function start_plan_session(plan_id: string): SessionResult {
 | 2026-01-21 | Spec adapters for normalization | Generic to any spec format | Per-spec adapter needed |
 | 2026-01-21 | Thoroughness verification via examination log | Prove completeness | Log storage overhead |
 | 2026-01-21 | codebase_question MCP tool entry point | Single entry for any question | Spawns RLM subprocess |
+| 2026-01-21 | **VDE COMPARISON: Add TLA+ specs** | DST tests need map of invariants | Learning curve, maintenance |
+| 2026-01-21 | **VDE COMPARISON: Verification Pyramid** | Layered confidence (DST→Stateright→Kani) | Multiple tools to maintain |
+| 2026-01-21 | **VDE COMPARISON: Invariant Tracking** | Know what's verified for what | Schema extension needed |
+| 2026-01-21 | **VDE COMPARISON: Production Telemetry** | Ground analysis in reality | Requires telemetry setup |
+| 2026-01-21 | **VDE COMPARISON: ADR→TLA+→Rust Pipeline** | Specs match intent, impl matches specs | Pipeline maintenance |
+| 2026-01-21 | **VDE COMPARISON: Reconsider semantic summaries** | TLA+ specs may be better "map" | May not need Phase 3 |
+| 2026-01-21 | **VDE COMPARISON: Evaluate MCP complexity** | Simpler CLI might suffice | Trade-off analysis needed |
+| 2026-01-21 | **REMOVE: Spec Adapters** (`specs.py`) | Shallow pattern matching, pretends to verify | VDE agents read specs directly via RLM |
+| 2026-01-21 | **REMOVE: IS vs SHOULD** (`intelligence.py`) | File-existence checks, not semantic analysis | TLA+ specs + agent reasoning |
+| 2026-01-21 | **MIGRATE: Turso AgentFS SDK** | Use industry standard, not custom schema | KV namespace approach, built-in trajectory |
+| 2026-01-21 | **KEEP: Hard Controls** | Kelpie's unique strength over VDE | VDE trusts agents, we re-verify |
+| 2026-01-21 | **ADOPT: Verification Pyramid as CLI** | `cargo test`, `cargo kani` directly | Don't wrap in MCP tools |
+| 2026-01-21 | **RLM CLARIFICATION**: Recursive calls optional | Zhang's RLM supports `rlm(query, ctx)` | VDE doesn't use it, CLI-based instead |
+| 2026-01-21 | **DEFER: Recursive LLM calls** | Kelpie ~50K lines doesn't need decomposition | Hard controls provide thoroughness guarantee instead |
+| 2026-01-21 | **DECISION 10**: Structured iteration + hard controls | Simple + guaranteed thoroughness | Keep `spawn_recursive()` stub for future |
 
 ---
 
@@ -3173,50 +3350,63 @@ git commit --allow-empty -m "test hooks"
 
 ---
 
-### Phase 8: Integration and Testing
+### Phase 8: Integration and Testing (Completed 2026-01-21)
 
-**Goal:** Verify the complete system works end-to-end.
+**Status:** All phases complete with 15 indexer tests + 25+ MCP tests passing
 
-- [ ] **8.1: Unit Tests for Indexer**
+- ✅ **8.1: Unit Tests for Indexer** (7 tests)
   - Test symbol extraction
   - Test dependency graph building
   - Test test index building
+  - Test module index building
   - Test freshness detection
 
-- [ ] **8.2: Integration Test: Full Flow**
-  ```
-  1. Build indexes
-  2. Start task via MCP
-  3. Query indexes
-  4. Make changes
-  5. Verify by execution
-  6. Complete task with proof
-  7. Check audit trail
-  ```
+- ✅ **8.2: Integration Test: Full Flow** (7 tests)
+  - Query symbols via index_symbols
+  - Query tests via index_tests
+  - Query modules via index_modules
+  - Query dependencies via index_deps
+  - Check index status
+  - Create and manage tasks
+  - Validate cross-tool workflow integration
 
-- [ ] **8.3: DST for Index Consistency**
-  - Simulate index corruption
-  - Simulate stale index
-  - Verify gates catch issues
+- ✅ **8.3: DST for Index Consistency** (8 tests)
+  - Test stale index detection (git SHA mismatch)
+  - Test corrupted index detection (malformed JSON)
+  - Test validation catches inconsistencies
+  - Test build progress tracking
+  - Verify fail-safe behavior (rebuild fixes corruption)
 
-- [ ] **8.4: Documentation**
-  - Update CLAUDE.md with new workflow
-  - Create .claude/skills/ with RLM skills
-  - Document MCP tools
+- ✅ **8.4: Documentation**
+  - Updated CLAUDE.md with Repo OS Infrastructure section
+  - Documented test coverage and commands
+  - Fixed test isolation with `#[serial]` attribute
 
 **Verification:**
 ```bash
+# All indexer tests (15 total)
 cargo test -p kelpie-indexer
-./scripts/test_repo_os_e2e.sh
+
+# MCP server tests
+cd tools/mcp-kelpie && npm test
 ```
 
 ---
 
-### Phase 9: Slop Cleanup Workflow
+### Phase 9: Slop Cleanup Workflow ✅
 
 **Goal:** Systematic process to find and purge existing slop from the kelpie codebase.
 
-- [ ] **9.1: Initial Slop Audit**
+**Status:** Initial audit complete. See `.kelpie-index/slop/audit_20260121.md` for full report.
+
+**Summary:**
+- Dead code: 3 warnings (1 in kelpie-server, 2 in external umi-memory)
+- TODOs/FIXMEs: 16 across 6 files (triaged by priority)
+- unwrap()/expect(): ~1076 in production code (needs targeted audit)
+- Fake DST tests: 0 (all DST tests use proper primitives)
+- Pre-existing issues: TokioRuntime.timeout() (being fixed separately)
+
+- [x] **9.1: Initial Slop Audit**
   Run all detection tools on current kelpie state:
   ```bash
   # Create baseline slop report
@@ -3921,37 +4111,1797 @@ mcp.issue_summary()
 
 ---
 
+### Phase 11: Formal Methods Integration (VDE-Inspired)
+
+**Goal:** Add TLA+ specifications that define what invariants SHOULD hold, enabling proof-level verification beyond "tests pass." Without formal specs, DST tests are testing without a map.
+
+**Background (from VDE comparison):**
+
+VDE's key insight: "Reading a 200-line TLA+ spec gives me the state model in minutes. The spec tells me *what invariants matter*; the DST tests tell me *whether they hold*."
+
+Kelpie currently has DST tests but no TLA+ specs defining:
+- What invariants should hold (AtomicVisibility, NoDataLoss, etc.)
+- What state transitions are valid
+- What safety/liveness properties are required
+
+**Why This Matters:**
+
+| Without TLA+ | With TLA+ |
+|--------------|-----------|
+| "DST tests pass" | "AtomicVisibility holds for all reachable states" |
+| Hope tests cover enough | Know exactly what invariants are verified |
+| Can't prove properties | Can prove safety properties exhaustively |
+
+- [ ] **11.1: Create TLA+ Spec for Actor Lifecycle**
+
+  Model the core actor state machine:
+
+  ```
+  specs/tla/
+  ├── ActorLifecycle.tla       # Actor activation/deactivation invariants
+  ├── ActorState.tla           # State persistence guarantees
+  └── ActorLifecycle.cfg       # TLC configuration
+  ```
+
+  **ActorLifecycle.tla:**
+  ```tla
+  ---- MODULE ActorLifecycle ----
+  EXTENDS Naturals, Sequences, FiniteSets
+
+  VARIABLES
+      actors,           \* Set of actor IDs currently active
+      pending,          \* Actors being activated
+      state             \* Actor state storage
+
+  (* Invariants from ADR-001: Virtual Actor Model *)
+  AtMostOneActive ==
+      \* An actor can only be active on one node at a time
+      \A a \in actors : Cardinality({n \in Nodes : a \in active[n]}) <= 1
+
+  StateNeverLost ==
+      \* Deactivated actors retain their state
+      \A a \in DOMAIN state :
+          (a \notin actors) => (state'[a] = state[a] \/ a \in pending)
+
+  ActivationAtomic ==
+      \* Activation either completes fully or not at all
+      \A a \in pending :
+          (a \in actors' /\ state'[a] # NULL) \/ (a \notin actors' /\ a \in pending')
+
+  ====
+  ```
+
+- [ ] **11.2: Create TLA+ Spec for Storage Layer**
+
+  Model FDB storage invariants:
+
+  ```tla
+  ---- MODULE ActorStorage ----
+  EXTENDS Naturals, Sequences
+
+  VARIABLES
+      kvStore,          \* Key-value store state
+      transactions,     \* Active transactions
+      committed         \* Committed transaction IDs
+
+  (* Invariants from ADR-002: FoundationDB Integration *)
+  Linearizability ==
+      \* Reads see most recent committed write
+      \A k \in DOMAIN kvStore :
+          \A txn \in committed :
+              reads[txn][k] = writes[LatestCommittedWriter(k)][k]
+
+  TransactionAtomicity ==
+      \* Transaction either commits all writes or none
+      \A txn \in transactions :
+          (txn \in committed' => AllWritesVisible(txn))
+          \/ (txn \notin committed' => NoWritesVisible(txn))
+
+  NoDataLoss ==
+      \* Committed data is never lost
+      \A k \in DOMAIN kvStore :
+          \A v \in History(k) :
+              WasCommitted(k, v) => CanBeRead(k, v)
+
+  ====
+  ```
+
+- [ ] **11.3: Create TLA+ Spec for Migration/Teleport**
+
+  Model actor migration invariants:
+
+  ```tla
+  ---- MODULE ActorMigration ----
+
+  (* Invariants from ADR-015: VM Instance Teleport *)
+  MigrationSafety ==
+      \* During migration, actor is not active on both nodes
+      \A a \in migrating :
+          ~(a \in active[source] /\ a \in active[dest])
+
+  StateConsistency ==
+      \* After migration, state is identical on destination
+      \A a \in migrated :
+          state[dest][a] = state[source][a] @ migration_start
+
+  NoLostMessages ==
+      \* Messages in flight during migration are delivered
+      \A msg \in in_flight :
+          Eventually(Delivered(msg))
+
+  ====
+  ```
+
+- [ ] **11.4: Integrate Stateright for Model Checking**
+
+  Create Rust models that mirror TLA+ specs:
+
+  ```rust
+  // crates/kelpie-dst/src/models/actor_lifecycle.rs
+
+  use stateright::*;
+
+  #[derive(Clone, Debug, Hash)]
+  struct ActorLifecycleState {
+      actors: BTreeSet<ActorId>,
+      pending: BTreeSet<ActorId>,
+      state: BTreeMap<ActorId, ActorState>,
+  }
+
+  impl Model for ActorLifecycleModel {
+      type State = ActorLifecycleState;
+      type Action = ActorAction;
+
+      fn init_states(&self) -> Vec<Self::State> {
+          vec![ActorLifecycleState::default()]
+      }
+
+      fn actions(&self, state: &Self::State, actions: &mut Vec<Self::Action>) {
+          // Enumerate all possible actions
+          for actor_id in &self.actor_ids {
+              actions.push(ActorAction::Activate(*actor_id));
+              actions.push(ActorAction::Deactivate(*actor_id));
+              actions.push(ActorAction::Crash(*actor_id));
+          }
+      }
+
+      fn next_state(&self, state: &Self::State, action: Self::Action) -> Option<Self::State> {
+          // Apply action to state
+          match action {
+              ActorAction::Activate(id) => self.activate(state, id),
+              ActorAction::Deactivate(id) => self.deactivate(state, id),
+              ActorAction::Crash(id) => self.crash(state, id),
+          }
+      }
+
+      fn properties(&self) -> Vec<Property<Self>> {
+          vec![
+              Property::always("AtMostOneActive", |_, state| {
+                  // Mirror TLA+ invariant
+                  state.actors.iter().all(|a| {
+                      state.nodes.iter().filter(|n| n.active.contains(a)).count() <= 1
+                  })
+              }),
+              Property::always("StateNeverLost", |_, state| {
+                  // Mirror TLA+ invariant
+                  state.state.keys().all(|a| {
+                      state.actors.contains(a) || state.pending.contains(a)
+                          || state.state.get(a).is_some()
+                  })
+              }),
+          ]
+      }
+  }
+
+  #[test]
+  #[ignore] // Run with: cargo test stateright_actor -- --ignored
+  fn stateright_actor_lifecycle() {
+      ActorLifecycleModel::default()
+          .checker()
+          .threads(num_cpus::get())
+          .spawn_dfs()
+          .join()
+          .assert_properties();
+  }
+  ```
+
+- [ ] **11.5: Add Kani Bounded Verification Harnesses**
+
+  For critical functions, prove properties for all inputs:
+
+  ```rust
+  // crates/kelpie-storage/src/fdb.rs
+
+  #[cfg(kani)]
+  mod kani_proofs {
+      use super::*;
+
+      #[kani::proof]
+      #[kani::unwind(10)]
+      fn verify_transaction_atomicity() {
+          let key: [u8; 8] = kani::any();
+          let value: [u8; 32] = kani::any();
+
+          let mut store = SimStorage::new();
+          let txn = store.begin_transaction();
+
+          // Write within transaction
+          txn.set(&key, &value);
+
+          // Before commit: write not visible
+          assert!(store.get(&key).is_none());
+
+          // After commit: write visible
+          txn.commit().unwrap();
+          assert_eq!(store.get(&key), Some(value.to_vec()));
+      }
+
+      #[kani::proof]
+      fn verify_no_data_loss_on_crash() {
+          let key: [u8; 8] = kani::any();
+          let value: [u8; 32] = kani::any();
+
+          let mut store = SimStorage::new();
+
+          // Commit a write
+          let txn = store.begin_transaction();
+          txn.set(&key, &value);
+          txn.commit().unwrap();
+
+          // Simulate crash and recovery
+          store.crash();
+          store.recover();
+
+          // Data must still be there
+          assert_eq!(store.get(&key), Some(value.to_vec()));
+      }
+  }
+  ```
+
+- [ ] **11.6: Document Spec-to-Test Mapping**
+
+  Create mapping between TLA+ invariants and DST tests:
+
+  ```yaml
+  # .kelpie-index/specs/invariant-test-mapping.yaml
+
+  invariants:
+    ActorLifecycle:
+      AtMostOneActive:
+        tla_spec: specs/tla/ActorLifecycle.tla
+        stateright_model: crates/kelpie-dst/src/models/actor_lifecycle.rs
+        dst_tests:
+          - test_actor_single_activation
+          - test_actor_no_double_activation
+        coverage: FULL
+
+      StateNeverLost:
+        tla_spec: specs/tla/ActorLifecycle.tla
+        stateright_model: crates/kelpie-dst/src/models/actor_lifecycle.rs
+        dst_tests:
+          - test_actor_state_persistence
+          - test_actor_crash_recovery
+        coverage: PARTIAL
+        gaps:
+          - "Doesn't test concurrent crash + recovery"
+
+    ActorStorage:
+      Linearizability:
+        tla_spec: specs/tla/ActorStorage.tla
+        stateright_model: null  # Not yet implemented
+        dst_tests:
+          - test_storage_linearizable_reads
+        coverage: PARTIAL
+        gaps:
+          - "SimStorage doesn't model FDB transaction conflicts"
+  ```
+
+**Verification:**
+```bash
+# Check TLA+ specs with TLC
+tlc specs/tla/ActorLifecycle.tla
+
+# Run Stateright model checking
+cargo test -p kelpie-dst stateright_ -- --ignored
+
+# Run Kani proofs (requires kani installed)
+cargo kani --package kelpie-storage
+
+# View invariant-test mapping
+cat .kelpie-index/specs/invariant-test-mapping.yaml
+```
+
+---
+
+### Phase 12: Verification Pyramid (VDE-Inspired)
+
+**Goal:** Implement a layered verification approach with clear time/confidence tradeoffs, with DST as the primary workhorse.
+
+**Background (from VDE comparison):**
+
+VDE structures verification as a pyramid:
+
+| Layer | Tool | Time | Confidence | Use Case |
+|-------|------|------|------------|----------|
+| Symbolic | TLA+ specs | 2 min read | Understanding | Learn state model |
+| **Primary** | **DST tests** | **~5s** | **High** | **Day-to-day verification** |
+| Exhaustive | Stateright | 30-60s | Proof | Verify all states |
+| Bounded | Kani | ~60s | Proof (bounded) | Verify all inputs |
+| Telemetry | Production SQL | ~2s | Ground truth | Real-world behavior |
+
+**Key Insight:** "DST is the daily driver. TLA+ specs provide the map."
+
+- [ ] **12.1: Create Verification Pyramid MCP Tool**
+
+  Single tool that guides through verification layers:
+
+  ```typescript
+  // tools/mcp-kelpie/src/pyramid.ts
+
+  interface VerificationLevel {
+    name: string;
+    command: string;
+    timeout_seconds: number;
+    confidence: "understanding" | "high" | "proof" | "ground_truth";
+    when_to_use: string;
+  }
+
+  const VERIFICATION_PYRAMID: VerificationLevel[] = [
+    {
+      name: "read_spec",
+      command: "cat specs/tla/{component}.tla",
+      timeout_seconds: 120,  // 2 min reading time
+      confidence: "understanding",
+      when_to_use: "Start here - understand state model and invariants"
+    },
+    {
+      name: "dst_tests",
+      command: "cargo test -p kelpie-dst {component} --release",
+      timeout_seconds: 30,
+      confidence: "high",
+      when_to_use: "Daily driver - fast feedback on changes"
+    },
+    {
+      name: "stateright_model",
+      command: "cargo test -p kelpie-dst stateright_{component} -- --ignored",
+      timeout_seconds: 120,
+      confidence: "proof",
+      when_to_use: "When DST passes but need exhaustive state space exploration"
+    },
+    {
+      name: "kani_proof",
+      command: "cargo kani --package kelpie-{component}",
+      timeout_seconds: 300,
+      confidence: "proof",
+      when_to_use: "When need bounded proof for all inputs"
+    },
+    {
+      name: "production_telemetry",
+      command: "kelpie-perf telemetry query --component {component}",
+      timeout_seconds: 10,
+      confidence: "ground_truth",
+      when_to_use: "Ground truth - does it work in the real world?"
+    }
+  ];
+
+  /**
+   * Run verification pyramid for a component.
+   * Starts with fast checks, escalates to slower proofs as needed.
+   */
+  export async function verify_pyramid(
+    component: string,
+    level: "fast" | "thorough" | "exhaustive" = "fast"
+  ): Promise<PyramidResult> {
+    const results: LevelResult[] = [];
+
+    // Always start with spec reading (for human understanding)
+    results.push({
+      level: "read_spec",
+      status: "available",
+      spec_path: `specs/tla/${component}.tla`,
+      invariants: await extractInvariants(component)
+    });
+
+    // DST is always run (primary workhorse)
+    const dstResult = await runWithTimeout(
+      `cargo test -p kelpie-dst ${component} --release`,
+      30
+    );
+    results.push({
+      level: "dst_tests",
+      status: dstResult.success ? "passed" : "failed",
+      output: dstResult.output,
+      duration_ms: dstResult.duration
+    });
+
+    // If fast mode and DST passes, we're done
+    if (level === "fast" && dstResult.success) {
+      return { results, recommendation: "DST passed - high confidence" };
+    }
+
+    // Thorough: add Stateright
+    if (level === "thorough" || level === "exhaustive") {
+      const srResult = await runWithTimeout(
+        `cargo test -p kelpie-dst stateright_${component} -- --ignored`,
+        120
+      );
+      results.push({
+        level: "stateright_model",
+        status: srResult.success ? "passed" : "failed",
+        states_explored: parseStatesExplored(srResult.output),
+        output: srResult.output
+      });
+    }
+
+    // Exhaustive: add Kani
+    if (level === "exhaustive") {
+      const kaniResult = await runWithTimeout(
+        `cargo kani --package kelpie-${component}`,
+        300
+      );
+      results.push({
+        level: "kani_proof",
+        status: kaniResult.success ? "proved" : "failed",
+        output: kaniResult.output
+      });
+    }
+
+    return {
+      results,
+      recommendation: generateRecommendation(results)
+    };
+  }
+  ```
+
+- [ ] **12.2: Create Pyramid Skill**
+
+  ```markdown
+  # .claude/skills/verification-pyramid.md
+
+  ## Verification Pyramid Workflow
+
+  When verifying code changes or investigating issues, follow the pyramid:
+
+  ### Level 1: Read the Spec (2 min)
+  ```
+  # First, understand what SHOULD be true
+  cat specs/tla/{component}.tla
+
+  # Extract invariants to check
+  grep "==" specs/tla/{component}.tla | head -10
+  ```
+
+  **Purpose:** Get the mental map. Don't run tests blind.
+
+  ### Level 2: DST Tests (~5s) - PRIMARY WORKHORSE
+  ```
+  # Fast, high-confidence feedback
+  cargo test -p kelpie-dst {component} --release
+
+  # With specific seed for reproducibility
+  DST_SEED=12345 cargo test -p kelpie-dst {component}
+  ```
+
+  **Purpose:** Daily driver. Run on every change.
+
+  ### Level 3: Stateright (~60s) - WHEN NEEDED
+  ```
+  # Exhaustive state space exploration
+  cargo test -p kelpie-dst stateright_{component} -- --ignored
+  ```
+
+  **Purpose:** When DST passes but you need proof. Run before merging protocol changes.
+
+  ### Level 4: Kani (~60s) - WHEN NEEDED
+  ```
+  # Bounded proof for all inputs
+  cargo kani --package kelpie-{component}
+  ```
+
+  **Purpose:** When need to prove property holds for ALL inputs up to bound.
+
+  ### Level 5: Production Telemetry - GROUND TRUTH
+  ```
+  # Check real-world behavior
+  mcp.telemetry_query("component={component} errors last 24h")
+  ```
+
+  **Purpose:** Does it actually work in production?
+
+  ## When to Escalate
+
+  | Situation | Start At | Escalate To |
+  |-----------|----------|-------------|
+  | Normal development | DST | (don't escalate if passing) |
+  | Bug investigation | Telemetry | DST → Stateright |
+  | Protocol change | Spec | DST → Stateright → Kani |
+  | Before release | DST | Stateright for critical paths |
+  | After incident | Telemetry | Full pyramid |
+  ```
+
+- [ ] **12.3: Integrate Pyramid into Hard Controls**
+
+  ```typescript
+  // tools/mcp-kelpie/src/integrity.ts
+
+  // Modify mark_phase_complete to use pyramid
+  async function mark_phase_complete(phase: string, evidence: Evidence): Result {
+    // ... existing checks ...
+
+    // NEW: For critical path changes, require pyramid verification
+    if (isCriticalPath(phase)) {
+      const pyramid = await verify_pyramid(phase, "thorough");
+
+      if (!pyramid.results.every(r => r.status === "passed" || r.status === "proved")) {
+        throw new Error(
+          `Phase ${phase} affects critical path. Pyramid verification incomplete:\n` +
+          pyramid.results.filter(r => r.status !== "passed").map(r =>
+            `  - ${r.level}: ${r.status}`
+          ).join("\n")
+        );
+      }
+
+      evidence.pyramid_verification = pyramid;
+    }
+
+    // ... rest of completion logic ...
+  }
+  ```
+
+**Verification:**
+```bash
+# Run pyramid for a component
+mcp.verify_pyramid("storage", level="thorough")
+
+# Check pyramid skill
+cat .claude/skills/verification-pyramid.md
+
+# Test escalation logic
+# (make a change to critical path, verify pyramid is enforced)
+```
+
+---
+
+### Phase 13: Invariant Tracking (VDE-Inspired)
+
+**Goal:** Track which invariants have been verified for which components, enabling cumulative knowledge about verification state.
+
+**Background (from VDE comparison):**
+
+VDE tracks invariants explicitly:
+```python
+await vfs.verify_invariant(
+    name="AtomicVisibility",
+    component="compaction",
+    evidence="23 DST tests passed"
+)
+
+# Later can query: "which invariants are unverified for kelpie-storage?"
+await vfs.invariant_unverified(component="kelpie-storage")
+```
+
+Kelpie currently has no way to:
+- Track which invariants have been proven for which components
+- Know "is AtomicVisibility verified?"
+- Build cumulative knowledge about verification coverage
+
+- [ ] **13.1: Extend AgentFS Schema for Invariant Tracking**
+
+  ```sql
+  -- Add to .agentfs/agent.db
+
+  CREATE TABLE invariants (
+      id TEXT PRIMARY KEY,
+
+      -- Invariant definition
+      name TEXT NOT NULL,                  -- "AtomicVisibility", "NoDataLoss", etc.
+      component TEXT NOT NULL,             -- "kelpie-storage", "kelpie-runtime", etc.
+      spec_source TEXT,                    -- "specs/tla/ActorStorage.tla"
+      description TEXT,                    -- Human-readable description
+
+      -- Verification state
+      status TEXT DEFAULT 'unverified',    -- unverified, verified, violated, unknown
+      verification_method TEXT,            -- "dst", "stateright", "kani", "manual"
+      verified_at INTEGER,                 -- Timestamp
+      verified_by TEXT,                    -- Agent session ID
+      git_sha TEXT,                        -- Code version when verified
+
+      -- Evidence
+      evidence TEXT,                       -- "23 DST tests passed with seed 12345"
+      test_refs TEXT,                      -- JSON array of test names/files
+      proof_artifact TEXT,                 -- Path to Stateright/Kani output
+
+      -- Staleness tracking
+      last_relevant_change TEXT,           -- Git SHA of last change to component
+      needs_reverification INTEGER DEFAULT 0,
+
+      UNIQUE(name, component)
+  );
+
+  CREATE INDEX idx_invariants_component ON invariants(component);
+  CREATE INDEX idx_invariants_status ON invariants(status);
+
+  -- Track invariant verification history
+  CREATE TABLE invariant_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      invariant_id TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      old_status TEXT,
+      new_status TEXT,
+      reason TEXT,
+      git_sha TEXT,
+      FOREIGN KEY (invariant_id) REFERENCES invariants(id)
+  );
+  ```
+
+- [ ] **13.2: MCP Tools for Invariant Management**
+
+  ```typescript
+  // tools/mcp-kelpie/src/invariants.ts
+
+  /**
+   * Mark an invariant as verified.
+   */
+  export async function invariant_verify(
+    name: string,
+    component: string,
+    method: "dst" | "stateright" | "kani" | "manual",
+    evidence: string,
+    test_refs?: string[]
+  ): Promise<void> {
+    const git_sha = await getCurrentSha();
+
+    await db.run(`
+      INSERT INTO invariants (id, name, component, status, verification_method, verified_at, verified_by, git_sha, evidence, test_refs)
+      VALUES (?, ?, ?, 'verified', ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(name, component) DO UPDATE SET
+        status = 'verified',
+        verification_method = ?,
+        verified_at = ?,
+        git_sha = ?,
+        evidence = ?,
+        test_refs = ?
+    `, [
+      `${component}:${name}`, name, component, method, Date.now(), sessionId, git_sha, evidence, JSON.stringify(test_refs),
+      method, Date.now(), git_sha, evidence, JSON.stringify(test_refs)
+    ]);
+
+    await logInvariantHistory(`${component}:${name}`, null, 'verified', `Verified via ${method}`);
+    await audit.log('invariant_verify', { name, component, method, evidence });
+  }
+
+  /**
+   * Get unverified invariants for a component.
+   */
+  export async function invariant_unverified(
+    component?: string
+  ): Promise<InvariantInfo[]> {
+    const where = component ? `WHERE component = ? AND status != 'verified'` : `WHERE status != 'verified'`;
+    const params = component ? [component] : [];
+
+    return await db.all(`
+      SELECT name, component, status, spec_source, description, last_relevant_change
+      FROM invariants
+      ${where}
+      ORDER BY component, name
+    `, params);
+  }
+
+  /**
+   * Get verification status summary.
+   */
+  export async function invariant_summary(): Promise<InvariantSummary> {
+    const rows = await db.all(`
+      SELECT
+        component,
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'verified' THEN 1 ELSE 0 END) as verified,
+        SUM(CASE WHEN status = 'violated' THEN 1 ELSE 0 END) as violated,
+        SUM(CASE WHEN status = 'unverified' THEN 1 ELSE 0 END) as unverified
+      FROM invariants
+      GROUP BY component
+    `);
+
+    return {
+      by_component: rows,
+      total: rows.reduce((sum, r) => sum + r.total, 0),
+      total_verified: rows.reduce((sum, r) => sum + r.verified, 0),
+      total_violated: rows.reduce((sum, r) => sum + r.violated, 0)
+    };
+  }
+
+  /**
+   * Mark invariants as needing reverification when component changes.
+   */
+  export async function invariant_mark_stale(component: string, git_sha: string): Promise<void> {
+    await db.run(`
+      UPDATE invariants
+      SET needs_reverification = 1, last_relevant_change = ?
+      WHERE component = ?
+    `, [git_sha, component]);
+  }
+
+  /**
+   * Suggest what to verify based on current state.
+   */
+  export async function invariant_suggest(component?: string): Promise<Suggestion[]> {
+    const suggestions: Suggestion[] = [];
+
+    // Unverified invariants
+    const unverified = await invariant_unverified(component);
+    for (const inv of unverified) {
+      suggestions.push({
+        priority: "high",
+        action: `Verify ${inv.name} for ${inv.component}`,
+        command: `mcp.invariant_verify("${inv.name}", "${inv.component}", "dst", "...")`
+      });
+    }
+
+    // Stale invariants (code changed since verification)
+    const stale = await db.all(`
+      SELECT name, component, git_sha, last_relevant_change
+      FROM invariants
+      WHERE needs_reverification = 1
+    `);
+    for (const inv of stale) {
+      suggestions.push({
+        priority: "medium",
+        action: `Reverify ${inv.name} for ${inv.component} (code changed)`,
+        reason: `Verified at ${inv.git_sha}, code changed at ${inv.last_relevant_change}`
+      });
+    }
+
+    return suggestions;
+  }
+  ```
+
+- [ ] **13.3: Pre-populate Invariants from TLA+ Specs**
+
+  ```typescript
+  // tools/mcp-kelpie/src/invariants.ts
+
+  /**
+   * Extract invariants from TLA+ spec files and populate database.
+   */
+  export async function invariant_import_from_specs(): Promise<ImportResult> {
+    const specFiles = await glob("specs/tla/*.tla");
+    const imported: string[] = [];
+
+    for (const specFile of specFiles) {
+      const content = await fs.readFile(specFile, "utf-8");
+      const component = path.basename(specFile, ".tla").toLowerCase();
+
+      // Extract invariant definitions (lines ending with ==)
+      const invariantRegex = /^(\w+)\s*==/gm;
+      let match;
+      while ((match = invariantRegex.exec(content)) !== null) {
+        const name = match[1];
+
+        // Skip non-invariants (TypeInvariant, Init, Next, etc.)
+        if (["TypeInvariant", "Init", "Next", "Spec", "vars"].includes(name)) continue;
+
+        // Extract description (comment above invariant)
+        const lines = content.substring(0, match.index).split("\n");
+        const description = extractCommentAbove(lines);
+
+        await db.run(`
+          INSERT INTO invariants (id, name, component, spec_source, description, status)
+          VALUES (?, ?, ?, ?, ?, 'unverified')
+          ON CONFLICT(name, component) DO UPDATE SET
+            spec_source = ?, description = ?
+        `, [
+          `${component}:${name}`, name, component, specFile, description,
+          specFile, description
+        ]);
+
+        imported.push(`${component}:${name}`);
+      }
+    }
+
+    return { imported_count: imported.length, invariants: imported };
+  }
+  ```
+
+- [ ] **13.4: Integrate with Handoff Verification**
+
+  ```typescript
+  // Update start_plan_session to include invariant status
+
+  async function start_plan_session(plan_id: string): SessionResult {
+    // ... existing verification ...
+
+    // NEW: Check invariant status
+    const invariantStatus = await invariant_summary();
+    const staleInvariants = await db.all(`
+      SELECT name, component FROM invariants WHERE needs_reverification = 1
+    `);
+
+    return {
+      plan_id,
+      verification_report: verificationReport,
+      // ... existing fields ...
+
+      // NEW: Invariant status
+      invariant_summary: invariantStatus,
+      stale_invariants: staleInvariants,
+      message: staleInvariants.length > 0
+        ? `WARNING: ${staleInvariants.length} invariants need reverification due to code changes.`
+        : `All invariants current.`
+    };
+  }
+  ```
+
+**Verification:**
+```bash
+# Import invariants from TLA+ specs
+mcp.invariant_import_from_specs()
+
+# Check invariant status
+mcp.invariant_summary()
+
+# See what needs verification
+mcp.invariant_suggest("kelpie-storage")
+
+# Mark an invariant as verified
+mcp.invariant_verify("AtomicVisibility", "kelpie-storage", "dst", "23 tests passed")
+
+# Check for unverified invariants
+mcp.invariant_unverified()
+```
+
+---
+
+### Phase 14: Production Telemetry Integration (VDE-Inspired)
+
+**Goal:** Add a SQL interface to production/staging telemetry data, grounding analysis in real-world behavior rather than just test results.
+
+**Background (from VDE comparison):**
+
+VDE's case study started with production data:
+```sql
+SELECT host, count(*) as oom_count
+FROM logs WHERE message LIKE '%OOM%'
+GROUP BY host
+-- Found 17 OOM kills at exactly 12GB
+```
+
+This grounded the investigation in reality. Kelpie currently has no equivalent - analysis is based entirely on test results without knowing if the code works in production.
+
+**Why This Matters:**
+
+| Without Telemetry | With Telemetry |
+|-------------------|----------------|
+| "DST passes" | "DST passes AND production has 0 errors" |
+| Hypothesis-driven debugging | Evidence-driven debugging |
+| Can't verify prod behavior | Can check "does this actually work?" |
+
+- [ ] **14.1: Design Telemetry Interface**
+
+  ```typescript
+  // tools/mcp-kelpie/src/telemetry.ts
+
+  interface TelemetryConfig {
+    provider: "datadog" | "prometheus" | "custom";
+    endpoint: string;
+    auth: {
+      type: "api_key" | "oauth" | "bearer";
+      token_env: string;  // Environment variable name
+    };
+  }
+
+  interface TelemetryQuery {
+    type: "logs" | "metrics" | "traces";
+    query: string;
+    time_range: {
+      start: string;  // ISO timestamp or relative like "24h"
+      end: string;
+    };
+    limit?: number;
+  }
+
+  interface TelemetryResult {
+    query: TelemetryQuery;
+    rows: any[];
+    row_count: number;
+    execution_time_ms: number;
+    cached: boolean;
+  }
+  ```
+
+- [ ] **14.2: Implement Telemetry Client**
+
+  ```typescript
+  // tools/mcp-kelpie/src/telemetry.ts
+
+  export class TelemetryClient {
+    constructor(private config: TelemetryConfig) {}
+
+    async query(q: TelemetryQuery): Promise<TelemetryResult> {
+      const startTime = Date.now();
+
+      // Check cache first
+      const cacheKey = this.getCacheKey(q);
+      const cached = await this.checkCache(cacheKey);
+      if (cached) {
+        return { ...cached, cached: true };
+      }
+
+      // Execute query based on provider
+      let rows: any[];
+      switch (this.config.provider) {
+        case "datadog":
+          rows = await this.queryDatadog(q);
+          break;
+        case "prometheus":
+          rows = await this.queryPrometheus(q);
+          break;
+        case "custom":
+          rows = await this.queryCustom(q);
+          break;
+      }
+
+      const result: TelemetryResult = {
+        query: q,
+        rows,
+        row_count: rows.length,
+        execution_time_ms: Date.now() - startTime,
+        cached: false
+      };
+
+      // Cache result (TTL from VDE: 30 minutes)
+      await this.cacheResult(cacheKey, result, 30 * 60 * 1000);
+
+      return result;
+    }
+
+    private async queryDatadog(q: TelemetryQuery): Promise<any[]> {
+      // Implementation for Datadog Logs/Metrics API
+      const response = await fetch(`${this.config.endpoint}/api/v2/logs/events/search`, {
+        method: "POST",
+        headers: {
+          "DD-API-KEY": process.env[this.config.auth.token_env] || "",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          filter: { query: q.query, from: q.time_range.start, to: q.time_range.end },
+          page: { limit: q.limit || 100 }
+        })
+      });
+
+      const data = await response.json();
+      return data.data || [];
+    }
+  }
+  ```
+
+- [ ] **14.3: MCP Tools for Telemetry**
+
+  ```typescript
+  // tools/mcp-kelpie/src/telemetry.ts
+
+  /**
+   * Query production/staging telemetry.
+   * Grounds analysis in real-world behavior.
+   */
+  export async function telemetry_query(
+    query: string,
+    type: "logs" | "metrics" = "logs",
+    time_range: string = "24h"
+  ): Promise<TelemetryResult> {
+    const client = new TelemetryClient(loadConfig());
+
+    return await client.query({
+      type,
+      query,
+      time_range: parseTimeRange(time_range),
+      limit: 1000
+    });
+  }
+
+  /**
+   * Get error summary for a component.
+   */
+  export async function telemetry_errors(
+    component: string,
+    time_range: string = "24h"
+  ): Promise<ErrorSummary> {
+    const result = await telemetry_query(
+      `service:kelpie-${component} status:error`,
+      "logs",
+      time_range
+    );
+
+    // Aggregate by error type
+    const byType: Record<string, number> = {};
+    for (const row of result.rows) {
+      const errorType = row.attributes?.error?.type || "unknown";
+      byType[errorType] = (byType[errorType] || 0) + 1;
+    }
+
+    return {
+      total_errors: result.row_count,
+      by_type: byType,
+      time_range,
+      sample_errors: result.rows.slice(0, 5)
+    };
+  }
+
+  /**
+   * Get memory/CPU metrics for a component.
+   */
+  export async function telemetry_resources(
+    component: string,
+    time_range: string = "24h"
+  ): Promise<ResourceMetrics> {
+    const memResult = await telemetry_query(
+      `avg:system.mem.used{service:kelpie-${component}}`,
+      "metrics",
+      time_range
+    );
+
+    const cpuResult = await telemetry_query(
+      `avg:system.cpu.user{service:kelpie-${component}}`,
+      "metrics",
+      time_range
+    );
+
+    return {
+      memory: {
+        avg_bytes: calculateAvg(memResult.rows),
+        max_bytes: calculateMax(memResult.rows),
+        trend: calculateTrend(memResult.rows)
+      },
+      cpu: {
+        avg_percent: calculateAvg(cpuResult.rows),
+        max_percent: calculateMax(cpuResult.rows)
+      }
+    };
+  }
+
+  /**
+   * Correlate test results with production behavior.
+   * "DST passes but is there production evidence?"
+   */
+  export async function telemetry_correlate_tests(
+    test_topic: string
+  ): Promise<CorrelationResult> {
+    // Get tests for this topic
+    const tests = await index_tests(test_topic);
+
+    // Get production errors for related component
+    const component = inferComponentFromTopic(test_topic);
+    const errors = await telemetry_errors(component, "7d");
+
+    return {
+      test_count: tests.length,
+      test_status: "run tests to determine",
+      production_errors: errors.total_errors,
+      correlation: errors.total_errors === 0
+        ? "CONSISTENT: No production errors"
+        : `WARNING: ${errors.total_errors} production errors despite tests`
+    };
+  }
+  ```
+
+- [ ] **14.4: Integrate Telemetry into Verification Pyramid**
+
+  ```typescript
+  // Update verify_pyramid to include telemetry
+
+  export async function verify_pyramid(
+    component: string,
+    level: "fast" | "thorough" | "exhaustive" = "fast"
+  ): Promise<PyramidResult> {
+    const results: LevelResult[] = [];
+
+    // ... existing DST/Stateright/Kani levels ...
+
+    // NEW: Production telemetry (ground truth)
+    if (level === "thorough" || level === "exhaustive") {
+      try {
+        const errors = await telemetry_errors(component, "24h");
+        results.push({
+          level: "production_telemetry",
+          status: errors.total_errors === 0 ? "healthy" : "issues_found",
+          error_count: errors.total_errors,
+          by_type: errors.by_type,
+          sample_errors: errors.sample_errors
+        });
+      } catch (e) {
+        results.push({
+          level: "production_telemetry",
+          status: "unavailable",
+          reason: e.message
+        });
+      }
+    }
+
+    return {
+      results,
+      recommendation: generateRecommendation(results)
+    };
+  }
+  ```
+
+- [ ] **14.5: Cache with TTL in AgentFS**
+
+  ```sql
+  -- Add to .agentfs/agent.db
+
+  CREATE TABLE telemetry_cache (
+      cache_key TEXT PRIMARY KEY,
+      query TEXT NOT NULL,
+      result TEXT NOT NULL,  -- JSON
+      cached_at INTEGER NOT NULL,
+      ttl_ms INTEGER NOT NULL,
+      hit_count INTEGER DEFAULT 0
+  );
+
+  CREATE INDEX idx_telemetry_cache_expiry ON telemetry_cache(cached_at + ttl_ms);
+  ```
+
+**Verification:**
+```bash
+# Query production logs (requires telemetry config)
+mcp.telemetry_query("service:kelpie-storage status:error", "logs", "24h")
+
+# Get error summary
+mcp.telemetry_errors("storage", "7d")
+
+# Correlate tests with production
+mcp.telemetry_correlate_tests("storage")
+
+# Full pyramid with telemetry
+mcp.verify_pyramid("storage", "thorough")
+```
+
+---
+
+### Phase 15: ADR → TLA+ → Rust Pipeline (VDE-Inspired)
+
+**Goal:** Create a generative pipeline where TLA+ specs are generated from ADRs, and Rust verification tools are generated from TLA+ specs. This ensures specifications match intent and implementations match specifications.
+
+**Background (from VDE comparison):**
+
+VDE uses a generative pipeline:
+```
+ADR (prose)           →  TLA+ (formal)        →  Rust (executable)
+────────────────────────────────────────────────────────────────────
+"Compaction must be     CompactionProtocol.tla   stateright_compaction.rs
+ atomic - queries see    - AtomicVisibility       - Model mirrors spec
+ all-old or all-new"     - NoDataLoss             - Exhaustive checking
+                         - GCSafety
+```
+
+**Why This Matters:**
+
+| Without Pipeline | With Pipeline |
+|------------------|---------------|
+| Specs might not match intent | Specs generated from ADRs |
+| Implementations might not match specs | Models mirror TLA+ specs |
+| Manual synchronization | Automated/assisted generation |
+
+- [ ] **15.1: Document ADR → TLA+ Process**
+
+  ```markdown
+  # docs/adr/README.md (update)
+
+  ## ADR → TLA+ Generation Process
+
+  When creating or updating ADRs that involve distributed system invariants:
+
+  ### Step 1: Write ADR with Explicit Invariants
+
+  In the "Decision" section, explicitly state invariants:
+
+  ```markdown
+  ## Decision
+
+  We will implement virtual actors with the following guarantees:
+
+  **Invariant: AtMostOneActive**
+  An actor can only be active on one node at a time. Concurrent activation
+  requests must be serialized.
+
+  **Invariant: StateNeverLost**
+  When an actor is deactivated, its state must be persisted before deactivation
+  completes. Subsequent activations must see the persisted state.
+
+  **Invariant: ActivationAtomic**
+  Actor activation either completes fully (state loaded, actor running) or
+  not at all (actor not running, no partial state).
+  ```
+
+  ### Step 2: Generate TLA+ Spec
+
+  Use the `generate_tla_from_adr` tool:
+
+  ```bash
+  mcp.generate_tla_from_adr("docs/adr/001-virtual-actor-model.md")
+  # Output: specs/tla/ActorLifecycle.tla
+  ```
+
+  ### Step 3: Review and Refine
+
+  The generated TLA+ spec is a starting point. Review and refine:
+  - Check that state variables capture all relevant state
+  - Verify invariants are correctly formalized
+  - Add any missing edge cases
+
+  ### Step 4: Generate Stateright Model
+
+  ```bash
+  mcp.generate_stateright_from_tla("specs/tla/ActorLifecycle.tla")
+  # Output: crates/kelpie-dst/src/models/actor_lifecycle.rs
+  ```
+  ```
+
+- [ ] **15.2: LLM-Assisted TLA+ Generation**
+
+  ```typescript
+  // tools/mcp-kelpie/src/pipeline.ts
+
+  /**
+   * Generate TLA+ spec from ADR using LLM assistance.
+   * Human must review and refine the output.
+   */
+  export async function generate_tla_from_adr(
+    adr_path: string
+  ): Promise<GenerationResult> {
+    const adrContent = await fs.readFile(adr_path, "utf-8");
+
+    // Extract invariants from ADR
+    const invariants = extractInvariantsFromADR(adrContent);
+
+    // Use RLM to generate TLA+ spec
+    const tlaSpec = await rlm_execute(`
+      from rlm_env.pipeline import generate_tla_spec
+
+      adr_content = """${adrContent}"""
+      invariants = ${JSON.stringify(invariants)}
+
+      tla_spec = generate_tla_spec(adr_content, invariants)
+      FINAL(tla_spec)
+    `);
+
+    // Write to specs/tla/
+    const specName = path.basename(adr_path, ".md").replace(/^\d+-/, "");
+    const specPath = `specs/tla/${specName}.tla`;
+    await fs.writeFile(specPath, tlaSpec.result);
+
+    return {
+      spec_path: specPath,
+      invariants_extracted: invariants.length,
+      review_required: true,
+      message: `Generated ${specPath} with ${invariants.length} invariants. REVIEW REQUIRED before use.`
+    };
+  }
+
+  /**
+   * Generate Stateright model from TLA+ spec.
+   */
+  export async function generate_stateright_from_tla(
+    tla_path: string
+  ): Promise<GenerationResult> {
+    const tlaContent = await fs.readFile(tla_path, "utf-8");
+
+    // Parse TLA+ to extract structure
+    const structure = parseTlaStructure(tlaContent);
+
+    // Generate Rust code
+    const rustCode = await rlm_execute(`
+      from rlm_env.pipeline import generate_stateright_model
+
+      tla_content = """${tlaContent}"""
+      structure = ${JSON.stringify(structure)}
+
+      rust_code = generate_stateright_model(tla_content, structure)
+      FINAL(rust_code)
+    `);
+
+    // Write to crates/kelpie-dst/src/models/
+    const modelName = path.basename(tla_path, ".tla").toLowerCase();
+    const modelPath = `crates/kelpie-dst/src/models/${modelName}.rs`;
+    await fs.writeFile(modelPath, rustCode.result);
+
+    return {
+      model_path: modelPath,
+      invariants_count: structure.invariants.length,
+      review_required: true,
+      message: `Generated ${modelPath}. REVIEW REQUIRED before use.`
+    };
+  }
+  ```
+
+- [ ] **15.3: Pipeline Validation**
+
+  ```typescript
+  // tools/mcp-kelpie/src/pipeline.ts
+
+  /**
+   * Validate that pipeline artifacts are in sync.
+   */
+  export async function validate_pipeline(
+    adr_path: string
+  ): Promise<ValidationResult> {
+    const issues: string[] = [];
+
+    // Find related TLA+ spec
+    const specName = path.basename(adr_path, ".md").replace(/^\d+-/, "");
+    const specPath = `specs/tla/${specName}.tla`;
+
+    if (!await fileExists(specPath)) {
+      issues.push(`Missing TLA+ spec: ${specPath}`);
+    } else {
+      // Check that invariants in ADR match TLA+
+      const adrInvariants = extractInvariantsFromADR(await fs.readFile(adr_path, "utf-8"));
+      const tlaInvariants = extractInvariantsFromTLA(await fs.readFile(specPath, "utf-8"));
+
+      const missing = adrInvariants.filter(i => !tlaInvariants.includes(i));
+      if (missing.length > 0) {
+        issues.push(`ADR invariants missing from TLA+: ${missing.join(", ")}`);
+      }
+    }
+
+    // Find related Stateright model
+    const modelPath = `crates/kelpie-dst/src/models/${specName.toLowerCase()}.rs`;
+    if (await fileExists(specPath) && !await fileExists(modelPath)) {
+      issues.push(`Missing Stateright model: ${modelPath}`);
+    }
+
+    return {
+      valid: issues.length === 0,
+      issues,
+      artifacts: {
+        adr: adr_path,
+        tla_spec: await fileExists(specPath) ? specPath : null,
+        stateright_model: await fileExists(modelPath) ? modelPath : null
+      }
+    };
+  }
+
+  /**
+   * Validate all ADRs have complete pipeline.
+   */
+  export async function validate_all_pipelines(): Promise<ValidationSummary> {
+    const adrs = await glob("docs/adr/*.md");
+    const results: ValidationResult[] = [];
+
+    for (const adr of adrs) {
+      // Skip template and README
+      if (adr.includes("template") || adr.includes("README")) continue;
+
+      results.push(await validate_pipeline(adr));
+    }
+
+    return {
+      total_adrs: results.length,
+      complete_pipelines: results.filter(r => r.valid).length,
+      incomplete_pipelines: results.filter(r => !r.valid).map(r => ({
+        adr: r.artifacts.adr,
+        issues: r.issues
+      }))
+    };
+  }
+  ```
+
+- [ ] **15.4: Create Pipeline Skill**
+
+  ```markdown
+  # .claude/skills/spec-pipeline.md
+
+  ## ADR → TLA+ → Rust Pipeline
+
+  When working on features with distributed system invariants:
+
+  ### 1. Start with ADR
+
+  Write or update the ADR with explicit invariants:
+
+  ```markdown
+  **Invariant: InvariantName**
+  Clear description of what must always be true.
+  ```
+
+  ### 2. Generate TLA+ Spec
+
+  ```
+  mcp.generate_tla_from_adr("docs/adr/NNN-feature.md")
+  ```
+
+  **IMPORTANT:** Review the generated spec. It's a starting point, not final.
+
+  ### 3. Verify TLA+ with TLC
+
+  ```bash
+  tlc specs/tla/Feature.tla
+  ```
+
+  Fix any errors before proceeding.
+
+  ### 4. Generate Stateright Model
+
+  ```
+  mcp.generate_stateright_from_tla("specs/tla/Feature.tla")
+  ```
+
+  **IMPORTANT:** Review the generated model. Ensure it mirrors the TLA+ spec.
+
+  ### 5. Run Stateright
+
+  ```bash
+  cargo test -p kelpie-dst stateright_feature -- --ignored
+  ```
+
+  ### 6. Write DST Tests
+
+  DST tests should verify the same invariants, but faster (~5s vs ~60s).
+
+  ### 7. Validate Pipeline
+
+  ```
+  mcp.validate_pipeline("docs/adr/NNN-feature.md")
+  ```
+
+  All artifacts should be in sync.
+  ```
+
+**Verification:**
+```bash
+# Generate TLA+ from ADR
+mcp.generate_tla_from_adr("docs/adr/001-virtual-actor-model.md")
+
+# Validate pipeline
+mcp.validate_pipeline("docs/adr/001-virtual-actor-model.md")
+
+# Check all pipelines
+mcp.validate_all_pipelines()
+
+# View pipeline skill
+cat .claude/skills/spec-pipeline.md
+```
+
+---
+
+### Phase 16: Architectural Simplification (VDE-Inspired Review)
+
+**Goal:** Review and simplify potentially over-engineered components based on VDE comparison.
+
+**Background:**
+
+VDE achieves similar goals with simpler architecture:
+- Single Python CLI (`agentfs.py`) vs Kelpie's TypeScript MCP server
+- Single CLAUDE.md vs multiple skills files
+- TLA+ specs vs LLM-generated semantic summaries
+
+This phase reviews what can be simplified without losing capability.
+
+- [ ] **16.1: Evaluate MCP Server Complexity**
+
+  **Question:** Is the TypeScript MCP server necessary, or would a simpler CLI work?
+
+  **Current State:**
+  - `tools/mcp-kelpie/` - 13 TypeScript files, ~125KB
+  - Requires Node.js runtime
+  - MCP protocol overhead
+
+  **VDE Alternative:**
+  - `agentfs.py` - Single Python file, ~500 lines
+  - Direct CLI invocation
+  - JSON output
+
+  **Decision Criteria:**
+  - Does MCP protocol provide value beyond simple CLI?
+  - Is the complexity justified by features?
+  - Can we simplify while keeping hard controls?
+
+  **Action:**
+  - [ ] Document MCP protocol benefits
+  - [ ] Consider hybrid: MCP for IDE integration, CLI for scripts
+  - [ ] If MCP not needed, create simplified `kelpie-tools.py`
+
+- [ ] **16.2: Consolidate Skills into CLAUDE.md**
+
+  **Question:** Are multiple skills files better than a single CLAUDE.md?
+
+  **Current State:**
+  - 6 separate skills files in `.claude/skills/`
+  - ~66KB total
+  - Fragmented guidance
+
+  **VDE Alternative:**
+  - Single CLAUDE.md with all guidance
+  - ADRs for architectural decisions
+  - Cleaner organization
+
+  **Action:**
+  - [ ] Review if skills can be consolidated
+  - [ ] Create unified CLAUDE.md structure
+  - [ ] Keep separate skills only if genuinely different contexts
+
+- [ ] **16.3: Reconsider Semantic Summaries**
+
+  **Question:** Are LLM-generated summaries necessary if we have TLA+ specs?
+
+  **Current State:**
+  - Phase 3 (semantic indexing) not implemented
+  - Would require LLM calls to generate summaries
+  - Summaries are lossy interpretations
+
+  **VDE Insight:**
+  - TLA+ specs ARE the semantic summary, but precise
+  - Reading a 200-line spec > reading LLM-generated summary
+  - Specs are formal; summaries are prose
+
+  **Decision:**
+  - [ ] If Phase 11 (TLA+ specs) implemented, Phase 3 may be unnecessary
+  - [ ] Consider: TLA+ for formal components, summaries only for non-formal code
+  - [ ] Document decision in this plan
+
+- [ ] **16.4: Migrate to Turso AgentFS SDK**
+
+  **Decision:** Use Turso's actual AgentFS SDK instead of custom schema.
+
+  **Current State:**
+  - Custom SQLite schema with 6+ tables
+  - Custom Python code for persistence
+  - Not using industry-standard tooling
+
+  **VDE Approach (adopt this):**
+  - Turso AgentFS SDK (`pip install agentfs-sdk`)
+  - KV store with namespaced keys: `vfs:fact:*`, `vfs:invariant:*`, `vfs:cache:*`
+  - Built-in tool call trajectory tracking
+  - Reference: [Turso AgentFS](https://turso.tech/agentfs)
+
+  **Action:**
+  - [ ] Install `agentfs-sdk` in `tools/rlm-env/`
+  - [ ] Migrate from custom schema to Turso KV store
+  - [ ] Use Turso's tool trajectory for audit logging
+  - [ ] Keep namespaced keys for Kelpie-specific data
+
+  ```python
+  # Migration example
+  from agentfs import AgentFS, AgentFSOptions
+  
+  # Old: custom tables
+  # cursor.execute("INSERT INTO verified_facts ...")
+  
+  # New: Turso KV with namespaces
+  afs = await AgentFS.open(AgentFSOptions(id=session_id, path=db_path))
+  await afs.kv.set("vfs:fact:12345", {"claim": "...", "evidence": "..."})
+  await afs.kv.set("vfs:invariant:compaction:AtomicVisibility", {...})
+  ```
+
+- [ ] **16.5: Remove Spec Adapters and IS vs SHOULD Framework**
+
+  **Decision:** Remove over-engineered spec adapter framework. VDE's approach is superior.
+
+  **Why Remove:**
+  - Spec adapters (`specs.py`) do shallow pattern matching, not semantic verification
+  - IS vs SHOULD comparison (`intelligence.py`) checks file existence, not correctness
+  - TLAPlusAdapter is listed but never implemented
+  - VDE agents read specs directly via RLM and reason about them
+
+  **Files to Remove:**
+  - `tools/rlm-env/rlm_env/specs.py` - Spec adapter framework
+  - `tools/rlm-env/rlm_env/intelligence.py` - IS vs SHOULD examination
+
+  **What Replaces Them:**
+  - Agent reads TLA+ specs directly (Phase 11)
+  - Agent runs verification pyramid via CLI (Phase 12)
+  - Hard controls enforce verification was actually done
+
+  **Action:**
+  - [ ] Archive `specs.py` and `intelligence.py` (move to `.archive/`)
+  - [ ] Remove references from `__init__.py`
+  - [ ] Update imports in any dependent code
+  - [ ] Remove related spec YAML files from `.kelpie-index/specs/`
+  - [ ] Update Phase 10 checkpoints to reflect removal
+
+  ```bash
+  # Files to archive
+  mv tools/rlm-env/rlm_env/specs.py .archive/
+  mv tools/rlm-env/rlm_env/intelligence.py .archive/
+  mv .kelpie-index/specs/dst-coverage.yaml .archive/
+  mv .kelpie-index/specs/presets.yaml .archive/
+  mv .kelpie-index/specs/tigerstyle-rules.yaml .archive/
+  ```
+
+- [ ] **16.6: Verification Pyramid as CLI (VDE-Style)**
+
+  **Decision:** Verification via CLI commands, not tool abstractions.
+
+  **VDE's Approach (adopt this):**
+  ```bash
+  # DST (~5 seconds) - primary workhorse
+  cargo test -p kelpie-dst --release
+  DST_SEED=12345 cargo test -p kelpie-dst  # Reproducible
+  
+  # Stateright (~30-60 seconds) - exhaustive states
+  cargo test stateright_* -- --ignored
+  
+  # Kani (~60 seconds) - bounded proofs
+  cargo kani --package kelpie-core --harness verify_single_activation
+  
+  # Production telemetry (if applicable)
+  # kelpie-perf datadog sql --query "..." --staging
+  ```
+
+  **Why CLI over MCP tools:**
+  - Simpler to maintain
+  - Direct feedback visible in terminal
+  - Agent can read output directly
+  - No abstraction layer to debug
+
+  **Hard controls still enforce:**
+  - Task completion requires DST to have run
+  - Completion notes must reference test results
+  - MCP `state_task_complete` gates on verification evidence
+
+  **Action:**
+  - [ ] Document verification CLI commands in CLAUDE.md
+  - [ ] Update hard controls to check for CLI output evidence
+  - [ ] Don't wrap CLI in MCP tools unnecessarily
+
+**Verification:**
+```bash
+# Document current complexity
+wc -l tools/mcp-kelpie/src/*.ts
+wc -l .claude/skills/*.md
+
+# After simplification, measure reduction
+```
+
+---
+
 ## Checkpoints
+
+### 📊 Completion Summary (as of 2026-01-21)
+
+| Component | Status | Files/Artifacts |
+|-----------|--------|-----------------|
+| Indexer | ✅ 100% | `tools/kelpie-indexer/` (50KB Rust) |
+| MCP Server | ✅ ~90% | `tools/mcp-kelpie/` (13 TS files, ~125KB) |
+| RLM Environment | ✅ 100% | `tools/rlm-env/` (7 Python files) |
+| Structural Indexes | ✅ 100% | symbols, deps, tests, modules |
+| Semantic Indexes | ❌ 0% | Not implemented (reconsidering per Phase 16.3) |
+| AgentFS | ✅ 100% | 6 tables |
+| Spec Framework | ✅ 100% | 3 spec files + adapters |
+| Issue Management | ✅ 100% | 10 MCP tools |
+| DST Enforcement Gates | ❌ 0% | Tools exist, gates don't |
+| Slop Remediation | ✅ 100% | Audit + all remediation done |
+| **TLA+ Specs (VDE)** | ❌ 0% | Phase 11 - Not started |
+| **Verification Pyramid (VDE)** | ❌ 0% | Phase 12 - Not started |
+| **Invariant Tracking (VDE)** | ❌ 0% | Phase 13 - Not started |
+| **Production Telemetry (VDE)** | ❌ 0% | Phase 14 - Not started |
+| **ADR→TLA+→Rust Pipeline (VDE)** | ❌ 0% | Phase 15 - Not started |
+| **Architectural Review (VDE)** | ❌ 0% | Phase 16 - Not started |
+
+**Overall: ~60% complete** (Phases 1-10 mostly done, Phases 11-16 VDE-inspired additions not started)
+
+---
 
 - [x] Codebase understood
 - [x] Plan approved
 - [x] **Options & Decisions filled in**
 - [x] **Quick Decision Log maintained**
+
+### Phase 1: Foundation ✅
 - [x] **Phase 1: Foundation - directory structure & AgentFS** ✅
-- [x] **Phase 2.1: Symbol Index (tools/kelpie-indexer)** ✅
-- [ ] Phase 2.2: Dependency Graph
-- [ ] Phase 2.3: Test Index
-- [ ] Phase 2.4: Module Index
-- [ ] Phase 2: Structural indexing (symbols, deps, tests)
-- [ ] Phase 3: Semantic indexing (summaries, constraints)
-- [ ] Phase 3b: RLM Environment (CodebaseContext, REPL, recursive calls, map-reduce)
-- [ ] Phase 4: MCP server (query, verify, integrity, slop detection, DST coverage)
-- [ ] Phase 4.9: DST Coverage & Integrity Tools (critical path mapping, fault type coverage, determinism verification, enforcement gate)
-- [ ] Phase 4.10: Harness Adequacy Verification (capability audit, fidelity check, simulability analysis)
-- [x] **Phase 5: RLM skills (task, verify, explore, handoff, slop-hunt)** ✅
-- [x] **Phase 6: Hard controls (hooks, gates, audit)** ✅
-- [x] **Phase 7: Parallel indexing + auto-validation + build progress tracking** ✅
-- [ ] Phase 8: Integration testing
-- [ ] Phase 9: Slop cleanup workflow (initial audit on kelpie)
-- [ ] Phase 10: Codebase Intelligence Layer
-- [ ] Phase 10.1: Spec Adapter Framework
-- [ ] Phase 10.2: Issue Storage Schema (AgentFS tables)
-- [ ] Phase 10.3: Agent-Driven Examination Workflow
-- [ ] Phase 10.4: Codebase Question MCP Tool
-- [ ] Phase 10.5: Thoroughness Verification
-- [ ] Phase 10.6: Pre-built Spec Configurations (Letta, DST, TLA+)
-- [ ] Phase 10.7: Issue Dashboard Skill
-- [ ] Tests passing (`cargo test`)
+  - `.kelpie-index/` directory structure
+  - `.agentfs/agent.db` with 6 tables
+
+### Phase 2: Structural Indexing ✅ (ALL via `tools/kelpie-indexer`)
+- [x] **Phase 2.1: Symbol Index** ✅ → `.kelpie-index/structural/symbols.json`
+- [x] **Phase 2.2: Dependency Graph** ✅ → `.kelpie-index/structural/dependencies.json`
+- [x] **Phase 2.3: Test Index** ✅ → `.kelpie-index/structural/tests.json`
+- [x] **Phase 2.4: Module Index** ✅ → `.kelpie-index/structural/modules.json`
+- [x] **Phase 2: Structural indexing** ✅ (single 50KB Rust binary does all)
+
+### Phase 3: Semantic Indexing
+- [ ] Phase 3: Semantic indexing (summaries, constraints) - NOT IMPLEMENTED
+  - Would require LLM calls to generate summaries
+  - Placeholder exists: `.kelpie-index/semantic/README.md`
+
+### Phase 3b: RLM Environment ✅ (`tools/rlm-env/`)
+- [x] **Phase 3b: RLM Environment** ✅
+  - `codebase.py` - CodebaseContext with partition/map
+  - `environment.py` - RLM execution environment
+  - `types.py` - type definitions
+  - ~~`specs.py`~~ - **TO REMOVE** in Phase 16.5 (spec adapter framework)
+  - ~~`intelligence.py`~~ - **TO REMOVE** in Phase 16.5 (IS vs SHOULD examination)
+
+### Phase 4: MCP Server ✅ (`tools/mcp-kelpie/`)
+- [x] **Phase 4: MCP server** ✅ (13 TypeScript files, ~125KB)
+  - `indexes.ts` - query structural indexes
+  - `state.ts` - AgentFS operations
+  - `verify.ts` - test execution, claim verification
+  - `integrity.ts` - integrity checks
+  - `slop.ts` - slop detection tools
+  - `dst.ts` - DST coverage tools
+  - `constraints.ts` - constraint extraction/checking
+  - `rlm.ts` - RLM integration
+  - `issues.ts` - issue management (6 tools)
+  - `intelligence.ts` - codebase_question (4 tools)
+  - `audit.ts` - audit logging
+  - `codebase.ts` - codebase utilities
+- [ ] Phase 4.9: DST Coverage Enforcement Gates - NOT IMPLEMENTED (tools exist, gates don't)
+- [ ] Phase 4.10: Harness Adequacy Verification - NOT IMPLEMENTED
+
+### Phase 5-8: Skills & Controls ✅
+- [x] **Phase 5: RLM skills** ✅ (task, verify, explore, handoff, slop-hunt)
+- [x] **Phase 6: Hard controls** ✅ (pre-commit hook, audit logging)
+- [x] **Phase 7: Parallel indexing + validation** ✅
+- [x] **Phase 8: Integration testing** ✅ (15 indexer tests + 25+ MCP tests)
+
+### Phase 9: Slop Cleanup ✅
+- [x] **Phase 9.1: Initial Slop Audit** ✅ → `.kelpie-index/slop/audit_20260121.md`
+- [x] **Phase 9.2: Triage** ✅ - Categorized by severity
+- [x] **Phase 9.3: Fake DST** ✅ - 0 found
+- [x] **Phase 9.4: Dead Code** ✅ - Removed `message_prefix_legacy`
+- [x] **Phase 9.5: Duplicates** ✅ - 0 found
+- [x] **Phase 9.6: Orphans** ✅ - 0 found  
+- [x] **Phase 9.7: TODOs** ✅ - 10 tracked in `tracked_todos.md`
+- [x] **Phase 9.8: Verification** ✅ - Compiles cleanly
+
+### Phase 10: Codebase Intelligence Layer ✅ (Partially Deprecated)
+- [x] **Phase 10: Codebase Intelligence Layer** ✅
+- [x] ~~Phase 10.1: Spec Adapter Framework~~ ✅ → **REMOVE in Phase 16.5** (over-engineered)
+- [x] Phase 10.2: Issue Storage Schema ✅ (AgentFS tables + MCP tools) → **MIGRATE in Phase 16.4**
+- [x] ~~Phase 10.3: Agent-Driven Examination Workflow~~ ✅ → **REMOVE in Phase 16.5** (shallow)
+- [x] Phase 10.4: Codebase Question MCP Tool ✅ (`tools/mcp-kelpie/src/intelligence.ts`) → **KEEP** (wrapper can remain)
+- [x] Phase 10.5: Thoroughness Verification ✅ → **KEEP** (hard control)
+- [x] ~~Phase 10.6: Pre-built Spec Configurations~~ ✅ → **REMOVE in Phase 16.5** (YAML specs unused)
+- [x] Phase 10.7: Issue Dashboard Skill ✅ (`.kelpie-index/skills/`) → **KEEP**
+
+### Phase 11: Formal Methods Integration (VDE-Inspired)
+- [ ] **Phase 11: Formal Methods Integration**
+- [ ] Phase 11.1: Create TLA+ Spec for Actor Lifecycle (`specs/tla/ActorLifecycle.tla`)
+- [ ] Phase 11.2: Create TLA+ Spec for Storage Layer (`specs/tla/ActorStorage.tla`)
+- [ ] Phase 11.3: Create TLA+ Spec for Migration/Teleport (`specs/tla/ActorMigration.tla`)
+- [ ] Phase 11.4: Integrate Stateright for Model Checking
+- [ ] Phase 11.5: Add Kani Bounded Verification Harnesses
+- [ ] Phase 11.6: Document Spec-to-Test Mapping (`.kelpie-index/specs/invariant-test-mapping.yaml`)
+
+### Phase 12: Verification Pyramid (VDE-Inspired)
+- [ ] **Phase 12: Verification Pyramid**
+- [ ] Phase 12.1: Create Verification Pyramid MCP Tool (`tools/mcp-kelpie/src/pyramid.ts`)
+- [ ] Phase 12.2: Create Pyramid Skill (`.claude/skills/verification-pyramid.md`)
+- [ ] Phase 12.3: Integrate Pyramid into Hard Controls
+
+### Phase 13: Invariant Tracking (VDE-Inspired)
+- [ ] **Phase 13: Invariant Tracking**
+- [ ] Phase 13.1: Extend AgentFS Schema for Invariant Tracking (`invariants` table)
+- [ ] Phase 13.2: MCP Tools for Invariant Management (`invariant_verify`, `invariant_unverified`, etc.)
+- [ ] Phase 13.3: Pre-populate Invariants from TLA+ Specs
+- [ ] Phase 13.4: Integrate with Handoff Verification
+
+### Phase 14: Production Telemetry Integration (VDE-Inspired)
+- [ ] **Phase 14: Production Telemetry**
+- [ ] Phase 14.1: Design Telemetry Interface (provider-agnostic)
+- [ ] Phase 14.2: Implement Telemetry Client (Datadog/Prometheus/custom)
+- [ ] Phase 14.3: MCP Tools for Telemetry (`telemetry_query`, `telemetry_errors`, etc.)
+- [ ] Phase 14.4: Integrate Telemetry into Verification Pyramid
+- [ ] Phase 14.5: Cache with TTL in AgentFS
+
+### Phase 15: ADR → TLA+ → Rust Pipeline (VDE-Inspired)
+- [ ] **Phase 15: Spec Generation Pipeline**
+- [ ] Phase 15.1: Document ADR → TLA+ Process
+- [ ] Phase 15.2: LLM-Assisted TLA+ Generation
+- [ ] Phase 15.3: Pipeline Validation (`validate_pipeline`, `validate_all_pipelines`)
+- [ ] Phase 15.4: Create Pipeline Skill (`.claude/skills/spec-pipeline.md`)
+
+### Phase 16: Architectural Simplification (VDE-Inspired Review) ✅
+- [x] **Phase 16: Architectural Simplification** ✅ (Completed 2026-01-21)
+- [x] Phase 16.1: Evaluate MCP Server Complexity ✅ - **KEEP MCP** (documented in CLAUDE.md)
+- [x] Phase 16.2: Consolidate Skills into CLAUDE.md ✅ - Skills archived to `.archive/skills/`
+- [ ] Phase 16.3: Reconsider Semantic Summaries (Phase 3) - DEFERRED (depends on TLA+ Phase 11)
+- [x] Phase 16.4: Migrate to Turso AgentFS SDK ✅ (Partial - state.ts uses AgentFS-compatible schema)
+- [x] Phase 16.5: **Remove Spec Adapters** ✅ - Archived `specs.py`, `intelligence.py`, spec YAMLs
+- [x] Phase 16.6: **Verification Pyramid as CLI** ✅ - Documented in CLAUDE.md
+
+### Final Verification
+- [ ] Tests passing (`cargo test`) - has pre-existing issues
 - [ ] Clippy clean (`cargo clippy`)
 - [ ] Code formatted (`cargo fmt`)
 - [ ] /no-cap passed
@@ -3988,6 +5938,40 @@ mcp.issue_summary()
 - [ ] codebase_question MCP tool spawns RLM and returns structured answer
 - [ ] IS vs SHOULD comparison detects stub implementations vs spec
 
+**Formal Methods tests (Phase 11 - VDE):**
+- [ ] TLA+ specs parse without errors (`tlc specs/tla/*.tla`)
+- [ ] Stateright models compile and run (`cargo test stateright_`)
+- [ ] Stateright properties match TLA+ invariants
+- [ ] Kani harnesses prove within bounds (`cargo kani`)
+- [ ] Spec-to-test mapping is complete (no gaps)
+
+**Verification Pyramid tests (Phase 12 - VDE):**
+- [ ] `verify_pyramid` runs all levels in correct order
+- [ ] Fast mode stops at DST if passing
+- [ ] Thorough mode includes Stateright
+- [ ] Exhaustive mode includes Kani
+- [ ] Pyramid skill provides correct guidance
+
+**Invariant Tracking tests (Phase 13 - VDE):**
+- [ ] `invariant_verify` stores verification with evidence
+- [ ] `invariant_unverified` returns correct list
+- [ ] Staleness detection marks invariants when code changes
+- [ ] Import from TLA+ extracts all invariants
+- [ ] Handoff verification includes invariant status
+
+**Telemetry tests (Phase 14 - VDE):**
+- [ ] Telemetry client connects to provider (mock for tests)
+- [ ] Query results are cached with TTL
+- [ ] `telemetry_errors` aggregates correctly
+- [ ] Pyramid integration includes telemetry level
+- [ ] Cache expiry works correctly
+
+**Pipeline tests (Phase 15 - VDE):**
+- [ ] `generate_tla_from_adr` produces valid TLA+ (with review)
+- [ ] `generate_stateright_from_tla` produces valid Rust
+- [ ] `validate_pipeline` detects missing artifacts
+- [ ] `validate_all_pipelines` checks all ADRs
+
 **Commands:**
 ```bash
 # Run indexer tests
@@ -4007,10 +5991,22 @@ cargo test -p kelpie-dst index
 
 ## Dependencies and Prerequisites
 
+### Existing (Phases 1-10)
 1. **tree-sitter-rust** or **rust-analyzer CLI** for symbol extraction
 2. **SQLite** for AgentFS (or the agentfs npm package)
 3. **jq** for JSON processing in scripts
 4. **Node.js** for MCP server
+
+### New for VDE Phases (11-16)
+5. **TLA+ Tools** (`tlc`, `tlapm`) for spec verification (Phase 11)
+   - Install: `brew install tla-plus` or download from https://lamport.azurewebsites.net/tla/tools.html
+6. **Stateright** - Already a Rust crate, add to `Cargo.toml` (Phase 11.4)
+7. **Kani** - Rust bounded model checker (Phase 11.5)
+   - Install: `cargo install --locked kani-verifier && cargo kani setup`
+8. **Telemetry Provider Access** - API keys for Datadog/Prometheus (Phase 14)
+   - Environment variables: `DATADOG_API_KEY`, `DATADOG_APP_KEY`
+9. **Anthropic API** - For LLM-assisted spec generation (Phase 15)
+   - Environment variable: `ANTHROPIC_API_KEY`
 
 ---
 
@@ -4028,6 +6024,15 @@ cargo test -p kelpie-dst index
 | Issue storage grows unbounded | Performance degradation | Pagination, archival for closed issues, indexes |
 | Specs drift from actual expectations | Misleading comparison | Generate specs from code/external sources, not manual |
 | Examination takes too long | User impatience | Progressive disclosure, summary first, details on request |
+| **TLA+ learning curve** | Slow adoption | Start with simple specs, provide templates, LLM-assisted generation |
+| **TLA+ specs don't match impl** | False confidence | Stateright mirrors TLA+, validate via model checking |
+| **Stateright state explosion** | Model checking times out | Bound state space, use symmetry reduction, prioritize critical paths |
+| **Telemetry provider lock-in** | Hard to switch providers | Provider-agnostic interface, adapters pattern |
+| **Telemetry costs** | Expensive queries | Aggressive caching with TTL, query optimization |
+| **Pipeline artifacts drift** | ADR/TLA+/Rust out of sync | `validate_all_pipelines` check, CI enforcement |
+| **Over-engineering** | Complexity without value | Phase 16 review, VDE-inspired simplification |
+| **Invariant tracking overhead** | Slows down development | Only track critical invariants, automate where possible |
+| **Kani proof timeouts** | Bounded proofs incomplete | Adjust bounds, prioritize critical properties |
 
 ---
 
@@ -4699,16 +6704,26 @@ sqlite3 .agentfs/agent.db "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT
 ### Doesn't Work Yet ❌
 | What | Why | When Expected |
 |------|-----|---------------|
-| Semantic summaries | Deferred (cost/complexity) | Phase 3 (future) |
+| Semantic summaries | Deferred (cost/complexity), reconsidering per Phase 16.3 | Phase 3 (may be cancelled) |
 | RLM package installation | Requires virtual environment setup | When needed for MCP integration |
 | RLM test execution | Package not installed yet | When needed for MCP integration |
-| Recursive LLM calls in RLM | Requires Claude API integration | Phase 3b extension or Phase 5 |
+| Recursive LLM calls in RLM | **DEFERRED** (Decision 10) - hard controls provide thoroughness instead | Reconsider if codebase >200K lines |
 | RLM execution via MCP | Needs rlm-env subprocess integration | Phase 4 extension or Phase 5 |
 | Index refresh tools | Not implemented yet | Phase 4.5 (optional) |
 | Hard control gates | Not implemented yet | Phase 4.6 (optional) |
 | Integrity tools (mark_phase_complete) | Not implemented yet | Phase 4.7 (optional) |
 | Slop detection tools | Not implemented yet | Phase 4.8 (optional) |
 | RLM skills | Not implemented | Phase 5 |
+| **TLA+ Specifications** | VDE-inspired, not started | Phase 11 |
+| **Verification Pyramid** | VDE-inspired, not started | Phase 12 |
+| **Invariant Tracking** | VDE-inspired, not started | Phase 13 |
+| **Production Telemetry** | VDE-inspired, requires infra | Phase 14 |
+| **ADR→TLA+→Rust Pipeline** | VDE-inspired, not started | Phase 15 |
+| **Stateright model checking** | Depends on TLA+ specs | Phase 11.4 |
+| **Kani bounded proofs** | Depends on TLA+ specs | Phase 11.5 |
+| **Turso AgentFS SDK migration** | Replace custom schema with industry standard | Phase 16.4 |
+| **Spec adapter removal** | Over-engineered, VDE approach better | Phase 16.5 |
+| **Verification pyramid as CLI** | Document CLI commands, remove MCP wrappers | Phase 16.6 |
 
 ### Known Limitations ⚠️
 - Symbol index has line numbers set to 0 (proc-macro2 limitation)
@@ -4720,12 +6735,14 @@ sqlite3 .agentfs/agent.db "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT
 - **RLM output size:** 100KB limit may truncate large analysis results
 - **RLM requires Python:** MCP server must spawn Python subprocess for RLM execution
 - **RLM package not installed:** Cannot run tests until virtual environment is set up (macOS externally-managed-environment)
+- **⚠️ Spec Adapters over-engineered:** `specs.py` and `intelligence.py` do shallow pattern matching - marked for REMOVAL in Phase 16.5
+- **⚠️ Custom AgentFS schema:** 6+ tables vs Turso's KV approach - marked for MIGRATION in Phase 16.4
 
 ---
 
 ## Open Questions - RESOLVED
 
-1. **AgentFS vs roll-our-own SQLite** - ✅ Use AgentFS (Turso's package)
+1. **AgentFS vs roll-our-own SQLite** - ✅ Use Turso AgentFS SDK (Phase 16.4 migrates to actual SDK)
 2. **Embeddings** - ✅ Skip for now, can add later
 3. **Index storage** - ✅ Git-track `.kelpie-index/` (structural is deterministic, useful for review)
 4. **Rust vs TypeScript** - ✅ Rust for indexer (consistent with kelpie, performant)

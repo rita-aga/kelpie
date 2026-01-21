@@ -471,8 +471,8 @@ mod tests {
 
         let config = ClusterConfig::single_node(addr);
         let registry = Arc::new(MemoryRegistry::new());
-        let transport = Arc::new(MemoryTransport::new(node_id.clone(), addr));
         let runtime = TokioRuntime;
+        let transport = Arc::new(MemoryTransport::new(node_id.clone(), addr, runtime.clone()));
 
         let cluster = Cluster::new(node, config, registry, transport, runtime);
 
@@ -489,8 +489,8 @@ mod tests {
 
         let config = ClusterConfig::for_testing();
         let registry = Arc::new(MemoryRegistry::new());
-        let transport = Arc::new(MemoryTransport::new(node_id.clone(), addr));
         let runtime = TokioRuntime;
+        let transport = Arc::new(MemoryTransport::new(node_id.clone(), addr, runtime.clone()));
 
         let cluster = Cluster::new(node, config, registry, transport, runtime);
 
@@ -510,8 +510,8 @@ mod tests {
 
         let config = ClusterConfig::for_testing();
         let registry = Arc::new(MemoryRegistry::new());
-        let transport = Arc::new(MemoryTransport::new(node_id.clone(), addr));
         let runtime = TokioRuntime;
+        let transport = Arc::new(MemoryTransport::new(node_id.clone(), addr, runtime.clone()));
 
         let cluster = Cluster::new(node, config, registry, transport, runtime);
         cluster.start().await.unwrap();
@@ -532,8 +532,8 @@ mod tests {
 
         let config = ClusterConfig::for_testing();
         let registry = Arc::new(MemoryRegistry::new());
-        let transport = Arc::new(MemoryTransport::new(node_id.clone(), addr));
         let runtime = TokioRuntime;
+        let transport = Arc::new(MemoryTransport::new(node_id.clone(), addr, runtime.clone()));
 
         let cluster = Cluster::new(node, config, registry, transport, runtime);
         cluster.start().await.unwrap();

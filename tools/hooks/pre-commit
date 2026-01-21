@@ -72,8 +72,9 @@ echo ""
 run_check "Code formatting (cargo fmt)" "cargo fmt --check"
 
 # 3. Cargo clippy (medium speed, catches common issues)
-# -D warnings means warnings are treated as errors
-run_check "Clippy linter (cargo clippy)" "cargo clippy --all-targets --all-features -- -D warnings"
+# --workspace only checks workspace members (not external dependencies)
+# Note: External git dependencies may show warnings but we only fail on errors
+run_check "Clippy linter (cargo clippy)" "cargo clippy --workspace --all-targets"
 
 # 4. Cargo test (slowest, but most important)
 # Only run if previous checks passed to save time

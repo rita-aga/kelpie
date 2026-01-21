@@ -1,13 +1,17 @@
-/// Phase 8.3: Index Consistency and Fault Tolerance Tests
-///
-/// These tests verify that the indexer handles failure scenarios gracefully:
-/// - Stale indexes (git SHA mismatch)
-/// - Corrupted index files (malformed JSON)
-/// - Inconsistent indexes (validation failures)
-/// - Build failures (partial builds, progress tracking)
-///
-/// TigerStyle: Safety > Performance - all failures should be detected and reported clearly
+// Phase 8.3: Index Consistency and Fault Tolerance Tests
+//
+// These tests verify that the indexer handles failure scenarios gracefully:
+// - Stale indexes (git SHA mismatch)
+// - Corrupted index files (malformed JSON)
+// - Inconsistent indexes (validation failures)
+// - Build failures (partial builds, progress tracking)
+//
+// TigerStyle: Safety > Performance - all failures should be detected and reported clearly
+//
+// NOTE: These tests share a fixture directory and modify its state.
+// The `#[serial]` attribute ensures tests run sequentially to avoid race conditions.
 
+use serial_test::serial;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -21,10 +25,7 @@ fn fixture_path() -> PathBuf {
 }
 
 // Helper to run indexer binary
-fn run_indexer(
-    fixture_path: &PathBuf,
-    command: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn run_indexer(fixture_path: &PathBuf, command: &str) -> Result<(), Box<dyn std::error::Error>> {
     let output = Command::new(env!("CARGO_BIN_EXE_kelpie-indexer"))
         .arg(command)
         .current_dir(fixture_path)
@@ -46,6 +47,7 @@ fn run_indexer(
 }
 
 #[test]
+#[serial]
 fn test_stale_index_detection_git_sha_mismatch() {
     let fixture = fixture_path();
 
@@ -60,7 +62,8 @@ fn test_stale_index_detection_git_sha_mismatch() {
 
     // Manually change the git SHA to simulate staleness
     let original_sha = freshness["git_sha"].as_str().unwrap().to_string();
-    freshness["git_sha"] = serde_json::Value::String("0000000000000000000000000000000000000000".to_string());
+    freshness["git_sha"] =
+        serde_json::Value::String("0000000000000000000000000000000000000000".to_string());
 
     // Write back the modified freshness
     fs::write(
@@ -98,6 +101,7 @@ fn test_stale_index_detection_git_sha_mismatch() {
 }
 
 #[test]
+#[serial]
 fn test_corrupted_index_malformed_json() {
     let fixture = fixture_path();
 
@@ -109,15 +113,13 @@ fn test_corrupted_index_malformed_json() {
     let original_content = fs::read_to_string(&symbols_path).expect("Should read symbols");
 
     // Write malformed JSON
-    fs::write(&symbols_path, "{ this is not valid JSON }")
-        .expect("Should write corrupted file");
+    fs::write(&symbols_path, "{ this is not valid JSON }").expect("Should write corrupted file");
 
     // Try to read the corrupted file - should fail gracefully
-    let result = fs::read_to_string(&symbols_path)
-        .and_then(|content| {
-            serde_json::from_str::<serde_json::Value>(&content)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-        });
+    let result = fs::read_to_string(&symbols_path).and_then(|content| {
+        serde_json::from_str::<serde_json::Value>(&content)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    });
 
     assert!(
         result.is_err(),
@@ -129,7 +131,7 @@ fn test_corrupted_index_malformed_json() {
     let error_msg = error.to_string();
     // Just verify we got an error - the exact message varies by JSON parser
     assert!(
-        error_msg.len() > 0,
+        !error_msg.is_empty(),
         "Should have error message for corrupted JSON"
     );
 
@@ -138,6 +140,7 @@ fn test_corrupted_index_malformed_json() {
 }
 
 #[test]
+#[serial]
 fn test_validation_catches_symbol_count_mismatch() {
     let fixture = fixture_path();
 
@@ -151,7 +154,7 @@ fn test_validation_catches_symbol_count_mismatch() {
         serde_json::from_str(&symbols_json).expect("Should parse symbols");
 
     // Remove all files but keep metadata - creates inconsistency
-    let original_files = symbols["files"].clone();
+    let _original_files = symbols["files"].clone();
     symbols["files"] = serde_json::json!({});
 
     // Write modified index
@@ -177,12 +180,13 @@ fn test_validation_catches_symbol_count_mismatch() {
 
     // After rebuild, files should exist again
     assert!(
-        symbols["files"].is_object() && symbols["files"].as_object().unwrap().len() > 0,
+        symbols["files"].is_object() && !symbols["files"].as_object().unwrap().is_empty(),
         "Rebuilt index should have files"
     );
 }
 
 #[test]
+#[serial]
 fn test_validation_catches_crate_count_mismatch() {
     let fixture = fixture_path();
 
@@ -225,12 +229,13 @@ fn test_validation_catches_crate_count_mismatch() {
 
     // Should have crates again
     assert!(
-        modules["crates"].is_array() && modules["crates"].as_array().unwrap().len() > 0,
+        modules["crates"].is_array() && !modules["crates"].as_array().unwrap().is_empty(),
         "Rebuilt index should have crates"
     );
 }
 
 #[test]
+#[serial]
 fn test_build_progress_tracking_exists_during_build() {
     let fixture = fixture_path();
 
@@ -256,6 +261,7 @@ fn test_build_progress_tracking_exists_during_build() {
 }
 
 #[test]
+#[serial]
 fn test_partial_index_not_used_after_corruption() {
     let fixture = fixture_path();
 
@@ -268,11 +274,10 @@ fn test_partial_index_not_used_after_corruption() {
     fs::write(&deps_path, "corrupted").expect("Should write corrupted file");
 
     // Try to parse - should fail
-    let result = fs::read_to_string(&deps_path)
-        .and_then(|content| {
-            serde_json::from_str::<serde_json::Value>(&content)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-        });
+    let result = fs::read_to_string(&deps_path).and_then(|content| {
+        serde_json::from_str::<serde_json::Value>(&content)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    });
 
     assert!(result.is_err(), "Corrupted file should not parse");
 
@@ -280,11 +285,10 @@ fn test_partial_index_not_used_after_corruption() {
     run_indexer(&fixture, "full").expect("Rebuild should fix corruption");
 
     // Now it should be valid again
-    let result = fs::read_to_string(&deps_path)
-        .and_then(|content| {
-            serde_json::from_str::<serde_json::Value>(&content)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-        });
+    let result = fs::read_to_string(&deps_path).and_then(|content| {
+        serde_json::from_str::<serde_json::Value>(&content)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    });
 
     assert!(result.is_ok(), "Rebuilt index should be valid");
 
@@ -292,6 +296,7 @@ fn test_partial_index_not_used_after_corruption() {
 }
 
 #[test]
+#[serial]
 fn test_fail_safe_missing_index_file() {
     let fixture = fixture_path();
 
@@ -327,6 +332,7 @@ fn test_fail_safe_missing_index_file() {
 }
 
 #[test]
+#[serial]
 fn test_clear_error_messages_for_common_failures() {
     let fixture = fixture_path();
 
@@ -339,19 +345,15 @@ fn test_clear_error_messages_for_common_failures() {
 
     fs::write(&symbols_path, "{ invalid }").expect("Should write corrupted file");
 
-    let result = fs::read_to_string(&symbols_path)
-        .and_then(|content| {
-            serde_json::from_str::<serde_json::Value>(&content)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-        });
+    let result = fs::read_to_string(&symbols_path).and_then(|content| {
+        serde_json::from_str::<serde_json::Value>(&content)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    });
 
     assert!(result.is_err(), "Should fail to parse corrupted JSON");
 
     let error_msg = result.unwrap_err().to_string();
-    assert!(
-        error_msg.len() > 0,
-        "Should have error message"
-    );
+    assert!(!error_msg.is_empty(), "Should have error message");
 
     // Restore
     fs::write(&symbols_path, original).expect("Should restore symbols");

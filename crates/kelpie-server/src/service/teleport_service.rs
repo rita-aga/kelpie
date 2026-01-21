@@ -8,7 +8,10 @@
 //!
 //! DST Support: Works with SimTeleportStorage for fault injection testing.
 
-use crate::storage::{Architecture, SnapshotKind, TeleportPackage, TeleportStorage};
+use crate::actor::AgentActorState;
+use crate::storage::{
+    AgentMetadata, AgentStorage, Architecture, SnapshotKind, TeleportPackage, TeleportStorage,
+};
 use bytes::Bytes;
 use kelpie_core::{Error, Result};
 use kelpie_vm::{VmConfig, VmFactory, VmInstance, VmSnapshot, VmSnapshotMetadata};
@@ -18,29 +21,34 @@ use std::sync::Arc;
 ///
 /// TigerStyle: Clean abstraction, explicit error handling, testable.
 #[derive(Clone)]
-pub struct TeleportService<S, F>
+pub struct TeleportService<S, F, A>
 where
     S: TeleportStorage,
     F: VmFactory,
+    A: AgentStorage,
 {
     /// Teleport storage backend
     storage: Arc<S>,
     /// VM factory for creating VM instances
     vm_factory: Arc<F>,
+    /// Agent storage for registry operations
+    agent_storage: Arc<A>,
     /// Expected base image version
     base_image_version: String,
 }
 
-impl<S, F> TeleportService<S, F>
+impl<S, F, A> TeleportService<S, F, A>
 where
     S: TeleportStorage,
     F: VmFactory,
+    A: AgentStorage,
 {
     /// Create a new TeleportService
-    pub fn new(storage: Arc<S>, vm_factory: Arc<F>) -> Self {
+    pub fn new(storage: Arc<S>, vm_factory: Arc<F>, agent_storage: Arc<A>) -> Self {
         Self {
             storage,
             vm_factory,
+            agent_storage,
             base_image_version: "1.0.0".to_string(),
         }
     }
@@ -226,6 +234,52 @@ where
         // Extract agent state
         let agent_state = package.agent_state.unwrap_or_default();
 
+        // Step 6: Register agent in global registry (Option 2 fix for registry gap)
+        // Deserialize agent state to extract metadata
+        if !agent_state.is_empty() {
+            match serde_json::from_slice::<AgentActorState>(&agent_state) {
+                Ok(actor_state) => {
+                    if let Some(agent) = actor_state.agent {
+                        // Convert AgentState to AgentMetadata
+                        let metadata = AgentMetadata {
+                            id: agent.id.clone(),
+                            name: agent.name.clone(),
+                            agent_type: agent.agent_type.clone(),
+                            model: agent.model.clone(),
+                            embedding: agent.embedding.clone(),
+                            system: agent.system.clone(),
+                            description: agent.description.clone(),
+                            tool_ids: agent.tool_ids.clone(),
+                            tags: agent.tags.clone(),
+                            metadata: agent.metadata.clone(),
+                            created_at: agent.created_at,
+                            updated_at: agent.updated_at,
+                        };
+
+                        // Register in global registry
+                        self.agent_storage
+                            .save_agent(&metadata)
+                            .await
+                            .map_err(|e| Error::Internal {
+                                message: format!("Failed to register teleported agent: {}", e),
+                            })?;
+
+                        tracing::info!(
+                            agent_id = %agent.id,
+                            "Agent registered in global registry after teleport"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        package_id = %package_id,
+                        error = %e,
+                        "Failed to deserialize agent state for registration, skipping registry update"
+                    );
+                }
+            }
+        }
+
         tracing::info!(
             package_id = %package_id,
             agent_id = %package.agent_id,
@@ -335,7 +389,7 @@ impl From<TeleportPackage> for TeleportPackageInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::LocalTeleportStorage;
+    use crate::storage::{KvAdapter, LocalTeleportStorage};
     use kelpie_vm::{MockVmFactory, VmConfig, VmState};
 
     fn test_config() -> VmConfig {
@@ -351,7 +405,9 @@ mod tests {
     async fn test_teleport_service_roundtrip() {
         let storage = Arc::new(LocalTeleportStorage::new());
         let factory = Arc::new(MockVmFactory::new());
-        let service = TeleportService::new(storage, factory.clone());
+        let kv = Arc::new(kelpie_storage::MemoryKV::new());
+        let agent_storage = Arc::new(KvAdapter::new(kv));
+        let service = TeleportService::new(storage, factory.clone(), agent_storage);
 
         let mut vm = factory.create_vm(test_config()).unwrap();
         vm.start().await.unwrap();
@@ -393,7 +449,9 @@ mod tests {
     async fn test_teleport_service_checkpoint() {
         let storage = Arc::new(LocalTeleportStorage::new());
         let factory = Arc::new(MockVmFactory::new());
-        let service = TeleportService::new(storage, factory.clone());
+        let kv = Arc::new(kelpie_storage::MemoryKV::new());
+        let agent_storage = Arc::new(KvAdapter::new(kv));
+        let service = TeleportService::new(storage, factory.clone(), agent_storage);
 
         let mut vm = factory.create_vm(test_config()).unwrap();
         vm.start().await.unwrap();

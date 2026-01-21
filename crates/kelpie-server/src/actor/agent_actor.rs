@@ -27,12 +27,28 @@ pub struct AgentActor {
     llm: Arc<dyn LlmClient>,
     /// Unified tool registry for tool execution
     tool_registry: Arc<UnifiedToolRegistry>,
+    /// Optional dispatcher for inter-actor communication (e.g., RegistryActor registration)
+    /// If None, self-registration is skipped (backward compatible)
+    dispatcher: Option<kelpie_runtime::DispatcherHandle<kelpie_core::TokioRuntime>>,
 }
 
 impl AgentActor {
     /// Create a new AgentActor with LLM client
     pub fn new(llm: Arc<dyn LlmClient>, tool_registry: Arc<UnifiedToolRegistry>) -> Self {
-        Self { llm, tool_registry }
+        Self {
+            llm,
+            tool_registry,
+            dispatcher: None,
+        }
+    }
+
+    /// Create AgentActor with dispatcher for self-registration
+    pub fn with_dispatcher(
+        mut self,
+        dispatcher: kelpie_runtime::DispatcherHandle<kelpie_core::TokioRuntime>,
+    ) -> Self {
+        self.dispatcher = Some(dispatcher);
+        self
     }
 
     /// Handle "create" operation - initialize agent from request
@@ -698,32 +714,65 @@ impl Actor for AgentActor {
             // For now, we will rely on the Service to register the agent on creation (which it does via AppState).
             // But for Teleport/Recovery, the Service isn't involved.
 
-            // If we are recovering, the Registry should already have the entry (unless it was lost).
-            // If we are teleporting in, TeleportService is responsible for registering.
+            // Registry Gap: FIXED with RegistryActor (Option 1)
+            //
+            // Self-registration is now implemented via message passing to RegistryActor.
+            // If dispatcher is available, agent registers itself on activation.
+            //
+            // Registration paths by scenario:
+            // 1. Normal creation: API → AppState → storage.save_agent() → AgentActor.create() → on_activate self-registers
+            // 2. Teleport in: TeleportService.teleport_in() → restore → on_activate self-registers
+            // 3. Recovery: Actor restarts → on_activate self-registers (idempotent)
+            //
+            // Backward compatible: If dispatcher is None, registration is handled by service layer (Option 2)
 
-            // So, maybe the "Registry Gap" is actually a "Teleport Gap"?
-            // TeleportService::teleport_in returns (VM, State). It does NOT register the agent.
-            // We should fix TeleportService to register the agent.
+            if let Some(ref dispatcher) = self.dispatcher {
+                // Convert AgentState to AgentMetadata for registry
+                use crate::storage::AgentMetadata;
+                let metadata = AgentMetadata {
+                    id: agent.id.clone(),
+                    name: agent.name.clone(),
+                    agent_type: agent.agent_type.clone(),
+                    model: agent.model.clone(),
+                    embedding: agent.embedding.clone(),
+                    system: agent.system.clone(),
+                    description: agent.description.clone(),
+                    tool_ids: agent.tool_ids.clone(),
+                    tags: agent.tags.clone(),
+                    metadata: agent.metadata.clone(),
+                    created_at: agent.created_at,
+                    updated_at: agent.updated_at,
+                };
 
-            // But wait, the plan said "Implement self-registration in AgentActor::on_activate".
-            // This implies the Actor should do it.
-            // If the Actor can't write to the Registry, then the plan is flawed or assumes shared storage access.
-            // In FDB, we *can* write to any key.
-            // In SimStorage, we *can* write to any key if we have the handle.
-            // But ActorContext wraps the storage and scopes it to the actor.
+                // Send register message to RegistryActor
+                let registry_id = kelpie_core::actor::ActorId::new("system", "agent_registry")?;
+                let request = super::registry_actor::RegisterRequest { metadata };
+                let payload = serde_json::to_vec(&request).map_err(|e| Error::Internal {
+                    message: format!("Failed to serialize RegisterRequest: {}", e),
+                })?;
 
-            // Let's assume for now that we can't easily fix this from within the Actor without breaking encapsulation.
-            // I will add a TODO comment here and focus on the TeleportService fix if needed.
-            // But wait, I must follow the plan.
-            // If I can't implement it, I should note it.
-
-            // Actually, `ctx.kv` is `Box<dyn ActorKV>`.
-            // Does `ActorKV` allow writing to other namespaces?
-            // `ActorKV` methods usually take `&self` and key.
-            // But `ActorContext` methods like `kv_set` don't take an ActorId, they use `self.id`.
-            // So we are indeed scoped.
-
-            tracing::debug!(agent_id = %agent.id, "Agent activated, self-registration skipped (scoped storage)");
+                match dispatcher
+                    .invoke(registry_id, "register".to_string(), Bytes::from(payload))
+                    .await
+                {
+                    Ok(_) => {
+                        tracing::info!(agent_id = %agent.id, "Agent self-registered via RegistryActor");
+                    }
+                    Err(e) => {
+                        // Non-fatal: registration failure doesn't prevent actor activation
+                        tracing::warn!(
+                            agent_id = %agent.id,
+                            error = %e,
+                            "Failed to self-register with RegistryActor (non-fatal)"
+                        );
+                    }
+                }
+            } else {
+                tracing::debug!(
+                    agent_id = %agent.id,
+                    "Agent activated (no dispatcher, registry managed by service layer)"
+                );
+            }
         }
 
         Ok(())

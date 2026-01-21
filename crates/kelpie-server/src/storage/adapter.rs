@@ -127,12 +127,6 @@ impl KvAdapter {
         b"message:".to_vec()
     }
 
-    /// Generate prefix for listing messages: `messages/{agent_id}/`
-    fn message_prefix_legacy(agent_id: &str) -> Vec<u8> {
-        assert!(!agent_id.is_empty(), "agent id cannot be empty");
-        format!("messages/{}/", agent_id).into_bytes()
-    }
-
     /// Generate key for blocks: `blocks/{agent_id}`
     fn blocks_key(_agent_id: &str) -> Vec<u8> {
         // TigerStyle: Blocks are stored in the agent's namespace
@@ -412,13 +406,8 @@ impl AgentStorage for KvAdapter {
         let key = Self::blocks_key(agent_id);
         let value = Self::serialize(blocks)?;
 
-        // TigerStyle: Write to the agent's actor namespace
-        let actor_id = ActorId::new("agents", agent_id).map_err(|e| StorageError::Internal {
-            message: format!("Invalid agent id: {}", e),
-        })?;
-
         self.kv
-            .set(&actor_id, &key, &value)
+            .set(&self.actor_id, &key, &value)
             .await
             .map_err(|e| Self::map_kv_error("save_blocks", e))?;
 
@@ -431,14 +420,9 @@ impl AgentStorage for KvAdapter {
 
         let key = Self::blocks_key(agent_id);
 
-        // TigerStyle: Read from the agent's actor namespace
-        let actor_id = ActorId::new("agents", agent_id).map_err(|e| StorageError::Internal {
-            message: format!("Invalid agent id: {}", e),
-        })?;
-
         let bytes = self
             .kv
-            .get(&actor_id, &key)
+            .get(&self.actor_id, &key)
             .await
             .map_err(|e| Self::map_kv_error("load_blocks", e))?;
 
@@ -627,13 +611,8 @@ impl AgentStorage for KvAdapter {
         let key = Self::message_key(agent_id, &message.id);
         let value = Self::serialize(message)?;
 
-        // TigerStyle: Write to the agent's actor namespace
-        let actor_id = ActorId::new("agents", agent_id).map_err(|e| StorageError::Internal {
-            message: format!("Invalid agent id: {}", e),
-        })?;
-
         self.kv
-            .set(&actor_id, &key, &value)
+            .set(&self.actor_id, &key, &value)
             .await
             .map_err(|e| Self::map_kv_error("append_message", e))?;
 
@@ -652,14 +631,9 @@ impl AgentStorage for KvAdapter {
 
         let prefix = Self::message_prefix(agent_id);
 
-        // TigerStyle: Read from the agent's actor namespace
-        let actor_id = ActorId::new("agents", agent_id).map_err(|e| StorageError::Internal {
-            message: format!("Invalid agent id: {}", e),
-        })?;
-
         let pairs = self
             .kv
-            .scan_prefix(&actor_id, &prefix)
+            .scan_prefix(&self.actor_id, &prefix)
             .await
             .map_err(|e| Self::map_kv_error("load_messages", e))?;
 
@@ -712,14 +686,9 @@ impl AgentStorage for KvAdapter {
 
         let prefix = Self::message_prefix(agent_id);
 
-        // TigerStyle: Read from the agent's actor namespace
-        let actor_id = ActorId::new("agents", agent_id).map_err(|e| StorageError::Internal {
-            message: format!("Invalid agent id: {}", e),
-        })?;
-
         let keys = self
             .kv
-            .list_keys(&actor_id, &prefix)
+            .list_keys(&self.actor_id, &prefix)
             .await
             .map_err(|e| Self::map_kv_error("count_messages", e))?;
 
@@ -732,19 +701,14 @@ impl AgentStorage for KvAdapter {
 
         let prefix = Self::message_prefix(agent_id);
 
-        // TigerStyle: Write to the agent's actor namespace
-        let actor_id = ActorId::new("agents", agent_id).map_err(|e| StorageError::Internal {
-            message: format!("Invalid agent id: {}", e),
-        })?;
-
         let keys = self
             .kv
-            .list_keys(&actor_id, &prefix)
+            .list_keys(&self.actor_id, &prefix)
             .await
             .map_err(|e| Self::map_kv_error("delete_messages", e))?;
 
         for key in keys {
-            let _ = self.kv.delete(&actor_id, &key).await; // Continue on error
+            let _ = self.kv.delete(&self.actor_id, &key).await; // Continue on error
         }
 
         Ok(())

@@ -879,6 +879,7 @@ impl<RT: Runtime + 'static> RpcTransport for TcpTransport<RT> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kelpie_core::TokioRuntime;
     use kelpie_registry::NodeStatus;
 
     fn test_node_id(n: u32) -> NodeId {
@@ -888,6 +889,10 @@ mod tests {
     fn test_addr(port: u16) -> SocketAddr {
         use std::net::{IpAddr, Ipv4Addr};
         SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port)
+    }
+
+    fn test_runtime() -> TokioRuntime {
+        TokioRuntime
     }
 
     #[test]
@@ -949,13 +954,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_memory_transport_create() {
-        let transport = MemoryTransport::new(test_node_id(1), test_addr(9001));
+        let transport = MemoryTransport::new(test_node_id(1), test_addr(9001), test_runtime());
         assert_eq!(transport.local_addr(), test_addr(9001));
     }
 
     #[tokio::test]
     async fn test_memory_transport_request_id() {
-        let transport = MemoryTransport::new(test_node_id(1), test_addr(9001));
+        let transport = MemoryTransport::new(test_node_id(1), test_addr(9001), test_runtime());
         let id1 = transport.next_request_id();
         let id2 = transport.next_request_id();
         assert_eq!(id1 + 1, id2);
@@ -963,13 +968,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_tcp_transport_create() {
-        let transport = TcpTransport::new(test_node_id(1), test_addr(19001));
+        let transport = TcpTransport::new(test_node_id(1), test_addr(19001), test_runtime());
         assert_eq!(transport.local_addr(), test_addr(19001));
     }
 
     #[tokio::test]
     async fn test_tcp_transport_request_id() {
-        let transport = TcpTransport::new(test_node_id(1), test_addr(19002));
+        let transport = TcpTransport::new(test_node_id(1), test_addr(19002), test_runtime());
         let id1 = transport.next_request_id();
         let id2 = transport.next_request_id();
         assert_eq!(id1 + 1, id2);
@@ -977,7 +982,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tcp_transport_start_stop() {
-        let transport = TcpTransport::new(test_node_id(1), test_addr(19003));
+        let transport = TcpTransport::new(test_node_id(1), test_addr(19003), test_runtime());
 
         // Start the transport
         if let Err(e) = transport.start().await {
@@ -1006,8 +1011,8 @@ mod tests {
         let addr1 = test_addr(19004);
         let addr2 = test_addr(19005);
 
-        let transport1 = TcpTransport::new(node1_id.clone(), addr1);
-        let transport2 = TcpTransport::new(node2_id.clone(), addr2);
+        let transport1 = TcpTransport::new(node1_id.clone(), addr1, test_runtime());
+        let transport2 = TcpTransport::new(node2_id.clone(), addr2, test_runtime());
 
         // Start both
         if let Err(e) = transport1.start().await {
