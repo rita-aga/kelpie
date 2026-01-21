@@ -28,15 +28,26 @@ When coding agents work on kelpie:
 5. **P0 constraints ignored** - Natural language instructions get skipped
 6. **No verification** - "Is feature X done?" reads MD instead of running tests
 
-## Solution: Repo OS + RLM
+## Solution: Repo OS + RLM + Hard Control Layer
 
-Build an infrastructure layer that:
-- **Indexes the codebase** deterministically (structural) and semantically (summaries)
-- **Persists agent state** in AgentFS (not scattered MD files)
-- **Extracts constraints** from .vision/ via LLM, structures them for injection
-- **Enforces verification** via hard controls (hooks, gates)
-- **Guides agents** via RLM controller pattern with soft controls
-- **Cross-validates** via multi-agent index building
+Build an infrastructure layer with **two complementary systems**:
+
+1. **RLM (Recursive Language Models)** - Efficient context management
+   - Agent never sees full codebase directly
+   - Codebase stored as queryable variable in REPL environment
+   - Agent writes code to interact: `grep()`, `peek()`, `partition()`
+   - Recursive sub-calls for large searches
+   - Solves: context rot, partial coverage, token waste
+
+2. **Hard Control Layer** - Enforcement and verification
+   - MCP tools enforce invariants (can't lie about completion)
+   - Git hooks catch what slips through
+   - Verification by execution, not by trusting docs
+   - Solves: stale MD files, P0 violations, agent lies
+
+Together:
+- **RLM** ensures agent CAN explore the codebase efficiently (capability)
+- **Hard Control Layer** ensures agent MUST verify claims (enforcement)
 
 ---
 
@@ -44,103 +55,192 @@ Build an infrastructure layer that:
 
 ### What is RLM?
 
-**RLM (Recursive Language Model)** is a controller pattern where the LLM is treated as a **subroutine inside a program**, not as the program itself.
+**RLM (Recursive Language Model)** is an inference strategy where the LLM **never sees the full context directly**. Instead, context is stored as a variable in a REPL environment, and the LLM writes code to interact with it.
+
+Reference: [alexzhang13.github.io/blog/2025/rlm](https://alexzhang13.github.io/blog/2025/rlm/)
 
 ```
-Traditional Agent:                    RLM Pattern:
-┌─────────────────┐                  ┌─────────────────────────────────────┐
-│      LLM        │                  │           CONTROLLER                │
-│  (in control)   │                  │  (program logic, state machine)     │
-│                 │                  │                                     │
-│  - decides what │                  │  ┌─────────────┐                    │
-│    to do next   │                  │  │    LLM      │  ← subroutine      │
-│  - manages own  │                  │  │  (reasoning │     called when    │
-│    state        │                  │  │   engine)   │     needed         │
-│  - hopes to     │                  │  └─────────────┘                    │
-│    follow rules │                  │                                     │
-└─────────────────┘                  │  - Controller manages state         │
-        │                            │  - Controller enforces invariants   │
-        ▼                            │  - Controller decides control flow  │
-   (unstructured                     └─────────────────────────────────────┘
-    text output)                                    │
-                                                    ▼
-                                            (structured state
-                                             + verified outputs)
+Traditional LM:                              RLM:
+┌────────────────────────────┐              ┌────────────────────────────────────┐
+│  LM(query, context)        │              │  RLM(query, context)               │
+│                            │              │                                    │
+│  Context: 500K tokens      │              │  Root LM sees: just the query      │
+│  (entire codebase)         │              │  Context: stored as `codebase` var │
+│                            │              │                                    │
+│  LM processes ALL tokens   │              │  Root LM writes code:              │
+│  at once                   │              │    matches = grep(codebase, "Fdb") │
+│                            │              │    subset = read_file(matches[0])  │
+│  ❌ Context rot (quality   │              │    answer = RLM(query, subset)     │
+│     degrades with length)  │              │                    ↑               │
+│  ❌ Token limit hit        │              │            Recursive call!         │
+│  ❌ Expensive (all tokens) │              │                                    │
+│  ❌ Misses things          │              │  ✅ No context rot                 │
+│                            │              │  ✅ Unbounded context              │
+└────────────────────────────┘              │  ✅ Efficient (query what you need)│
+                                            │  ✅ Complete coverage              │
+                                            └────────────────────────────────────┘
 ```
 
-### The Key Insight
+### The REPL Environment
 
-In traditional prompting, we **hope** the LLM follows instructions:
-- "Please verify by running tests" → LLM might skip it
-- "Don't trust MD files" → LLM might read them anyway
-- "Update the plan after each phase" → LLM might forget
+The agent operates in a **code execution environment** where the codebase is a queryable variable:
 
-In RLM, we **enforce** behavior through the controller:
-- LLM can't mark complete without verification → Tool requires proof
-- LLM can't access stale data → Tool checks freshness before returning
-- LLM state persists across sessions → Controller manages AgentFS
+```python
+# REPL Environment State
+codebase = CodebaseContext("/Users/dev/kelpie")  # Never loaded into LLM context directly
+indexes = load_indexes(".kelpie-index/")          # Structural indexes available
+constraints = load_constraints()                   # P0 constraints injected
 
-### RLM Control Flow in Our System
+# Agent writes code to interact (not prose commands)
+```
+
+### RLM Interaction Patterns
+
+The agent develops **emergent strategies** for exploring context:
+
+```python
+# 1. PEEKING - Sample structure before diving deep
+files = codebase.list_files("crates/kelpie-storage/src/")
+preview = codebase.peek("crates/kelpie-storage/src/lib.rs", lines=50)
+
+# 2. GREPPING - Narrow down with regex
+matches = codebase.grep(r"impl\s+ActorKV", file_pattern="*.rs")
+# Returns: [("src/fdb.rs", 45), ("src/memory.rs", 23), ...]
+
+# 3. PARTITION + MAP - Chunk and recursively process
+chunks = codebase.partition_by_module("crates/kelpie-storage/")
+results = []
+for chunk in chunks:
+    # Recursive RLM call with smaller context
+    result = RLM("find all error handling patterns", chunk)
+    results.append(result)
+summary = aggregate(results)
+
+# 4. FOCUSED READ - Read specific sections
+content = codebase.read_file("src/fdb.rs", start_line=45, end_line=100)
+
+# 5. INDEX QUERY - Use pre-built structural indexes
+symbols = indexes.query_symbols("FdbStorage")
+deps = indexes.query_deps("kelpie-storage")
+tests = indexes.query_tests(topic="storage")
+```
+
+### How RLM Solves Our Problems
+
+| Problem | Traditional Agent | RLM Agent |
+|---------|-------------------|-----------|
+| **Context fills up** | Reads random files, runs out of tokens | Queries indexes, reads only relevant sections |
+| **Partial coverage (20%)** | Greps once, stops | Partition + Map: recursively processes ALL modules |
+| **Misses edge cases** | Context too large, things get lost | Focused reads, nothing lost to context rot |
+| **Expensive** | Processes 500K tokens every call | Processes only what's needed |
+
+### Concrete Example: "Find all dead code"
+
+**Traditional Agent:**
+```
+Agent: *reads 50 files into context*
+       "I found 3 unused functions"
+       *context full, stops*
+
+Reality: Missed 15 more across other modules (partial coverage)
+```
+
+**RLM Agent:**
+```python
+# Agent writes code in REPL:
+modules = codebase.list_modules()  # ["kelpie-core", "kelpie-storage", ...]
+
+all_dead_code = []
+for module in modules:
+    # Recursive RLM call for each module
+    dead = RLM(f"find unused functions in {module}",
+               codebase.get_module(module))
+    all_dead_code.extend(dead)
+
+# Cross-reference with call graph
+confirmed_dead = []
+for func in all_dead_code:
+    refs = indexes.query_references(func.name)
+    if len(refs) == 0:
+        confirmed_dead.append(func)
+
+FINAL(confirmed_dead)  # Returns complete list
+```
+
+**Result:** Complete coverage, no context rot, verifiable results.
+
+### RLM Control Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              RLM CONTROL LOOP                                │
+│                              RLM EXECUTION                                   │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-1. SESSION START
-   ┌──────────────────────────────────────────────────────────────────────────┐
-   │ Controller: start_plan_session(plan_id)                                  │
-   │                                                                          │
-   │ • Load plan from AgentFS                                                 │
-   │ • HARD: Re-verify ALL previously completed phases (can't skip)          │
-   │ • Inject P0 constraints into context                                     │
-   │ • Present verification report to LLM                                     │
-   │                                                                          │
-   │ LLM receives: { plan, verification_report, constraints, current_phase }  │
-   └──────────────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-2. TASK EXECUTION (Loop)
-   ┌──────────────────────────────────────────────────────────────────────────┐
-   │                                                                          │
-   │  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐                │
-   │  │    LLM      │────▶│  MCP Tools  │────▶│  AgentFS    │                │
-   │  │  (reason)   │     │  (execute)  │     │  (persist)  │                │
-   │  └─────────────┘     └─────────────┘     └─────────────┘                │
-   │         │                   │                   │                        │
-   │         │                   │                   │                        │
-   │         ▼                   ▼                   ▼                        │
-   │  "I need to check    Tool: index_query()   State updated:               │
-   │   if FDB tests pass"  │                     { verified_fact:            │
-   │         │             │ HARD: Check         "fdb_tests_pass": true,    │
-   │         │             │ freshness first     evidence: {...} }           │
-   │         │             │                                                  │
-   │         │             │ Returns: fresh                                   │
-   │         │             │ data or error                                    │
-   │         │                                                                │
-   │         ▼                                                                │
-   │  "Tests pass, now     Tool: mark_phase_complete(phase, evidence)        │
-   │   mark phase done"     │                                                 │
-   │                        │ HARD: Requires evidence parameter              │
-   │                        │ HARD: Re-runs verification commands            │
-   │                        │ HARD: Only stores if all pass                  │
-   │                        │                                                 │
-   │                        ▼                                                 │
-   │                   Success OR Error (can't lie)                          │
-   │                                                                          │
-   └──────────────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-3. SESSION END / HANDOFF
-   ┌──────────────────────────────────────────────────────────────────────────┐
-   │ Controller: All state persisted in AgentFS                               │
-   │                                                                          │
-   │ Next agent calls start_plan_session() → Loop restarts at step 1         │
-   │ • All completions re-verified (HARD)                                     │
-   │ • Failed verifications flagged                                           │
-   │ • New agent sees ground truth, not previous agent's claims              │
-   └──────────────────────────────────────────────────────────────────────────┘
+User Query: "Find all places where errors are silently ignored"
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  ROOT LM (sees query only, not codebase)                                    │
+│                                                                             │
+│  Decides strategy: "I'll grep for .unwrap() and .ok(), then check each"    │
+│                                                                             │
+│  Writes code:                                                               │
+│    candidates = codebase.grep(r"\.(unwrap|ok)\(\)", "*.rs")                │
+│    # Returns 150 matches - too many to process at once                     │
+│                                                                             │
+│    # Partition by file                                                      │
+│    by_file = group_by_file(candidates)                                     │
+│                                                                             │
+│    silent_ignores = []                                                      │
+│    for file, matches in by_file.items():                                   │
+│        context = codebase.read_context(file, matches, padding=5)           │
+│        # RECURSIVE CALL with focused context                                │
+│        result = RLM("which of these silently ignore errors?", context)     │
+│        silent_ignores.extend(result)                                        │
+│                                                                             │
+│    FINAL(silent_ignores)                                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         │ Spawns recursive calls
+         ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  SUB-LM CALLS (depth 1, focused context)                                    │
+│                                                                             │
+│  RLM("which silently ignore?", context_for_fdb.rs)                         │
+│    → "Line 45: .ok() discards StorageError without logging"                │
+│    → "Line 89: .unwrap() is fine - already checked Result"                 │
+│                                                                             │
+│  RLM("which silently ignore?", context_for_actor.rs)                       │
+│    → "Line 23: .ok() discards error - SILENT IGNORE"                       │
+│    → ...                                                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         │ Results aggregated
+         ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  FINAL RESULT                                                               │
+│                                                                             │
+│  silent_ignores = [                                                         │
+│    { file: "fdb.rs", line: 45, issue: ".ok() discards StorageError" },     │
+│    { file: "actor.rs", line: 23, issue: ".ok() discards error" },          │
+│    ... (complete list, nothing missed)                                      │
+│  ]                                                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## How the Hard Control Layer Works
+
+The Hard Control Layer **enforces behavior** that the LLM might otherwise skip. While RLM helps the agent explore efficiently, the Hard Control Layer ensures the agent can't lie, skip verification, or ignore constraints.
+
+### Why We Need Both
+
+| RLM (Capability) | Hard Control Layer (Enforcement) |
+|------------------|----------------------------------|
+| Agent CAN find all dead code | Agent MUST verify before claiming complete |
+| Agent CAN query indexes efficiently | Agent CANNOT access stale indexes |
+| Agent CAN explore the codebase | Agent CANNOT mark phase complete without evidence |
+| Agent CAN recursively search | Agent CANNOT skip handoff verification |
 
 ### Soft Controls vs Hard Controls
 
@@ -149,16 +249,23 @@ In RLM, we **enforce** behavior through the controller:
 | **Soft** | Prompt injection, skills | Yes (might ignore) | "Verify by execution", "Update plan after each phase" |
 | **Hard** | Tool parameters, gates, hooks | No (enforced by code) | Evidence required for completion, freshness check before query |
 
-**Our Layered Approach:**
+### Layered Control Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  SOFT CONTROLS (Skills, Prompts)                                │
-│  • RLM task workflow instructions                               │
+│  RLM LAYER (Capability)                                         │
+│  • REPL environment with codebase as variable                   │
+│  • Recursive sub-calls for large contexts                       │
+│  • grep(), peek(), partition(), map() operations                │
+│                                                                 │
+│  Agent CAN explore efficiently.                                 │
+├─────────────────────────────────────────────────────────────────┤
+│  SOFT CONTROLS (Guidance)                                       │
+│  • Skill instructions for workflows                             │
 │  • "Prefer structural indexes over semantic"                    │
 │  • "Verify claims by execution"                                 │
 │                                                                 │
-│  LLM MIGHT follow these. We hope it does.                       │
+│  Agent SHOULD follow these. We hope it does.                    │
 ├─────────────────────────────────────────────────────────────────┤
 │  HARD CONTROLS (MCP Tool Gates)                                 │
 │  • index_query() → MUST pass freshness check                    │
@@ -166,7 +273,7 @@ In RLM, we **enforce** behavior through the controller:
 │  • mark_phase_complete() → System re-runs verification          │
 │  • start_plan_session() → System re-verifies all completions    │
 │                                                                 │
-│  LLM CANNOT bypass these. Code enforces.                        │
+│  Agent CANNOT bypass these. Code enforces.                      │
 ├─────────────────────────────────────────────────────────────────┤
 │  HARD FLOOR (Git Hooks, CI)                                     │
 │  • Pre-commit: tests must pass                                  │
@@ -174,16 +281,72 @@ In RLM, we **enforce** behavior through the controller:
 │  • Pre-commit: DST coverage for critical paths                  │
 │  • CI: determinism verification                                 │
 │                                                                 │
-│  Even if LLM + tools fail, this catches it.                     │
+│  Even if RLM + tools fail, this catches it.                     │
 └─────────────────────────────────────────────────────────────────┘
+```
+
+### Hard Control Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         HARD CONTROL LOOP                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+1. SESSION START
+   ┌──────────────────────────────────────────────────────────────────────────┐
+   │ Tool: start_plan_session(plan_id)                                        │
+   │                                                                          │
+   │ • Load plan from AgentFS                                                 │
+   │ • HARD: Re-verify ALL previously completed phases (can't skip)          │
+   │ • Inject P0 constraints into REPL environment                           │
+   │ • Present verification report to agent                                   │
+   │                                                                          │
+   │ Agent receives: { plan, verification_report, constraints }               │
+   └──────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+2. TASK EXECUTION (RLM + Tools)
+   ┌──────────────────────────────────────────────────────────────────────────┐
+   │                                                                          │
+   │  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐                │
+   │  │  RLM Agent  │────▶│  MCP Tools  │────▶│  AgentFS    │                │
+   │  │  (REPL)     │     │  (gates)    │     │  (persist)  │                │
+   │  └─────────────┘     └─────────────┘     └─────────────┘                │
+   │         │                   │                                            │
+   │         ▼                   ▼                                            │
+   │  Agent writes code:   Tool enforces:                                     │
+   │    results = grep()    HARD: Freshness check                            │
+   │    tests = query()     HARD: Evidence required                          │
+   │    verified = run()    HARD: Re-runs verification                       │
+   │                                                                          │
+   └──────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+3. COMPLETION (Verified)
+   ┌──────────────────────────────────────────────────────────────────────────┐
+   │ Tool: mark_phase_complete(phase, evidence)                               │
+   │                                                                          │
+   │ • HARD: Evidence parameter required (can't omit)                        │
+   │ • HARD: System re-runs verification commands NOW                        │
+   │ • HARD: Only stores if ALL pass                                         │
+   │ • Stores: evidence + git_sha + timestamp in AgentFS                     │
+   └──────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+4. HANDOFF (Auto-Verified)
+   ┌──────────────────────────────────────────────────────────────────────────┐
+   │ Next agent calls start_plan_session()                                    │
+   │                                                                          │
+   │ • HARD: All completions re-verified automatically                        │
+   │ • Failed verifications marked UNVERIFIED                                │
+   │ • New agent sees ground truth, not previous claims                      │
+   └──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Concrete Example: "Is the streaming feature complete?"
 
-**Without RLM (Traditional Agent):**
+**Without Hard Control Layer:**
 ```
-User: Is the streaming feature complete?
-
 Agent: *reads .progress/015_streaming.md*
        "According to the plan, Phase 3 is marked [x] complete"
        "Yes, streaming is complete!"
@@ -191,13 +354,11 @@ Agent: *reads .progress/015_streaming.md*
 Reality: Tests are failing, but agent trusted the MD file.
 ```
 
-**With RLM:**
+**With Hard Control Layer:**
 ```
-User: Is the streaming feature complete?
-
 Agent: *calls mcp.verify_claim("streaming feature complete")*
 
-Controller (MCP Tool):
+Tool (HARD enforcement):
   1. Find relevant tests: index_tests("streaming") → 12 tests
   2. Run tests: verify_by_tests("streaming")
   3. Results: 10 pass, 2 fail
@@ -205,47 +366,12 @@ Controller (MCP Tool):
 
 Agent: "Streaming is NOT complete. 2 tests are failing:
         - test_streaming_backpressure (timeout)
-        - test_streaming_error_recovery (assertion failed)
-        Here are the failure details..."
+        - test_streaming_error_recovery (assertion failed)"
 
-Reality: Agent was forced to verify by execution, couldn't just trust MD.
+Reality: Agent was forced to verify by execution.
 ```
 
-### Concrete Example: Agent Handoff
-
-**Without RLM:**
-```
-Agent A: "I finished Phase 2, marking complete" *updates MD file*
-         *session ends*
-
-Agent B: *reads MD file* "Phase 2 is done, starting Phase 3"
-         *builds on broken foundation*
-
-Reality: Phase 2 had a bug, Agent B inherited the lie.
-```
-
-**With RLM:**
-```
-Agent A: *calls mark_phase_complete("phase_2", evidence)*
-         Controller re-runs verification → passes
-         Stores completion with proof in AgentFS
-         *session ends*
-
-Agent B: *calls start_plan_session("plan_015")*
-         Controller automatically re-verifies ALL phases
-
-         Verification report:
-         - Phase 1: ✅ verified (3/3 checks pass)
-         - Phase 2: ❌ UNVERIFIED (test_x now failing)
-
-         Agent B receives: "Phase 2 failed verification.
-                           Previous agent's completion is invalid.
-                           Fix before proceeding."
-
-Reality: System caught the regression, Agent B knows the truth.
-```
-
-### RLM State Management
+### State Management
 
 ```
 AgentFS Structure:
@@ -255,7 +381,6 @@ AgentFS Structure:
 │ agent_state (KV store)                                          │
 │ ├── current_task: "Implement Phase 3 of streaming"              │
 │ ├── current_plan: "plan_015"                                    │
-│ ├── context_window_usage: 45000                                 │
 │ └── last_action: "verified fdb storage tests"                   │
 ├─────────────────────────────────────────────────────────────────┤
 │ verified_facts (execution proofs)                               │
@@ -274,21 +399,48 @@ AgentFS Structure:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Why This Works
-
-1. **LLM is powerful but unreliable** - Great at reasoning, bad at following rules consistently
-2. **Controller is reliable but dumb** - Can't reason, but always follows rules
-3. **Combine them** - LLM does the thinking, controller does the enforcement
-
-The LLM decides WHAT to do. The controller ensures HOW it's done is correct.
+### Why Both Systems Together
 
 ```
-LLM: "I think Phase 2 is done"           → Opinion (might be wrong)
-Controller: "Prove it"                    → Enforcement
-LLM: "Here's my evidence: [tests, outputs]"
-Controller: *runs verification*           → Ground truth
-Controller: "2 tests failed, not done"    → Correction
-LLM: "OK, I need to fix those tests"      → Adapts to reality
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        RLM + HARD CONTROL SYNERGY                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+User: "Find all dead code and remove it"
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  RLM (Capability)                                                           │
+│                                                                             │
+│  modules = codebase.list_modules()                                         │
+│  dead_code = []                                                             │
+│  for module in modules:                                                     │
+│      dead = RLM("find unused functions", codebase.get_module(module))      │
+│      dead_code.extend(dead)                                                 │
+│                                                                             │
+│  # Complete coverage via recursive decomposition                            │
+│  # Found 18 unused functions (not just the 3 a traditional agent would)    │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         │ Agent claims: "I found and removed 18 dead functions"
+         ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  HARD CONTROL LAYER (Enforcement)                                           │
+│                                                                             │
+│  Agent: mark_phase_complete("dead_code_removal", evidence)                  │
+│                                                                             │
+│  Tool: HARD checks:                                                         │
+│    ✓ Evidence includes list of removed functions                           │
+│    ✓ cargo test passes (nothing broken)                                    │
+│    ✓ cargo clippy passes                                                   │
+│    ✓ detect_dead_code() returns empty (verified clean)                     │
+│                                                                             │
+│  All pass → Completion stored with proof                                   │
+│  Any fail → Rejected, agent must fix                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Result:
+- RLM ensured COMPLETE coverage (found all 18, not just 3)
+- Hard Control ensured VERIFIED result (can't lie about removal)
 ```
 
 ---
@@ -353,22 +505,101 @@ LLM: "OK, I need to fix those tests"      → Adapts to reality
 
 ---
 
-### Decision 4: RLM Controller Implementation
+### Decision 4: RLM Implementation Strategy
 
-**Context:** How do we implement the RLM pattern?
+**Context:** How do we implement actual RLM (recursive context management with REPL)?
 
 | Option | Description | Pros | Cons |
 |--------|-------------|------|------|
-| A: Claude Code + MCP | Use existing infrastructure | Already works, familiar | MCP overhead, limited control |
-| B: Custom Rust binary | Full control, native | Performance, integration | Significant work |
-| C: Claude Code + Skills + MCP | Extend existing with skills | Incremental, flexible | Relies on model following skills |
+| A: Prompt-only | Instruct agent to "query indexes, don't read files directly" | Simple | Agent might ignore, still loads context |
+| B: MCP tools for codebase ops | Tools like `grep()`, `peek()`, `read_section()` | Enforced via tools | Not true REPL, no recursion |
+| C: REPL environment + recursive calls | Agent writes Python/code, spawns sub-LLM calls | True RLM, complete coverage | Complex, need execution environment |
+| D: Hybrid B+C | MCP tools for simple ops, REPL for complex recursive tasks | Pragmatic balance | Two interaction modes |
 
-**Decision:** **Option C** - Build on Claude Code. Create MCP server for state/index operations. Create Skills for RLM workflows. Add hard controls via MCP tool wrappers and git hooks.
+**Decision:** **Option D** - Hybrid approach:
+
+1. **MCP Tools (Simple Operations):**
+   - `codebase_grep(pattern, file_glob)` - Search without loading into context
+   - `codebase_peek(file, lines)` - Sample file structure
+   - `codebase_read_section(file, start, end)` - Focused reads
+   - `index_query(type, query)` - Query pre-built structural indexes
+
+2. **REPL Environment (Complex Operations):**
+   - For partition+map, recursive decomposition
+   - Agent writes code that spawns sub-LLM calls
+   - Results aggregated programmatically
+   - Used for: "find ALL X", "analyze EVERY module", comprehensive searches
+
+**Implementation:**
+```python
+# REPL Environment (when needed for complex tasks)
+class RLMEnvironment:
+    def __init__(self, codebase_path, indexes):
+        self.codebase = CodebaseContext(codebase_path)  # Never in LLM context
+        self.indexes = indexes
+        self.llm = ClaudeAPI()  # For recursive calls
+
+    def grep(self, pattern, glob="*.rs"):
+        return self.codebase.grep(pattern, glob)
+
+    def peek(self, file, lines=50):
+        return self.codebase.peek(file, lines)
+
+    def partition_by_module(self):
+        return self.codebase.list_modules()
+
+    def recursive_call(self, query, context_subset):
+        """Spawn sub-LLM call with focused context"""
+        return self.llm.complete(query, context=context_subset)
+
+    def map_reduce(self, query, partitions):
+        """Partition + Map pattern"""
+        results = []
+        for partition in partitions:
+            result = self.recursive_call(query, partition)
+            results.append(result)
+        return self.aggregate(results)
+```
 
 **Trade-offs accepted:**
-- Dependent on Claude Code behavior
-- Skills are soft controls (model might ignore)
-- Mitigated by hard control layer around MCP tools
+- Two interaction modes (MCP tools vs REPL)
+- REPL requires code execution environment
+- Recursive calls add latency and cost (but ensure completeness)
+
+---
+
+### Decision 4b: Hard Control Layer Implementation
+
+**Context:** How do we implement the Hard Control Layer (enforcement, verification)?
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: Claude Code + MCP only | MCP tools enforce via parameters/gates | Works with existing setup | LLM still decides when to call |
+| B: External orchestrator | Separate program controls flow, calls LLM | Full control | Significant work, different paradigm |
+| C: Claude Code + MCP + Git Hooks | MCP for runtime, hooks for commit-time | Layered enforcement | Two enforcement points |
+
+**Decision:** **Option C** - Claude Code + MCP + Git Hooks:
+
+1. **MCP Tools (Runtime Enforcement):**
+   - `mark_phase_complete(phase, evidence)` - HARD requires evidence, re-runs verification
+   - `start_plan_session(plan_id)` - HARD re-verifies all prior completions
+   - `index_query(...)` - HARD freshness check before returning
+
+2. **Git Hooks (Commit-time Enforcement):**
+   - Pre-commit: tests must pass
+   - Pre-commit: clippy must pass
+   - Pre-commit: DST coverage for critical path changes
+   - Pre-commit: constraint verification
+
+3. **Skills (Soft Guidance):**
+   - Workflow instructions (might be ignored)
+   - Best practices (might be ignored)
+   - Mitigated by hard controls above
+
+**Trade-offs accepted:**
+- LLM still decides when to call verification tools
+- Git hooks only catch at commit time, not during session
+- Layered approach covers gaps
 
 ---
 
@@ -575,6 +806,11 @@ async function start_plan_session(plan_id: string): SessionResult {
 | 2026-01-20 11:30 | Hybrid slop detection | Tools detect, agents investigate | Tool development effort |
 | 2026-01-20 12:15 | DST coverage enforcement (HARD) | Critical paths require DST tests | Pre-commit latency, may block commits |
 | 2026-01-20 12:30 | Harness adequacy verification | Harness must model real failure modes | Requires documenting known simulation gaps |
+| 2026-01-20 13:00 | Actual RLM (recursive context management) | Complete coverage, no context rot | REPL environment complexity |
+| 2026-01-20 13:00 | Hybrid RLM implementation | MCP for simple, REPL for complex | Two interaction modes |
+| 2026-01-20 13:00 | Separate RLM from Hard Control Layer | RLM=capability, Control=enforcement | Clearer architecture |
+| 2026-01-20 13:30 | Python REPL for RLM (RestrictedPython) | Sandboxed, simple subprocess from MCP | Python as dependency |
+| 2026-01-20 13:30 | 30s timeout, 3-level depth, 100KB output limits | Prevent runaway execution | Limits complex analysis |
 
 ---
 
@@ -582,59 +818,91 @@ async function start_plan_session(plan_id: string): SessionResult {
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           RLM Controller Layer                              │
-│                    (Claude Code + Skills + MCP)                             │
+│                              AGENT LAYER                                    │
+│                       (Claude Code + Skills)                                │
 │                                                                             │
+│    User Query: "Find all dead code and remove it"                          │
+│                              │                                              │
+│                              ▼                                              │
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                    INTEGRITY LAYER (NEW)                            │    │
-│  │  • Handoff verification (auto re-run all verifications on start)   │    │
-│  │  • Evidence-based completion (tool re-runs, can't lie)             │    │
-│  │  • Slop detection (dead code, duplicates, fake DST, orphans)       │    │
-│  │  • Plan vs reality comparison (detect agent lies)                  │    │
+│  │                 RLM LAYER (Recursive Context Management)            │    │
+│  │                                                                     │    │
+│  │  Agent writes code in REPL:                                         │    │
+│  │    modules = partition_by_module()                                  │    │
+│  │    for m in modules:                                                │    │
+│  │        dead = RLM("find unused functions", m)  # Recursive call    │    │
+│  │        results.extend(dead)                                         │    │
+│  │    FINAL(results)                                                   │    │
+│  │                                                                     │    │
+│  │  • Codebase as queryable variable (not in context)                 │    │
+│  │  • grep(), peek(), read_section() - focused access                 │    │
+│  │  • Recursive sub-calls for large contexts                          │    │
+│  │  • Complete coverage via partition + map                           │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
-│                                    │                                        │
-│  ┌─────────────────────────────────▼───────────────────────────────────┐    │
-│  │                        HARD SHELL                                   │    │
-│  │  • Git hooks (pre-commit: constraints, tests)                       │    │
-│  │  • MCP gates (freshness, verification proof)                        │    │
-│  │  • Index staleness detection (Merkle-style hashes)                  │    │
-│  │  • Audit logging (every tool call)                                  │    │
+│                              │                                              │
+│                              ▼                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                 HARD CONTROL LAYER (Enforcement)                    │    │
+│  │                                                                     │    │
+│  │  MCP Tool Gates:                                                    │    │
+│  │  • mark_phase_complete() → MUST provide evidence, system re-runs   │    │
+│  │  • start_plan_session() → MUST re-verify all prior completions     │    │
+│  │  • index_query() → MUST pass freshness check                       │    │
+│  │                                                                     │    │
+│  │  Integrity Checks:                                                  │    │
+│  │  • Handoff verification (auto re-verify on session start)          │    │
+│  │  • Slop detection (dead code, duplicates, fake DST)                │    │
+│  │  • DST coverage enforcement                                         │    │
+│  │  • Harness adequacy verification                                    │    │
+│  │                                                                     │    │
+│  │  Audit Trail:                                                       │    │
+│  │  • Every tool call logged                                           │    │
+│  │  • Evidence stored with git SHA                                     │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
-│                                    │                                        │
-│  ┌─────────────────────────────────▼───────────────────────────────────┐    │
-│  │                        SOFT CORE                                    │    │
-│  │  • Constraint injection (P0s in every prompt)                       │    │
-│  │  • Skill instructions (RLM workflows)                               │    │
-│  │  • Planning guidance (read/write/new lists)                         │    │
-│  │  • Verification suggestions                                         │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
-│                                    │                                        │
-│  ┌─────────────────────────────────▼───────────────────────────────────┐    │
-│  │                        HARD FLOOR                                   │    │
-│  │  • Tests must pass before commit                                    │    │
-│  │  • Clippy must pass before commit                                   │    │
-│  │  • DST required for critical paths                                  │    │
-│  │  • Verification proof required for completion claims                │    │
+│                              │                                              │
+│                              ▼                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                 HARD FLOOR (Git Hooks, CI)                          │    │
+│  │                                                                     │    │
+│  │  Pre-commit:                                                        │    │
+│  │  • Tests must pass                                                  │    │
+│  │  • Clippy must pass                                                 │    │
+│  │  • DST coverage for critical path changes                          │    │
+│  │                                                                     │    │
+│  │  CI:                                                                │    │
+│  │  • Determinism verification (same seed = same output)              │    │
+│  │  • Multiple seed testing                                            │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────────────┘
                                      │
          ┌───────────────────────────┼───────────────────────────┐
          ▼                           ▼                           ▼
 ┌─────────────────┐        ┌─────────────────┐        ┌─────────────────┐
-│    AgentFS      │        │   Index Layer   │        │   Execution     │
-│  (Agent State)  │        │  (Knowledge)    │        │  (Ground Truth) │
+│  RLM Environment│        │   Index Layer   │        │   Execution     │
+│  (REPL + Context)        │  (Knowledge)    │        │  (Ground Truth) │
 │                 │        │                 │        │                 │
-│ • current_task  │        │ • structural/   │        │ • cargo test    │
-│ • verified_facts│        │   symbols.json  │        │ • cargo clippy  │
-│ • findings      │        │   deps.json     │        │ • DST tests     │
-│ • plan          │        │   tests.json    │        │ • rust-analyzer │
-│ • audit_log     │        │ • semantic/     │        │ • tree-sitter   │
-│                 │        │   summaries.json│        │                 │
-│ (SQLite-backed) │        │   embeddings/   │        │ (Real execution)│
-│                 │        │ • constraints/  │        │                 │
-│                 │        │   extracted.json│        │                 │
+│ • CodebaseContext        │ • structural/   │        │ • cargo test    │
+│   (never in LLM │        │   symbols.json  │        │ • cargo clippy  │
+│    context)     │        │   deps.json     │        │ • DST tests     │
+│ • grep(), peek()│        │   tests.json    │        │ • rust-analyzer │
+│ • RLM() calls   │        │ • semantic/     │        │ • tree-sitter   │
+│ • map_reduce()  │        │   summaries/    │        │                 │
+│                 │        │ • constraints/  │        │ (Real execution)│
+│ (Python REPL)   │        │   extracted.json│        │                 │
+└─────────────────┘        └─────────────────┘        └─────────────────┘
+         │                           │                           │
+         │                           │                           │
+         ▼                           ▼                           ▼
+┌─────────────────┐        ┌─────────────────┐        ┌─────────────────┐
+│    AgentFS      │        │   Codebase      │        │   Verification  │
+│  (Agent State)  │        │  (Source)       │        │   Results       │
 │                 │        │                 │        │                 │
-│                 │        │ (JSON files)    │        │                 │
+│ • current_task  │        │ • crates/       │        │ • test output   │
+│ • verified_facts│        │ • tests/        │        │ • clippy output │
+│ • completions/  │        │ • docs/         │        │ • coverage data │
+│ • audit_log     │        │                 │        │                 │
+│                 │        │ (Never loaded   │        │ (Actual proof   │
+│ (SQLite-backed) │        │  into context)  │        │  of claims)     │
 └─────────────────┘        └─────────────────┘        └─────────────────┘
          │                           │                           │
          └───────────────────────────┼───────────────────────────┘
@@ -645,10 +913,23 @@ async function start_plan_session(plan_id: string): SessionResult {
 │  • docs/adr/         (human documentation)                                  │
 │  • .vision/          (constraints in prose - input to extraction)           │
 │  • .progress/        (human-readable plans - not source of truth)           │
-│  • .kelpie-index/    (auto-generated indexes - git-ignored or tracked)      │
+│  • .kelpie-index/    (auto-generated indexes - git-tracked)                 │
 │  • .agentfs/         (agent state - git-ignored)                            │
+│  • tools/rlm-env/    (RLM REPL environment)                                 │
+│  • tools/mcp-kelpie/ (MCP server with hard controls)                        │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Architecture Summary
+
+| Layer | Purpose | Mechanism |
+|-------|---------|-----------|
+| **RLM Layer** | Efficient codebase exploration | REPL + recursive calls, codebase as variable |
+| **Hard Control Layer** | Enforcement, verification | MCP tool gates, evidence required |
+| **Hard Floor** | Final safety net | Git hooks, CI checks |
+| **Index Layer** | Queryable knowledge | Structural + semantic indexes |
+| **AgentFS** | Persistent agent state | SQLite-backed, audit trail |
+| **Execution** | Ground truth | Actual test runs, tool output |
 
 ---
 
@@ -912,6 +1193,539 @@ ls .kelpie-index/semantic/summaries/
 
 # Check for validation issues
 cat .kelpie-index/semantic/validation_issues.json | jq '. | length'
+```
+
+---
+
+### Phase 3b: RLM Environment (Recursive Context Management)
+
+**Goal:** Build the Python REPL environment that enables true RLM - agent writes Python code to interact with codebase, can spawn recursive sub-calls.
+
+**Implementation:** Python package that MCP server calls via subprocess.
+
+- [ ] **3b.0: Python Package Setup**
+
+  ```
+  tools/rlm-env/
+  ├── pyproject.toml          # Package config (use uv/poetry)
+  ├── README.md               # Usage docs
+  ├── rlm_env/
+  │   ├── __init__.py
+  │   ├── __main__.py         # CLI entry: python -m rlm_env
+  │   ├── codebase.py         # CodebaseContext class
+  │   ├── environment.py      # RLMEnvironment with exec()
+  │   ├── llm.py              # Claude API wrapper for recursive calls
+  │   ├── sandbox.py          # Safe execution environment
+  │   └── types.py            # GrepMatch, ModuleContext, etc.
+  └── tests/
+      ├── test_codebase.py
+      ├── test_environment.py
+      └── test_sandbox.py
+  ```
+
+  **pyproject.toml:**
+  ```toml
+  [project]
+  name = "rlm-env"
+  version = "0.1.0"
+  dependencies = [
+      "anthropic>=0.18.0",    # Claude API for recursive calls
+      "restrictedpython",     # Sandboxed code execution
+  ]
+
+  [project.scripts]
+  rlm-env = "rlm_env.__main__:main"
+  ```
+
+  **CLI Interface (for MCP to call):**
+  ```python
+  # rlm_env/__main__.py
+  import argparse
+  import json
+  import sys
+  from .environment import RLMEnvironment
+
+  def main():
+      parser = argparse.ArgumentParser()
+      parser.add_argument("--codebase", required=True, help="Path to codebase root")
+      parser.add_argument("--indexes", required=True, help="Path to .kelpie-index/")
+      parser.add_argument("--execute", help="Python code to execute")
+      parser.add_argument("--stdin", action="store_true", help="Read code from stdin")
+      args = parser.parse_args()
+
+      env = RLMEnvironment(args.codebase, args.indexes)
+
+      if args.stdin:
+          code = sys.stdin.read()
+      else:
+          code = args.execute
+
+      try:
+          result = env.execute(code)
+          print(json.dumps({"success": True, "result": result}))
+      except Exception as e:
+          print(json.dumps({"success": False, "error": str(e)}))
+          sys.exit(1)
+
+  if __name__ == "__main__":
+      main()
+  ```
+
+  **MCP Server Integration:**
+  ```typescript
+  // tools/mcp-kelpie/src/rlm.ts
+  import { spawn } from "child_process";
+
+  export async function rlm_execute(code: string): Promise<RLMResult> {
+    return new Promise((resolve, reject) => {
+      const proc = spawn("python", [
+        "-m", "rlm_env",
+        "--codebase", CODEBASE_PATH,
+        "--indexes", INDEXES_PATH,
+        "--stdin"
+      ]);
+
+      proc.stdin.write(code);
+      proc.stdin.end();
+
+      let stdout = "";
+      let stderr = "";
+
+      proc.stdout.on("data", (data) => stdout += data);
+      proc.stderr.on("data", (data) => stderr += data);
+
+      proc.on("close", (code) => {
+        if (code === 0) {
+          resolve(JSON.parse(stdout));
+        } else {
+          reject(new Error(stderr || stdout));
+        }
+      });
+    });
+  }
+  ```
+
+- [ ] **3b.1: Codebase Context Layer**
+
+  Build the `CodebaseContext` class that provides programmatic access to the codebase without loading it into LLM context:
+
+  ```python
+  # tools/rlm-env/codebase.py
+
+  class CodebaseContext:
+      """Codebase access layer - never loads full content into LLM context"""
+
+      def __init__(self, root_path: str, indexes_path: str):
+          self.root = Path(root_path)
+          self.indexes = load_indexes(indexes_path)
+
+      def list_files(self, glob_pattern: str = "**/*.rs") -> List[str]:
+          """List files matching pattern"""
+          return [str(p.relative_to(self.root))
+                  for p in self.root.glob(glob_pattern)]
+
+      def list_modules(self) -> List[str]:
+          """List all Rust modules/crates"""
+          return list(self.indexes["modules"].keys())
+
+      def peek(self, file: str, lines: int = 50) -> str:
+          """Sample first N lines of a file (for structure understanding)"""
+          path = self.root / file
+          with open(path) as f:
+              return "".join(f.readline() for _ in range(lines))
+
+      def grep(self, pattern: str, glob: str = "*.rs") -> List[GrepMatch]:
+          """Search for pattern without loading files into context"""
+          matches = []
+          regex = re.compile(pattern)
+          for file in self.list_files(glob):
+              path = self.root / file
+              with open(path) as f:
+                  for i, line in enumerate(f, 1):
+                      if regex.search(line):
+                          matches.append(GrepMatch(file, i, line.strip()))
+          return matches
+
+      def read_section(self, file: str, start: int, end: int) -> str:
+          """Read specific line range from file"""
+          path = self.root / file
+          with open(path) as f:
+              lines = f.readlines()
+              return "".join(lines[start-1:end])
+
+      def read_context(self, file: str, line: int, padding: int = 10) -> str:
+          """Read context around a specific line"""
+          return self.read_section(file, max(1, line - padding), line + padding)
+
+      def get_module(self, module: str) -> "ModuleContext":
+          """Get focused context for a single module"""
+          files = self.indexes["modules"][module]["files"]
+          return ModuleContext(self, module, files)
+
+      def partition_by_module(self) -> List["ModuleContext"]:
+          """Partition codebase into module contexts for map-reduce"""
+          return [self.get_module(m) for m in self.list_modules()]
+  ```
+
+- [ ] **3b.2: RLM Execution Environment**
+
+  Build the REPL environment where agent code executes with sandboxing:
+
+  ```python
+  # tools/rlm-env/environment.py
+
+  import signal
+  from RestrictedPython import compile_restricted, safe_globals
+  from RestrictedPython.Guards import safe_builtins, guarded_iter_unpack_sequence
+
+  EXECUTION_TIMEOUT_SECONDS = 30
+  MAX_RECURSIVE_DEPTH = 3
+  MAX_OUTPUT_BYTES = 100 * 1024  # 100KB
+
+  class TimeoutError(Exception):
+      pass
+
+  class RLMEnvironment:
+      """REPL environment for RLM execution with sandboxing"""
+
+      def __init__(self, codebase_path: str, indexes_path: str):
+          self.codebase = CodebaseContext(codebase_path, indexes_path)
+          self.indexes = load_indexes(indexes_path)
+          self.constraints = load_constraints(indexes_path)
+          self.llm = ClaudeAPI()  # For recursive calls
+          self.execution_log = []
+          self._final_result = None
+
+      def execute(self, code: str, depth: int = 0) -> Any:
+          """Execute agent-written code in SANDBOXED environment"""
+
+          # Prevent unbounded recursive spawning
+          if depth >= MAX_RECURSIVE_DEPTH:
+              return {"error": f"Maximum recursive depth ({MAX_RECURSIVE_DEPTH}) exceeded"}
+
+          # Timeout handler
+          def timeout_handler(signum, frame):
+              raise TimeoutError(f"Execution exceeded {EXECUTION_TIMEOUT_SECONDS}s timeout")
+
+          signal.signal(signal.SIGALRM, timeout_handler)
+          signal.alarm(EXECUTION_TIMEOUT_SECONDS)
+
+          try:
+              return self._execute_inner(code, depth)
+          finally:
+              signal.alarm(0)  # Cancel timeout
+
+      def _execute_inner(self, code: str, depth: int) -> Any:
+          """Inner execution with timeout wrapper"""
+
+          # RestrictedPython: compile with restrictions
+          byte_code = compile_restricted(
+              code,
+              filename="<rlm>",
+              mode="exec"
+          )
+
+          if byte_code.errors:
+              return {"error": "Compilation failed", "details": byte_code.errors}
+
+          # Restricted globals - only what agent needs
+          restricted_globals = {
+              "__builtins__": safe_builtins,
+              "_getiter_": iter,
+              "_iter_unpack_sequence_": guarded_iter_unpack_sequence,
+
+              # Our safe APIs (read-only codebase access)
+              "codebase": self.codebase,
+              "indexes": self.indexes,
+              "constraints": self.constraints,
+
+              # Convenience shortcuts
+              "grep": self.codebase.grep,
+              "peek": self.codebase.peek,
+              "read_section": self.codebase.read_section,
+              "list_files": self.codebase.list_files,
+              "list_modules": self.codebase.list_modules,
+              "partition_by_module": self.codebase.partition_by_module,
+              "get_module": self.codebase.get_module,
+
+              # RLM operations
+              "RLM": self.recursive_call,
+              "map_reduce": self.map_reduce,
+              "FINAL": self._set_final,
+
+              # Safe utilities
+              "len": len,
+              "str": str,
+              "int": int,
+              "list": list,
+              "dict": dict,
+              "range": range,
+              "enumerate": enumerate,
+              "zip": zip,
+              "sorted": sorted,
+              "print": self._safe_print,
+          }
+
+          self.execution_log.append({"code": code, "timestamp": time.time()})
+          self._final_result = None
+          self._print_buffer = []
+
+          try:
+              exec(byte_code.code, restricted_globals)
+
+              if self._final_result is not None:
+                  return self._final_result
+              else:
+                  return {"prints": self._print_buffer, "note": "No FINAL() called"}
+
+          except FinalResultException as e:
+              return e.result
+          except Exception as e:
+              return {"error": str(e), "type": type(e).__name__}
+
+      def _set_final(self, result):
+          """FINAL(result) - signal completion"""
+          self._final_result = result
+          raise FinalResultException(result)
+
+      def _safe_print(self, *args):
+          """Capture prints instead of sending to stdout"""
+          self._print_buffer.append(" ".join(str(a) for a in args))
+
+      def recursive_call(self, query: str, context: Any) -> str:
+          """Spawn sub-LLM call with focused context (depth-1 only)"""
+          # Convert context to string if needed
+          if isinstance(context, ModuleContext):
+              context_str = context.to_summary()
+          elif isinstance(context, list):
+              context_str = "\n".join(str(c) for c in context)
+          else:
+              context_str = str(context)
+
+          # Make recursive call to LLM with focused context
+          response = self.llm.complete(
+              query=query,
+              context=context_str,
+              max_tokens=2000
+          )
+
+          self.execution_log.append({
+              "type": "recursive_call",
+              "query": query,
+              "context_size": len(context_str),
+              "response_size": len(response)
+          })
+
+          return response
+
+      def map_reduce(self, query: str, partitions: List[Any],
+                     aggregator: Callable = None) -> Any:
+          """Partition + Map pattern with optional custom aggregation"""
+          results = []
+          for i, partition in enumerate(partitions):
+              result = self.recursive_call(query, partition)
+              results.append({
+                  "partition": i,
+                  "partition_name": getattr(partition, "name", str(i)),
+                  "result": result
+              })
+
+          if aggregator:
+              return aggregator(results)
+          return results
+
+      def final_result(self, result: Any) -> None:
+          """Signal final result (terminates execution)"""
+          self.execution_log.append({"type": "final", "result": result})
+          raise FinalResultException(result)
+  ```
+
+  **Security Model:**
+
+  | Category | ALLOWED | BLOCKED |
+  |----------|---------|---------|
+  | **File Access** | Read-only via CodebaseContext | Direct `open()`, `os.*`, `pathlib` writes |
+  | **Network** | None (Claude API via wrapper only) | `socket`, `urllib`, `requests`, `http.client` |
+  | **Imports** | None (all capabilities via injected globals) | `import`, `__import__`, `importlib` |
+  | **System** | None | `subprocess`, `os.system`, `exec`, `eval` |
+  | **Builtins** | Safe subset (len, str, list, dict, etc.) | `open`, `file`, `compile`, `globals`, `locals` |
+
+  **Resource Limits:**
+  - **Execution timeout:** 30 seconds per `execute()` call
+  - **Recursive call depth:** Maximum 3 levels (prevents unbounded spawning)
+  - **Output size:** Maximum 100KB per call result
+  - **Memory:** Python process memory limit via `resource.setrlimit()`
+
+  **Why RestrictedPython:**
+  - Proven sandbox used in Zope/Plone for 20+ years
+  - Compile-time restrictions (no runtime overhead for allowed operations)
+  - Prevents attribute access to dangerous methods
+  - Guards iteration and sequence unpacking
+
+  **What Agent Can Do:**
+  ```python
+  # ALLOWED - Read codebase
+  files = list_files("*.rs")
+  content = peek("src/lib.rs", 100)
+  matches = grep(r"async fn", "*.rs")
+
+  # ALLOWED - Recursive LLM calls
+  result = RLM("summarize error handling", codebase.get_module("kelpie-core"))
+
+  # ALLOWED - Map-reduce
+  results = map_reduce("find dead code", partition_by_module())
+
+  # BLOCKED - These will fail at compile time
+  import os                    # No imports
+  open("/etc/passwd")          # No file access
+  __builtins__["eval"]         # No builtins manipulation
+  codebase.root.write_text()   # No writes even via codebase
+  ```
+
+- [ ] **3b.3: RLM MCP Tools**
+
+  Expose RLM operations as MCP tools:
+
+  ```typescript
+  // tools/mcp-kelpie/src/rlm.ts
+
+  // Simple operations (no REPL needed)
+  export async function codebase_grep(
+    pattern: string,
+    glob: string = "*.rs"
+  ): Promise<GrepMatch[]> {
+    // Direct grep without loading into context
+    return await codebase.grep(pattern, glob);
+  }
+
+  export async function codebase_peek(
+    file: string,
+    lines: number = 50
+  ): Promise<string> {
+    return await codebase.peek(file, lines);
+  }
+
+  export async function codebase_read_section(
+    file: string,
+    start: number,
+    end: number
+  ): Promise<string> {
+    return await codebase.readSection(file, start, end);
+  }
+
+  // Complex operations (REPL execution)
+  export async function rlm_execute(
+    code: string
+  ): Promise<RLMResult> {
+    /**
+     * Execute RLM code in REPL environment.
+     *
+     * Agent writes Python code that can:
+     * - grep(pattern, glob) - Search codebase
+     * - peek(file, lines) - Sample file structure
+     * - partition_by_module() - Get all modules as contexts
+     * - RLM(query, context) - Recursive sub-call
+     * - map_reduce(query, partitions) - Parallel processing
+     * - FINAL(result) - Return final result
+     *
+     * Example:
+     *   modules = partition_by_module()
+     *   dead_code = []
+     *   for m in modules:
+     *       dead = RLM("find unused functions", m)
+     *       dead_code.extend(parse_dead(dead))
+     *   FINAL(dead_code)
+     */
+    const env = new RLMEnvironment(CODEBASE_PATH, INDEXES_PATH);
+    return await env.execute(code);
+  }
+
+  export async function rlm_map_reduce(
+    query: string,
+    partition_strategy: "by_module" | "by_file" | "by_crate"
+  ): Promise<MapReduceResult> {
+    /**
+     * High-level map-reduce for common patterns.
+     * Automatically partitions and spawns recursive calls.
+     */
+    const env = new RLMEnvironment(CODEBASE_PATH, INDEXES_PATH);
+
+    let partitions;
+    switch (partition_strategy) {
+      case "by_module":
+        partitions = env.codebase.partitionByModule();
+        break;
+      case "by_file":
+        partitions = env.codebase.listFiles().map(f => env.codebase.getFile(f));
+        break;
+      case "by_crate":
+        partitions = env.codebase.listCrates().map(c => env.codebase.getCrate(c));
+        break;
+    }
+
+    return await env.mapReduce(query, partitions);
+  }
+  ```
+
+- [ ] **3b.4: RLM Skill for Complex Searches**
+
+  ```markdown
+  # .claude/skills/rlm-search.md
+
+  When asked to find ALL instances of something across the codebase:
+
+  1. DO NOT read files directly into context
+  2. USE RLM tools for comprehensive coverage
+
+  ## Simple Searches (use MCP tools directly)
+  For targeted searches with known patterns:
+  ```
+  matches = codebase_grep("pattern", "*.rs")
+  for match in matches:
+      context = codebase_read_section(match.file, match.line - 5, match.line + 5)
+      # Analyze context
+  ```
+
+  ## Comprehensive Searches (use RLM execution)
+  For "find ALL X" type queries requiring complete coverage:
+  ```
+  rlm_execute('''
+  modules = partition_by_module()
+  all_results = []
+
+  for module in modules:
+      # Recursive call processes each module separately
+      results = RLM("find all instances of X in this module", module)
+      all_results.extend(parse_results(results))
+
+  # Cross-reference with structural indexes
+  verified = []
+  for result in all_results:
+      refs = indexes.query_references(result.name)
+      verified.append({**result, "references": refs})
+
+  FINAL(verified)
+  ''')
+  ```
+
+  ## When to Use RLM vs Direct Tools
+  - **Direct MCP tools**: Single file, known location, simple pattern
+  - **RLM execution**: "Find ALL", "Every module", comprehensive analysis
+  ```
+
+**Verification:**
+```bash
+# Test codebase context
+python -c "from tools.rlm_env.codebase import CodebaseContext; c = CodebaseContext('.', '.kelpie-index'); print(c.list_modules())"
+
+# Test grep without context loading
+echo '{"tool": "codebase_grep", "args": {"pattern": "impl ActorKV", "glob": "*.rs"}}' | node tools/mcp-kelpie/src/index.js
+
+# Test RLM execution
+echo '{"tool": "rlm_execute", "args": {"code": "print(codebase.list_modules())"}}' | node tools/mcp-kelpie/src/index.js
+
+# Test map-reduce
+echo '{"tool": "rlm_map_reduce", "args": {"query": "count functions", "partition_strategy": "by_crate"}}' | node tools/mcp-kelpie/src/index.js
 ```
 
 ---
@@ -2502,6 +3316,7 @@ DST_SEED=42 cargo test -p kelpie-dst 2>&1 | md5sum
 - [ ] Phase 2.4: Module Index
 - [ ] Phase 2: Structural indexing (symbols, deps, tests)
 - [ ] Phase 3: Semantic indexing (summaries, constraints)
+- [ ] Phase 3b: RLM Environment (CodebaseContext, REPL, recursive calls, map-reduce)
 - [ ] Phase 4: MCP server (query, verify, integrity, slop detection, DST coverage)
 - [ ] Phase 4.9: DST Coverage & Integrity Tools (critical path mapping, fault type coverage, determinism verification, enforcement gate)
 - [ ] Phase 4.10: Harness Adequacy Verification (capability audit, fidelity check, simulability analysis)
@@ -2779,6 +3594,92 @@ This is sufficient data for building the MCP server (Phase 4), which will provid
 **Key Insight:**
 Structural indexes are facts; semantic indexes are interpretations. Start with facts (Phase 2 ✅), build tools to query them (Phase 4 next), then add interpretations (Phase 3) when the value is proven. This avoids premature optimization and keeps development focused.
 
+### Phase 3b: RLM Environment (Completed 2026-01-20)
+
+**Status:** Python package created and tested
+
+**Package Created:**
+- Built `tools/rlm-env/` Python package
+- Package name: `rlm-env`
+- Version: 0.1.0
+- Dependencies: anthropic, RestrictedPython
+
+**Components Implemented:**
+1. **CodebaseContext class** (`codebase.py`)
+   - `grep(pattern, glob, max_matches)` - Search without loading files
+   - `peek(file, lines)` - Sample first N lines
+   - `read_section(file, start, end)` - Read specific line range
+   - `read_context(file, line, padding)` - Read context around line
+   - `list_files(glob)`, `list_crates()`, `list_modules(crate)`
+   - `list_tests(topic, test_type)` - Query test index
+   - `get_index(name)` - Access raw indexes
+   - `partition_by_crate()` - For map-reduce operations
+   - TigerStyle: All operations read-only, explicit bounds checking
+
+2. **RLMEnvironment class** (`environment.py`)
+   - Sandboxed execution with RestrictedPython
+   - 30-second timeout per execution
+   - Max recursive depth: 3
+   - Max output: 100KB
+   - Exposes `codebase`, `indexes`, `grep`, `peek`, etc. as globals
+   - Prevents: filesystem writes, network, subprocess, imports
+   - Returns `ExecutionResult` with success, result, error, logs
+
+3. **CLI Interface** (`__main__.py`)
+   - `python -m rlm_env --codebase PATH --indexes PATH --execute CODE`
+   - `python -m rlm_env --codebase PATH --indexes PATH --stdin` (for subprocess)
+   - Returns JSON: `{"success": bool, "result": str, "error": str, "execution_log": []}`
+
+4. **Types** (`types.py`)
+   - `GrepMatch` - file, line, content
+   - `ModuleContext` - module_name, files, root_path
+   - `ExecutionResult` - success, result, error, execution_log
+
+5. **Tests** (`tests/`)
+   - `test_codebase.py` - 20+ tests for CodebaseContext
+   - `test_environment.py` - 15+ tests for RLMEnvironment
+   - Tests cover: bounds checking, sandboxing, grep, peek, partitioning
+
+**What Works:**
+- ✅ Read-only codebase access via Python functions
+- ✅ Integration with structural indexes (symbols, tests, deps, modules)
+- ✅ Sandboxed execution (RestrictedPython)
+- ✅ Timeout protection (30s limit)
+- ✅ CLI interface for subprocess invocation
+- ✅ JSON output for MCP integration
+
+**What's Deferred:**
+- ❌ Recursive LLM calls (`spawn_recursive()` - needs Claude API integration)
+- ❌ MCP server integration (Phase 4)
+- ❌ Actual installation (externally-managed Python environment on macOS)
+
+**Installation (when needed):**
+```bash
+# Create virtual environment
+python3 -m venv tools/rlm-env/venv
+source tools/rlm-env/venv/bin/activate
+
+# Install package
+pip install -e tools/rlm-env
+
+# Run tests
+cd tools/rlm-env && pytest
+```
+
+**Example Usage:**
+```python
+# Agent writes this code (executed in sandboxed environment)
+matches = grep("FdbStorage", "**/*.rs", max_matches=10)
+if matches:
+    context = read_context(matches[0].file, matches[0].line, padding=10)
+    result = context
+else:
+    result = "No matches found"
+```
+
+**Key Insight:**
+The RLM environment successfully bridges the gap between LLM context limits and large codebases. Instead of loading 186 files into context, agents write small Python programs to query exactly what they need. The sandboxing prevents dangerous operations while the integration with structural indexes provides fast, factual data access.
+
 ---
 
 ## What to Try [UPDATE AFTER EACH PHASE]
@@ -2811,6 +3712,9 @@ Structural indexes are facts; semantic indexes are interpretations. Start with f
 | What | Why | When Expected |
 |------|-----|---------------|
 | Semantic summaries | Not implemented | Phase 3 |
+| RLM Python REPL (`rlm-env`) | Not implemented | Phase 3b |
+| RLM Environment (RestrictedPython sandbox) | Not implemented | Phase 3b |
+| CodebaseContext class | Not implemented | Phase 3b |
 | MCP server | Not implemented | Phase 4 |
 | RLM skills | Not implemented | Phase 5 |
 | Hard controls | Not implemented | Phase 6 |
@@ -2821,6 +3725,10 @@ Structural indexes are facts; semantic indexes are interpretations. Start with f
 - exports_to field in symbols.json is empty (needs cross-reference analysis)
 - AgentFS database has schema but no real execution data yet
 - Semantic embeddings directory exists but is optional
+- **RLM execution timeout:** 30s hard limit may terminate complex analysis early
+- **RLM recursion depth:** 3-level limit prevents deep recursive decomposition
+- **RLM output size:** 100KB limit may truncate large analysis results
+- **RLM requires Python:** MCP server must spawn Python subprocess for RLM execution
 
 ---
 
