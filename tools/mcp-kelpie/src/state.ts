@@ -6,11 +6,13 @@
 
 import Database from "better-sqlite3";
 import { join } from "path";
+import { execSync } from "child_process";
 import { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { AuditContext } from "./audit.js";
 
 export interface StateContext {
   agentfsPath: string;
+  codebasePath: string;
   audit: AuditContext;
 }
 
@@ -173,6 +175,49 @@ export function createStateTools(context: StateContext): Array<Tool & { handler:
           throw new Error("Cannot mark task complete without proof");
         }
 
+        // HARD CONTROL: Enforce P0 constraints before marking complete
+        // Plan requirement: "All P0 constraint checks passed"
+        const constraintErrors: string[] = [];
+
+        try {
+          // Check 1: Tests must pass
+          execSync("cargo test --all", {
+            cwd: context.codebasePath,
+            stdio: "pipe",
+            timeout: 300000, // 5 minutes
+          });
+        } catch (error) {
+          constraintErrors.push("P0 VIOLATION: Tests failing (cargo test --all failed)");
+        }
+
+        try {
+          // Check 2: Clippy must pass (warnings as errors)
+          execSync("cargo clippy --all-targets --all-features -- -D warnings", {
+            cwd: context.codebasePath,
+            stdio: "pipe",
+            timeout: 180000, // 3 minutes
+          });
+        } catch (error) {
+          constraintErrors.push("P0 VIOLATION: Clippy warnings exist");
+        }
+
+        try {
+          // Check 3: Code must be formatted
+          execSync("cargo fmt --check", {
+            cwd: context.codebasePath,
+            stdio: "pipe",
+          });
+        } catch (error) {
+          constraintErrors.push("P0 VIOLATION: Code not formatted (run cargo fmt)");
+        }
+
+        // If any P0 constraints failed, reject task completion
+        if (constraintErrors.length > 0) {
+          throw new Error(
+            `Cannot mark task complete - P0 constraint violations:\n${constraintErrors.join("\n")}`
+          );
+        }
+
         const stmt = db.prepare(`
           UPDATE tasks
           SET completed_at = ?, proof = ?, status = 'completed'
@@ -186,16 +231,21 @@ export function createStateTools(context: StateContext): Array<Tool & { handler:
           throw new Error(`Task ${args.task_id} not found or already completed`);
         }
 
-        context.audit.log("task_complete", {
-          task_id: args.task_id,
-          proof_length: args.proof.length,
-        });
+        context.audit.log(
+          "task_complete",
+          {
+            task_id: args.task_id,
+            proof_length: args.proof.length,
+          },
+          { success: true, p0_checks_passed: true }
+        );
 
         return {
           success: true,
           task_id: args.task_id,
           completed_at: now,
           status: "completed",
+          p0_checks_passed: true,
         };
       },
     },

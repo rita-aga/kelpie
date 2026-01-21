@@ -3868,9 +3868,11 @@ Even if an agent ignores skill guidance, the hard controls (MCP tool gates, git 
    - Cannot be bypassed by agents (except with `--no-verify`, discouraged)
    - Installation: `./tools/install-hooks.sh`
 
-2. **Index Freshness Gate** - MCP tool enforcement (already implemented in Phase 4)
+2. **Index Freshness Gate** - MCP tool enforcement (Phase 4, enhanced in Phase 6)
    - Location: `tools/mcp-kelpie/src/indexes.ts:checkFreshness()`
-   - Warns if indexes are >1 hour old
+   - **CRITICAL FIX**: Now compares git SHAs (plan requirement)
+   - If git SHA changed since index build → STALE (regardless of time)
+   - If >1 hour old → WARNING (secondary check)
    - Returns freshness status with every index query
    - Example response:
      ```json
@@ -3878,28 +3880,47 @@ Even if an agent ignores skill guidance, the hard controls (MCP tool gates, git 
        "matches": [...],
        "freshness": {
          "fresh": false,
-         "message": "Indexes are 125 minutes old"
+         "message": "Index stale: git SHA changed (index: a769a693, current: ae1654ef). Run index_refresh.",
+         "git_sha_mismatch": true
        }
      }
      ```
 
-3. **Completion Verification Gate** - MCP tool enforcement (already implemented in Phase 4)
+3. **Completion Verification Gate** - MCP tool enforcement (Phase 4, enhanced in Phase 6)
    - Location: `tools/mcp-kelpie/src/state.ts:state_task_complete()`
-   - REQUIRES proof parameter (non-empty string)
-   - Throws error if proof missing: "Cannot mark task complete without proof"
-   - Example:
-     ```typescript
-     if (!args.proof || args.proof.trim().length === 0) {
-       throw new Error("Cannot mark task complete without proof");
+   - **IMPORTANT FIX**: Now enforces ALL P0 constraints before marking complete
+   - Runs three checks:
+     - `cargo test --all` (5 minute timeout)
+     - `cargo clippy --all-targets --all-features -- -D warnings` (3 minute timeout)
+     - `cargo fmt --check`
+   - If any check fails → throws error with P0 violation details
+   - Only marks complete if ALL checks pass
+   - Example error:
+     ```
+     Cannot mark task complete - P0 constraint violations:
+     P0 VIOLATION: Tests failing (cargo test --all failed)
+     P0 VIOLATION: Clippy warnings exist
+     ```
+   - Also requires proof parameter (non-empty string)
+
+4. **Audit Trail** - MCP logging (Phase 4, enhanced in Phase 6)
+   - Location: `tools/mcp-kelpie/src/audit.ts`
+   - **IMPORTANT FIX**: Now includes result and git_sha columns (plan requirement)
+   - Every MCP tool call logged to `.agentfs/agent.db`
+   - Includes: timestamp, event name, data (JSON), result (JSON), git_sha
+   - Captures git SHA at time of operation for full traceability
+   - Example log entry:
+     ```json
+     {
+       "timestamp": 1737380400000,
+       "event": "task_complete",
+       "data": {"task_id": 1, "proof_length": 234},
+       "result": {"success": true, "p0_checks_passed": true},
+       "git_sha": "82244509ae1654ef"
      }
      ```
-
-4. **Audit Trail** - MCP logging (already implemented in Phase 4)
-   - Location: `tools/mcp-kelpie/src/audit.ts`
-   - Every MCP tool call logged to `.agentfs/agent.db`
-   - Includes: timestamp, event name, data (JSON)
    - Immutable audit trail for traceability
-   - Query: `sqlite3 .agentfs/agent.db "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 10;"`
+   - Query: `sqlite3 .agentfs/agent.db "SELECT event, result, git_sha FROM audit_log ORDER BY timestamp DESC LIMIT 10;"`
 
 **Supporting Files:**
 

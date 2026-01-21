@@ -40,10 +40,32 @@ function loadIndex(indexesPath: string, indexName: string): Index {
 }
 
 /**
+ * Get current git HEAD SHA
+ * TigerStyle: Explicit error handling
+ */
+function getCurrentGitSha(codebasePath: string): string | null {
+  try {
+    const sha = execSync("git rev-parse HEAD", {
+      cwd: codebasePath,
+      encoding: "utf-8",
+    }).trim();
+    return sha;
+  } catch (error) {
+    // Not in a git repo or git not available
+    return null;
+  }
+}
+
+/**
  * Check index freshness
  * TigerStyle: Hard control - warn if index is stale
+ *
+ * CRITICAL: Compare git SHAs first (plan requirement)
+ * - If git SHA changed since index build → STALE
+ * - If git SHA unavailable, fall back to time-based check
+ * - If >1 hour old → WARNING (but not necessarily stale if no commits)
  */
-function checkFreshness(indexesPath: string): { fresh: boolean; message?: string } {
+function checkFreshness(indexesPath: string, codebasePath: string): { fresh: boolean; message?: string; git_sha_mismatch?: boolean } {
   const freshnessPath = join(indexesPath, "meta", "freshness.json");
 
   if (!existsSync(freshnessPath)) {
@@ -52,14 +74,27 @@ function checkFreshness(indexesPath: string): { fresh: boolean; message?: string
 
   try {
     const freshness = JSON.parse(readFileSync(freshnessPath, "utf-8"));
+
+    // CRITICAL: Compare git SHAs (plan requirement)
+    const currentSha = getCurrentGitSha(codebasePath);
+    if (currentSha !== null && freshness.git_sha) {
+      if (currentSha !== freshness.git_sha) {
+        return {
+          fresh: false,
+          message: `Index stale: git SHA changed (index: ${freshness.git_sha.slice(0, 8)}, current: ${currentSha.slice(0, 8)}). Run index_refresh.`,
+          git_sha_mismatch: true,
+        };
+      }
+    }
+
+    // Time-based check as secondary warning (not a hard failure)
     const indexAge = Date.now() - freshness.built_at;
     const ageMinutes = Math.floor(indexAge / 60000);
 
-    // Warn if older than 1 hour
     if (ageMinutes > 60) {
       return {
         fresh: false,
-        message: `Indexes are ${ageMinutes} minutes old (built at ${new Date(freshness.built_at).toISOString()})`,
+        message: `Indexes are ${ageMinutes} minutes old (built at ${new Date(freshness.built_at).toISOString()}). Consider refreshing.`,
       };
     }
 
@@ -93,7 +128,7 @@ export function createIndexTools(context: IndexContext): Array<Tool & { handler:
         required: ["pattern"],
       },
       handler: async (args: { pattern: string; kind?: string }) => {
-        const freshness = checkFreshness(context.indexesPath);
+        const freshness = checkFreshness(context.indexesPath, context.codebasePath);
         const symbols = loadIndex(context.indexesPath, "symbols");
 
         const matches: Array<{
@@ -154,7 +189,7 @@ export function createIndexTools(context: IndexContext): Array<Tool & { handler:
         },
       },
       handler: async (args: { topic?: string; type?: string }) => {
-        const freshness = checkFreshness(context.indexesPath);
+        const freshness = checkFreshness(context.indexesPath, context.codebasePath);
         const tests = loadIndex(context.indexesPath, "tests");
 
         let matches = tests.tests || [];
@@ -196,7 +231,7 @@ export function createIndexTools(context: IndexContext): Array<Tool & { handler:
         },
       },
       handler: async (args: { crate?: string }) => {
-        const freshness = checkFreshness(context.indexesPath);
+        const freshness = checkFreshness(context.indexesPath, context.codebasePath);
         const modules = loadIndex(context.indexesPath, "modules");
 
         let crates = modules.crates || [];
@@ -232,7 +267,7 @@ export function createIndexTools(context: IndexContext): Array<Tool & { handler:
         },
       },
       handler: async (args: { crate?: string }) => {
-        const freshness = checkFreshness(context.indexesPath);
+        const freshness = checkFreshness(context.indexesPath, context.codebasePath);
         const deps = loadIndex(context.indexesPath, "dependencies");
 
         let edges = deps.edges || [];
@@ -263,7 +298,7 @@ export function createIndexTools(context: IndexContext): Array<Tool & { handler:
         properties: {},
       },
       handler: async () => {
-        const freshness = checkFreshness(context.indexesPath);
+        const freshness = checkFreshness(context.indexesPath, context.codebasePath);
         const status: Record<string, any> = { freshness };
 
         // Check each index

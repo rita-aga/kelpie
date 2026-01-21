@@ -88,9 +88,10 @@ async function main() {
   console.error(`[MCP Kelpie] AgentFS: ${config.agentfsPath}`);
 
   // Initialize contexts
-  const auditContext = createAuditLogger(config.agentfsPath);
+  const auditContext = createAuditLogger(config.agentfsPath, config.codebasePath);
   const stateContext: StateContext = {
     agentfsPath: config.agentfsPath,
+    codebasePath: config.codebasePath,
     audit: auditContext,
   };
   const indexContext: IndexContext = {
