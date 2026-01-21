@@ -131,9 +131,9 @@ struct CrateInfo {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ModuleInfo {
-    path: String,          // e.g., "kelpie_core::actor"
-    file: String,          // e.g., "crates/kelpie-core/src/actor.rs"
-    visibility: String,    // "pub" or "private"
+    path: String,            // e.g., "kelpie_core::actor"
+    file: String,            // e.g., "crates/kelpie-core/src/actor.rs"
+    visibility: String,      // "pub" or "private"
     submodules: Vec<String>, // Names of direct child modules
 }
 
@@ -149,7 +149,7 @@ struct TestVisitor {
 }
 
 struct ModuleVisitor {
-    modules: Vec<String>, // Module names declared in this file
+    modules: Vec<String>,     // Module names declared in this file
     pub_modules: Vec<String>, // Public module names
 }
 
@@ -239,12 +239,7 @@ impl<'ast> Visit<'ast> for SymbolVisitor {
             ""
         };
 
-        let signature = format!(
-            "{}{}fn {}(..)",
-            asyncness,
-            unsafety,
-            sig.ident
-        );
+        let signature = format!("{}{}fn {}(..)", asyncness, unsafety, sig.ident);
 
         self.symbols.push(Symbol {
             name: sig.ident.to_string(),
@@ -387,7 +382,11 @@ impl<'ast> Visit<'ast> for TestVisitor {
                 path.is_ident("test")
             } else if let syn::Meta::List(meta_list) = &attr.meta {
                 // Check for #[tokio::test] or similar
-                meta_list.path.segments.iter().any(|seg| seg.ident == "test")
+                meta_list
+                    .path
+                    .segments
+                    .iter()
+                    .any(|seg| seg.ident == "test")
             } else {
                 false
             }
@@ -524,7 +523,9 @@ fn get_git_sha(workspace_root: &Path) -> Option<String> {
         .ok()
         .and_then(|output| {
             if output.status.success() {
-                String::from_utf8(output.stdout).ok().map(|s| s.trim().to_string())
+                String::from_utf8(output.stdout)
+                    .ok()
+                    .map(|s| s.trim().to_string())
             } else {
                 None
             }
@@ -589,7 +590,10 @@ fn build_dependency_graph(workspace_root: &Path) -> Result<DependencyGraph> {
         .context("Failed to run cargo metadata")?;
 
     if !output.status.success() {
-        anyhow::bail!("cargo metadata failed: {}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!(
+            "cargo metadata failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)?;
@@ -857,7 +861,10 @@ fn collect_modules(
 
             // Collect names of immediate children
             for i in submodules_before..modules.len() {
-                if let Some(child_name) = modules[i].path.strip_prefix(&format!("{}::", submodule_path)) {
+                if let Some(child_name) = modules[i]
+                    .path
+                    .strip_prefix(&format!("{}::", submodule_path))
+                {
                     if !child_name.contains("::") {
                         submodule_names.push(child_name.to_string());
                     }
@@ -907,60 +914,87 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Full => {
-            // Build both indexes
-            println!("\n=== Building Symbol Index ===");
-            let symbol_index = build_symbol_index(&workspace_root)?;
+            // Phase 7.1: Parallel structural index building
+            println!("\n=== Building All Indexes in Parallel ===");
+            let start = std::time::Instant::now();
 
-            let output_path = workspace_root.join(".kelpie-index/structural/symbols.json");
-            let json = serde_json::to_string_pretty(&symbol_index)?;
-            fs::write(&output_path, json)?;
+            // Use scoped threads for parallel building
+            std::thread::scope(|s| {
+                let symbols_handle = s.spawn(|| {
+                    println!("  [symbols] Starting...");
+                    let result = build_symbol_index(&workspace_root);
+                    println!("  [symbols] Done");
+                    result
+                });
 
-            println!("\n✓ Symbol index written to {}", output_path.display());
-            println!("  Total files indexed: {}", symbol_index.files.len());
-            let total_symbols: usize = symbol_index.files.values().map(|f| f.symbols.len()).sum();
-            println!("  Total symbols: {}", total_symbols);
+                let deps_handle = s.spawn(|| {
+                    println!("  [dependencies] Starting...");
+                    let result = build_dependency_graph(&workspace_root);
+                    println!("  [dependencies] Done");
+                    result
+                });
 
-            println!("\n=== Building Dependency Graph ===");
-            let dep_graph = build_dependency_graph(&workspace_root)?;
+                let tests_handle = s.spawn(|| {
+                    println!("  [tests] Starting...");
+                    let result = build_test_index(&workspace_root);
+                    println!("  [tests] Done");
+                    result
+                });
 
-            let output_path = workspace_root.join(".kelpie-index/structural/dependencies.json");
-            let json = serde_json::to_string_pretty(&dep_graph)?;
-            fs::write(&output_path, json)?;
+                let modules_handle = s.spawn(|| {
+                    println!("  [modules] Starting...");
+                    let result = build_module_index(&workspace_root);
+                    println!("  [modules] Done");
+                    result
+                });
 
-            println!("\n✓ Dependency graph written to {}", output_path.display());
-            println!("  Total nodes: {}", dep_graph.nodes.len());
-            println!("  Total edges: {}", dep_graph.edges.len());
+                // Join all threads and collect results
+                let symbol_index = symbols_handle.join().unwrap()?;
+                let dep_graph = deps_handle.join().unwrap()?;
+                let test_index = tests_handle.join().unwrap()?;
+                let module_index = modules_handle.join().unwrap()?;
 
-            println!("\n=== Building Test Index ===");
-            let test_index = build_test_index(&workspace_root)?;
+                let elapsed = start.elapsed();
+                println!("\n✓ All indexes built in parallel ({:.2}s)", elapsed.as_secs_f64());
 
-            let output_path = workspace_root.join(".kelpie-index/structural/tests.json");
-            let json = serde_json::to_string_pretty(&test_index)?;
-            fs::write(&output_path, json)?;
+                // Write all indexes
+                println!("\n=== Writing Indexes ===");
 
-            println!("\n✓ Test index written to {}", output_path.display());
-            println!("  Total tests: {}", test_index.tests.len());
-            println!("  By type:");
-            for (test_type, tests) in &test_index.by_type {
-                println!("    {}: {}", test_type, tests.len());
-            }
+                let output_path = workspace_root.join(".kelpie-index/structural/symbols.json");
+                let json = serde_json::to_string_pretty(&symbol_index)?;
+                fs::write(&output_path, json)?;
+                println!("  ✓ Symbol index: {} files, {} symbols",
+                    symbol_index.files.len(),
+                    symbol_index.files.values().map(|f| f.symbols.len()).sum::<usize>()
+                );
 
-            println!("\n=== Building Module Index ===");
-            let module_index = build_module_index(&workspace_root)?;
+                let output_path = workspace_root.join(".kelpie-index/structural/dependencies.json");
+                let json = serde_json::to_string_pretty(&dep_graph)?;
+                fs::write(&output_path, json)?;
+                println!("  ✓ Dependency graph: {} nodes, {} edges",
+                    dep_graph.nodes.len(), dep_graph.edges.len()
+                );
 
-            let output_path = workspace_root.join(".kelpie-index/structural/modules.json");
-            let json = serde_json::to_string_pretty(&module_index)?;
-            fs::write(&output_path, json)?;
+                let output_path = workspace_root.join(".kelpie-index/structural/tests.json");
+                let json = serde_json::to_string_pretty(&test_index)?;
+                fs::write(&output_path, json)?;
+                println!("  ✓ Test index: {} tests", test_index.tests.len());
 
-            println!("\n✓ Module index written to {}", output_path.display());
-            println!("  Total crates: {}", module_index.crates.len());
-            let total_modules: usize = module_index.crates.iter().map(|c| c.modules.len()).sum();
-            println!("  Total modules: {}", total_modules);
+                let output_path = workspace_root.join(".kelpie-index/structural/modules.json");
+                let json = serde_json::to_string_pretty(&module_index)?;
+                fs::write(&output_path, json)?;
+                let total_modules: usize = module_index.crates.iter().map(|c| c.modules.len()).sum();
+                println!("  ✓ Module index: {} crates, {} modules",
+                    module_index.crates.len(), total_modules
+                );
 
-            // Update freshness tracking
-            println!("\n=== Updating Freshness Tracking ===");
-            update_freshness(&workspace_root, &symbol_index.files)?;
-            println!("✓ Freshness tracking updated");
+                // Update freshness tracking
+                println!("\n=== Updating Freshness Tracking ===");
+                update_freshness(&workspace_root, &symbol_index.files)?;
+                println!("✓ Freshness tracking updated");
+
+                Ok::<_, anyhow::Error>(())
+            })?;
         }
         Commands::Symbols => {
             println!("\n=== Building Symbol Index ===");
@@ -1025,8 +1059,114 @@ fn main() -> Result<()> {
             println!("  Total modules: {}", total_modules);
         }
         Commands::Incremental { files } => {
-            println!("Incremental indexing not yet implemented");
-            println!("Files to index: {:?}", files);
+            // Phase 7.2: Incremental rebuild - only rebuild affected indexes
+            println!("\n=== Incremental Index Rebuild ===");
+            println!("Changed files: {}", files.len());
+
+            if files.is_empty() {
+                println!("No files changed, nothing to rebuild");
+                return Ok(());
+            }
+
+            // Analyze which indexes are affected by these files
+            let needs_symbols = files.iter().any(|f| f.ends_with(".rs"));
+            let needs_tests = files.iter().any(|f| {
+                f.contains("/tests/") || f.contains("_test.rs") || f.contains("_dst.rs")
+            });
+            let needs_modules = files.iter().any(|f| {
+                f.ends_with("/lib.rs") || f.ends_with("/main.rs") || f.ends_with("/mod.rs")
+            });
+            // Dependencies only change when Cargo.toml changes
+            let needs_deps = files.iter().any(|f| f.ends_with("Cargo.toml"));
+
+            println!("\nIndexes to rebuild:");
+            println!("  symbols: {}", if needs_symbols { "yes" } else { "no" });
+            println!("  tests: {}", if needs_tests { "yes" } else { "no" });
+            println!("  modules: {}", if needs_modules { "yes" } else { "no" });
+            println!("  dependencies: {}", if needs_deps { "yes" } else { "no" });
+
+            let mut rebuilt = Vec::new();
+
+            // Rebuild affected indexes in parallel
+            std::thread::scope(|s| {
+                let mut handles = Vec::new();
+
+                if needs_symbols {
+                    handles.push(("symbols", s.spawn(|| {
+                        println!("\n  [symbols] Rebuilding...");
+                        let index = build_symbol_index(&workspace_root)?;
+                        let output_path = workspace_root.join(".kelpie-index/structural/symbols.json");
+                        let json = serde_json::to_string_pretty(&index)?;
+                        fs::write(&output_path, json)?;
+
+                        // Update freshness
+                        update_freshness(&workspace_root, &index.files)?;
+
+                        Ok::<_, anyhow::Error>(format!(
+                            "Symbol index: {} files, {} symbols",
+                            index.files.len(),
+                            index.files.values().map(|f| f.symbols.len()).sum::<usize>()
+                        ))
+                    })));
+                }
+
+                if needs_tests {
+                    handles.push(("tests", s.spawn(|| {
+                        println!("\n  [tests] Rebuilding...");
+                        let index = build_test_index(&workspace_root)?;
+                        let output_path = workspace_root.join(".kelpie-index/structural/tests.json");
+                        let json = serde_json::to_string_pretty(&index)?;
+                        fs::write(&output_path, json)?;
+                        Ok::<_, anyhow::Error>(format!("Test index: {} tests", index.tests.len()))
+                    })));
+                }
+
+                if needs_modules {
+                    handles.push(("modules", s.spawn(|| {
+                        println!("\n  [modules] Rebuilding...");
+                        let index = build_module_index(&workspace_root)?;
+                        let output_path = workspace_root.join(".kelpie-index/structural/modules.json");
+                        let json = serde_json::to_string_pretty(&index)?;
+                        fs::write(&output_path, json)?;
+                        let total: usize = index.crates.iter().map(|c| c.modules.len()).sum();
+                        Ok::<_, anyhow::Error>(format!(
+                            "Module index: {} crates, {} modules",
+                            index.crates.len(), total
+                        ))
+                    })));
+                }
+
+                if needs_deps {
+                    handles.push(("dependencies", s.spawn(|| {
+                        println!("\n  [dependencies] Rebuilding...");
+                        let graph = build_dependency_graph(&workspace_root)?;
+                        let output_path = workspace_root.join(".kelpie-index/structural/dependencies.json");
+                        let json = serde_json::to_string_pretty(&graph)?;
+                        fs::write(&output_path, json)?;
+                        Ok::<_, anyhow::Error>(format!(
+                            "Dependency graph: {} nodes, {} edges",
+                            graph.nodes.len(), graph.edges.len()
+                        ))
+                    })));
+                }
+
+                // Collect results
+                for (name, handle) in handles {
+                    match handle.join().unwrap() {
+                        Ok(summary) => {
+                            println!("  ✓ [{}] {}", name, summary);
+                            rebuilt.push(name);
+                        }
+                        Err(e) => {
+                            eprintln!("  ✗ [{}] Error: {}", name, e);
+                        }
+                    }
+                }
+
+                Ok::<_, anyhow::Error>(())
+            })?;
+
+            println!("\n✓ Incremental rebuild complete ({} indexes updated)", rebuilt.len());
         }
     }
 

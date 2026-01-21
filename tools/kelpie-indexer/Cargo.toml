@@ -13,6 +13,7 @@ clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"
 sha2 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
+rayon = "1.8"
 
 [[bin]]
 name = "kelpie-indexer"
