@@ -189,18 +189,31 @@ async fn create_agent<R: Runtime + 'static>(
         tracing::warn!(agent_id = %created.id, error = %e, "failed to persist agent to storage");
     }
 
-    // Pre-load MCP tools into registry for actor-based message handling
+    // TigerStyle: Validate tool references (MCP tools already registered at server creation)
     if !created.tool_ids.is_empty() {
         tracing::debug!(
             agent_id = %created.id,
-            tool_count = created.tool_ids.len(),
-            "Pre-loading MCP tools at agent creation"
+            tool_ids = ?created.tool_ids,
+            "Agent created with tool references"
         );
 
+        // Validation: Check if MCP tools exist in registry
+        let registry = state.tool_registry();
         for tool_id in &created.tool_ids {
-            // Load MCP tool if it matches the pattern
-            if let Some(_tool_def) = super::messages::load_mcp_tool(&state, tool_id).await {
-                tracing::debug!(agent_id = %created.id, tool_id = %tool_id, "Loaded MCP tool into registry");
+            if tool_id.starts_with("mcp_") {
+                if registry.has_tool(tool_id).await {
+                    tracing::debug!(
+                        agent_id = %created.id,
+                        tool_id = %tool_id,
+                        "MCP tool reference validated"
+                    );
+                } else {
+                    tracing::warn!(
+                        agent_id = %created.id,
+                        tool_id = %tool_id,
+                        "Referenced MCP tool not found in registry (server may need to be created first)"
+                    );
+                }
             }
         }
     }

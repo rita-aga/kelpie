@@ -291,6 +291,22 @@ impl UnifiedToolRegistry {
         );
     }
 
+    /// Unregister a tool from the registry
+    ///
+    /// TigerStyle: Cleanup operation for MCP server deletion or custom tool removal
+    pub async fn unregister_tool(&self, name: &str) {
+        assert!(!name.is_empty(), "tool name cannot be empty");
+
+        if self.tools.write().await.remove(name).is_some() {
+            tracing::debug!(tool_name = %name, "Unregistered tool from registry");
+
+            // Also remove from custom tools if present
+            self.custom_tools.write().await.remove(name);
+        } else {
+            tracing::warn!(tool_name = %name, "Attempted to unregister non-existent tool");
+        }
+    }
+
     /// Set simulated MCP client for DST testing
     #[cfg(feature = "dst")]
     pub async fn set_sim_mcp_client(&self, client: Arc<kelpie_tools::SimMcpClient>) {

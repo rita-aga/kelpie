@@ -104,11 +104,61 @@ async fn create_server<R: Runtime + 'static>(
 
     // Create the server
     let server = state
-        .create_mcp_server(request.server_name, request.config)
+        .create_mcp_server(request.server_name.clone(), request.config)
         .await
         .map_err(|e| ApiError::internal(format!("Failed to create MCP server: {}", e)))?;
 
     tracing::info!(server_id = %server.id, server_name = %server.server_name, "Created MCP server");
+
+    // TigerStyle: Pre-register MCP tools at server creation (not lazily per-agent)
+    // This ensures tools are immediately available to all agents that reference them
+    match state.list_mcp_server_tools(&server.id).await {
+        Ok(tools) => {
+            let tool_count = tools.len();
+            tracing::debug!(
+                server_id = %server.id,
+                tool_count = tool_count,
+                "Discovered tools from MCP server"
+            );
+
+            for tool_value in tools {
+                if let Ok(tool) = serde_json::from_value::<super::tools::ToolResponse>(tool_value) {
+                    let tool_id = format!("mcp_{}_{}", server.id, tool.name);
+
+                    state
+                        .tool_registry()
+                        .register_mcp_tool(
+                            tool_id.clone(),
+                            tool.description.clone(),
+                            tool.input_schema.clone(),
+                            request.server_name.clone(),
+                        )
+                        .await;
+
+                    tracing::debug!(
+                        tool_id = %tool_id,
+                        tool_name = %tool.name,
+                        server_id = %server.id,
+                        "Registered MCP tool at server creation"
+                    );
+                }
+            }
+
+            tracing::info!(
+                server_id = %server.id,
+                tool_count = tool_count,
+                "Pre-registered MCP server tools in global registry"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                server_id = %server.id,
+                error = %e,
+                "Failed to discover tools from MCP server, tools will not be available"
+            );
+            // Don't fail server creation if tool discovery fails
+        }
+    }
 
     Ok(Json(MCPServerResponse::from(server)))
 }
@@ -159,6 +209,34 @@ async fn delete_server<R: Runtime + 'static>(
     State(state): State<AppState<R>>,
     Path(server_id): Path<String>,
 ) -> Result<(), ApiError> {
+    // TigerStyle: Clean up MCP tools before deleting server
+    // Get all registered tools to find ones belonging to this server
+    let registry = state.tool_registry();
+    let all_tools = registry.get_tool_definitions().await;
+    let prefix = format!("mcp_{}_", server_id);
+
+    let mut removed_count = 0;
+    for tool in all_tools {
+        if tool.name.starts_with(&prefix) {
+            registry.unregister_tool(&tool.name).await;
+            tracing::debug!(
+                server_id = %server_id,
+                tool_id = %tool.name,
+                "Unregistered MCP tool"
+            );
+            removed_count += 1;
+        }
+    }
+
+    if removed_count > 0 {
+        tracing::info!(
+            server_id = %server_id,
+            tool_count = removed_count,
+            "Unregistered MCP server tools from global registry"
+        );
+    }
+
+    // Delete the server
     state
         .delete_mcp_server(&server_id)
         .await
