@@ -3321,7 +3321,7 @@ DST_SEED=42 cargo test -p kelpie-dst 2>&1 | md5sum
 - [ ] Phase 4.9: DST Coverage & Integrity Tools (critical path mapping, fault type coverage, determinism verification, enforcement gate)
 - [ ] Phase 4.10: Harness Adequacy Verification (capability audit, fidelity check, simulability analysis)
 - [x] **Phase 5: RLM skills (task, verify, explore, handoff, slop-hunt)** ✅
-- [ ] Phase 6: Hard controls (hooks, gates, audit)
+- [x] **Phase 6: Hard controls (hooks, gates, audit)** ✅
 - [ ] Phase 7: Multi-agent orchestration
 - [ ] Phase 8: Integration testing
 - [ ] Phase 9: Slop cleanup workflow (initial audit on kelpie)
@@ -3851,6 +3851,134 @@ Even if an agent ignores skill guidance, the hard controls (MCP tool gates, git 
 
 ---
 
+### Phase 6: Hard Controls - Hooks and Gates (Completed 2026-01-20)
+
+**Status:** All hard controls implemented and enforced at multiple layers
+
+**Hard Controls Implemented:**
+
+1. **Pre-Commit Hook** - Git-level enforcement
+   - Location: `tools/hooks/pre-commit` (tracked), `.git/hooks/pre-commit` (active)
+   - Enforces:
+     - Constraint checks (from `.kelpie-index/constraints/extracted.json`)
+     - Code formatting (`cargo fmt --check`)
+     - Clippy linter (`cargo clippy` with warnings as errors)
+     - Full test suite (`cargo test --all`)
+   - Fast-fail design: formatting → clippy → tests (expensive last)
+   - Cannot be bypassed by agents (except with `--no-verify`, discouraged)
+   - Installation: `./tools/install-hooks.sh`
+
+2. **Index Freshness Gate** - MCP tool enforcement (already implemented in Phase 4)
+   - Location: `tools/mcp-kelpie/src/indexes.ts:checkFreshness()`
+   - Warns if indexes are >1 hour old
+   - Returns freshness status with every index query
+   - Example response:
+     ```json
+     {
+       "matches": [...],
+       "freshness": {
+         "fresh": false,
+         "message": "Indexes are 125 minutes old"
+       }
+     }
+     ```
+
+3. **Completion Verification Gate** - MCP tool enforcement (already implemented in Phase 4)
+   - Location: `tools/mcp-kelpie/src/state.ts:state_task_complete()`
+   - REQUIRES proof parameter (non-empty string)
+   - Throws error if proof missing: "Cannot mark task complete without proof"
+   - Example:
+     ```typescript
+     if (!args.proof || args.proof.trim().length === 0) {
+       throw new Error("Cannot mark task complete without proof");
+     }
+     ```
+
+4. **Audit Trail** - MCP logging (already implemented in Phase 4)
+   - Location: `tools/mcp-kelpie/src/audit.ts`
+   - Every MCP tool call logged to `.agentfs/agent.db`
+   - Includes: timestamp, event name, data (JSON)
+   - Immutable audit trail for traceability
+   - Query: `sqlite3 .agentfs/agent.db "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 10;"`
+
+**Supporting Files:**
+
+5. **Hook Installation Script** - `tools/install-hooks.sh`
+   - Copies hooks from `tools/hooks/` to `.git/hooks/`
+   - Makes hooks executable
+   - Backs up existing hooks if present
+   - Instructions for new contributors
+
+6. **Hooks Documentation** - `tools/hooks/README.md` (10 KB)
+   - Comprehensive guide to git hooks
+   - How they work, how to install, how to debug
+   - Integration with other hard controls
+   - Philosophy: Verification-first development
+   - Trust model and control layers
+
+**Layered Control Architecture:**
+
+```
+┌─────────────────────────────────────────────────────┐
+│  RLM Skills (Soft Controls - Phase 5)               │
+│  • Guide: "Verify before completion"                │
+│  • Can be ignored by agent                          │
+├─────────────────────────────────────────────────────┤
+│  MCP Tool Gates (Hard Controls - Phase 4)           │
+│  • Enforce: state_task_complete() requires proof    │
+│  • Enforce: index freshness warnings                │
+│  • Cannot be bypassed by agent                      │
+├─────────────────────────────────────────────────────┤
+│  Git Pre-Commit Hook (Hard Floor - Phase 6)         │
+│  • Block: commits if tests fail                     │
+│  • Block: commits if clippy fails                   │
+│  • Runs regardless of agent behavior                │
+├─────────────────────────────────────────────────────┤
+│  CI (Final Safety Net)                              │
+│  • Catches what hooks miss                          │
+│  • Blocks merge if checks fail                      │
+└─────────────────────────────────────────────────────┘
+```
+
+**What Works:**
+- ✅ Pre-commit hook blocks commits with failing tests
+- ✅ Pre-commit hook blocks commits with clippy warnings
+- ✅ Pre-commit hook blocks commits with formatting issues
+- ✅ Pre-commit hook runs constraint checks (if available)
+- ✅ MCP tools include freshness warnings in responses
+- ✅ MCP state_task_complete requires proof (hard control)
+- ✅ Audit trail logs all MCP operations
+- ✅ Installation script for new contributors
+- ✅ Comprehensive documentation
+
+**Key Insight:**
+
+Phase 6 completes the hard control layer by adding **git-level enforcement**. Even if:
+- Agent ignores skills (Phase 5 soft controls)
+- Agent somehow bypasses MCP gates (shouldn't be possible)
+- Agent uses `--no-verify` (strongly discouraged)
+
+**CI will still catch it** as the final safety net.
+
+This ensures that **every commit is working code**. No exceptions. No trust required.
+
+**Verification Commands:**
+```bash
+# Test pre-commit hook (should run checks)
+git commit --allow-empty -m "test hook"
+
+# View audit trail
+sqlite3 .agentfs/agent.db "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 5;"
+
+# Check freshness gate (in MCP tool responses)
+# Run any index query and check "freshness" field
+
+# Test completion gate (should fail without proof)
+# Try calling state_task_complete without proof parameter
+```
+
+---
+
 ## What to Try [UPDATE AFTER EACH PHASE]
 
 ### Works Now ✅
@@ -3896,6 +4024,12 @@ Even if an agent ignores skill guidance, the hard controls (MCP tool gates, git 
 | **RLM Slop Hunt Skill** | `cat .claude/skills/rlm-slop-hunt.md` | See slop detection and cleanup (14 KB) |
 | **Constraint Injection Prompt** | `cat .claude/skills/constraint-injection-prompt.md` | See P0 constraints and system prompt (7.8 KB) |
 | **Skills README** | `cat .claude/skills/README.md` | See skills overview, philosophy, examples (8.5 KB) |
+| **Pre-commit hook (tracked)** | `cat tools/hooks/pre-commit` | See hook script with all enforcement checks |
+| **Pre-commit hook (active)** | `ls -lh .git/hooks/pre-commit` | Should show executable permissions (-rwxr-xr-x) |
+| **Hook installation script** | `./tools/install-hooks.sh` | Installs hooks, shows confirmation message |
+| **Hooks README** | `cat tools/hooks/README.md` | See hooks documentation (10 KB) |
+| **Test pre-commit hook** | `git commit --allow-empty -m "test"` | Should run fmt, clippy, tests (all must pass) |
+| **View audit log** | `sqlite3 .agentfs/agent.db "SELECT * FROM audit_log LIMIT 5;"` | See logged MCP tool calls with timestamps |
 
 ### Doesn't Work Yet ❌
 | What | Why | When Expected |
