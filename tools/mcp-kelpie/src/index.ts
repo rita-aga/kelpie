@@ -185,6 +185,7 @@ async function main() {
     // TigerStyle: Type assertion eliminated - handler is guaranteed by ToolWithHandler type
     const result = await tool.handler(args || {});
     return {
+      result, // Keep raw result for audit logging
       content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
     };
   }
@@ -216,9 +217,12 @@ async function main() {
       ];
 
       for (const tools of toolCollections) {
-        const result = await executeTool(tools, name, args);
-        if (result !== null) {
-          return result;
+        const response = await executeTool(tools, name, args);
+        if (response !== null) {
+          // Log successful tool result (raw result, not MCP response)
+          auditContext.log("tool_result", { tool: name }, response.result);
+          // Return MCP response (without the result field)
+          return { content: response.content };
         }
       }
 
