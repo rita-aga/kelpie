@@ -3707,14 +3707,20 @@ The RLM environment successfully bridges the gap between LLM context limits and 
 | **View module hierarchy** | `cat .kelpie-index/structural/modules.json \| jq '.crates\[\] \| select(.name == "kelpie-core")'` | See kelpie-core module tree |
 | **Module count by crate** | `cat .kelpie-index/structural/modules.json \| jq '.crates \| map({name, module_count: (.modules\|length)})'` | See module counts |
 | **Semantic infrastructure** | `cat .kelpie-index/semantic/README.md` | See Phase 3 design and implementation guide |
+| **RLM Environment package** | `ls tools/rlm-env/` | See Python package structure (pyproject.toml, rlm_env/, tests/) |
+| **CodebaseContext class** | `python3 -m py_compile tools/rlm-env/rlm_env/codebase.py` | File compiles successfully (311 lines) |
+| **RLMEnvironment class** | `python3 -m py_compile tools/rlm-env/rlm_env/environment.py` | File compiles successfully (180 lines) |
+| **RLM CLI interface** | `python3 -m py_compile tools/rlm-env/rlm_env/__main__.py` | File compiles successfully (95 lines) |
+| **RLM tests** | `cat tools/rlm-env/tests/test_codebase.py \| wc -l` | 210 lines, 20+ tests for CodebaseContext |
+| **RLM README** | `cat tools/rlm-env/README.md` | See architecture, API docs, examples (280 lines) |
 
 ### Doesn't Work Yet ❌
 | What | Why | When Expected |
 |------|-----|---------------|
-| Semantic summaries | Not implemented | Phase 3 |
-| RLM Python REPL (`rlm-env`) | Not implemented | Phase 3b |
-| RLM Environment (RestrictedPython sandbox) | Not implemented | Phase 3b |
-| CodebaseContext class | Not implemented | Phase 3b |
+| Semantic summaries | Deferred (cost/complexity) | Phase 3 (future) |
+| RLM package installation | Requires virtual environment setup | When needed for MCP integration |
+| RLM test execution | Package not installed yet | When needed for MCP integration |
+| Recursive LLM calls in RLM | Requires Claude API integration | Phase 3b extension or Phase 5 |
 | MCP server | Not implemented | Phase 4 |
 | RLM skills | Not implemented | Phase 5 |
 | Hard controls | Not implemented | Phase 6 |
@@ -3724,11 +3730,11 @@ The RLM environment successfully bridges the gap between LLM context limits and 
 - Dependency graph only includes crate-level dependencies (not fine-grained type relationships)
 - exports_to field in symbols.json is empty (needs cross-reference analysis)
 - AgentFS database has schema but no real execution data yet
-- Semantic embeddings directory exists but is optional
 - **RLM execution timeout:** 30s hard limit may terminate complex analysis early
 - **RLM recursion depth:** 3-level limit prevents deep recursive decomposition
 - **RLM output size:** 100KB limit may truncate large analysis results
 - **RLM requires Python:** MCP server must spawn Python subprocess for RLM execution
+- **RLM package not installed:** Cannot run tests until virtual environment is set up (macOS externally-managed-environment)
 
 ---
 
