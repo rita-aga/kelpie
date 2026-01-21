@@ -188,3 +188,86 @@ def test_timeout_protection(env):
     # """)
     # assert not result.success
     # assert "timeout" in result.error.lower()
+
+
+def test_safe_print(env):
+    """Test that print() is captured and doesn't go to stdout."""
+    result = env.execute("""
+print("Hello")
+print("World", 123)
+result = "done"
+""")
+    assert result.success
+    assert result.result == "done"
+    # Print output is captured in execution log
+    assert any("PRINT: Hello" in log for log in result.execution_log)
+    assert any("PRINT: World 123" in log for log in result.execution_log)
+
+
+def test_final_method(env):
+    """Test FINAL() method signals completion."""
+    result = env.execute("""
+result = "before"
+FINAL("completed")
+result = "after"  # This should not execute
+""")
+    assert result.success
+    assert result.result == "completed"
+    # Verify FINAL was called
+    assert any("FINAL called" in log for log in result.execution_log)
+
+
+def test_final_with_complex_result(env):
+    """Test FINAL() with complex data structure."""
+    result = env.execute("""
+data = {"status": "ok", "count": 42}
+FINAL(data)
+""")
+    assert result.success
+    assert result.result == {"status": "ok", "count": 42}
+
+
+def test_map_reduce(env):
+    """Test map_reduce() method."""
+    result = env.execute("""
+partitions = ["part1", "part2", "part3"]
+results = map_reduce("test query", partitions)
+result = len(results)
+""")
+    assert result.success
+    assert result.result == 3
+    # Verify map_reduce was called
+    assert any("MAP_REDUCE" in log for log in result.execution_log)
+
+
+def test_map_reduce_with_aggregator(env):
+    """Test map_reduce() with custom aggregator."""
+    result = env.execute("""
+def count_aggregator(results):
+    return len(results)
+
+partitions = ["a", "b"]
+result = map_reduce("test", partitions, aggregator=count_aggregator)
+""")
+    assert result.success
+    assert result.result == 2
+
+
+def test_output_size_limit(env):
+    """Test that output size limit is enforced."""
+    # Create output larger than 100KB
+    result = env.execute("""
+result = "x" * 200000  # 200KB of x's
+""")
+    assert not result.success
+    assert "Output size" in result.error
+    assert "exceeds maximum" in result.error
+
+
+def test_output_size_under_limit(env):
+    """Test that output under limit works fine."""
+    result = env.execute("""
+result = "x" * 1000  # 1KB of x's
+""")
+    assert result.success
+    assert len(result.result) == 1000

@@ -303,13 +303,16 @@ export async function rlm_execute(code: string): Promise<RLMResult> {
 - ✅ RLMEnvironment (sandboxed execution)
 - ✅ CLI interface
 - ✅ Index integration (symbols, tests, dependencies, modules)
+- ✅ Tests (35+ tests for CodebaseContext and RLMEnvironment)
+- ✅ Output size enforcement (100KB limit)
+- ✅ FINAL() method for completion signaling
+- ✅ _safe_print() for captured output
+- ✅ map_reduce() for partition + map pattern
 - ❌ Recursive LLM calls (requires Claude API integration)
-- ❌ Tests (coming next)
 - ❌ MCP server integration (Phase 4)
 
 ## Next Steps
 
-1. **Add tests** - Unit tests for CodebaseContext and RLMEnvironment
-2. **LLM integration** - Implement `spawn_recursive()` with Claude API
-3. **MCP tool** - Add `rlm_execute` tool to MCP server (Phase 4)
-4. **RLM skills** - Build agent skills that use RLM (Phase 5)
+1. **LLM integration** - Implement `spawn_recursive()` with Claude API
+2. **MCP tool** - Add `rlm_execute` tool to MCP server (Phase 4)
+3. **RLM skills** - Build agent skills that use RLM (Phase 5)

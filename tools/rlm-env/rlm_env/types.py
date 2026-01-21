@@ -1,7 +1,7 @@
 """Types for RLM environment."""
 
 from dataclasses import dataclass
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 
 @dataclass
@@ -33,9 +33,9 @@ class ExecutionResult:
     """Result of RLM code execution."""
 
     success: bool
-    result: Any = None
-    error: str = None
-    execution_log: List[str] = None
+    result: Optional[Any] = None
+    error: Optional[str] = None
+    execution_log: Optional[List[str]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""

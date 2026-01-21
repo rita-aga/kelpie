@@ -4,7 +4,7 @@ Provides a REPL environment where agent code executes with RestrictedPython sand
 """
 
 import signal
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Callable, Optional
 from RestrictedPython import compile_restricted
 from RestrictedPython.Guards import safe_builtins, guarded_iter_unpack_sequence
 
@@ -21,6 +21,14 @@ class TimeoutError(Exception):
     """Execution timeout error."""
 
     pass
+
+
+class FinalResultException(Exception):
+    """Exception raised when FINAL() is called to signal completion."""
+
+    def __init__(self, result: Any):
+        self.result = result
+        super().__init__(f"Final result: {result}")
 
 
 class RLMEnvironment:
@@ -44,6 +52,8 @@ class RLMEnvironment:
         self.codebase = CodebaseContext(codebase_path, indexes_path)
         self.execution_log: List[str] = []
         self._recursive_depth = 0
+        self._print_buffer: List[str] = []
+        self._final_result: Optional[Any] = None
 
     def execute(self, code: str) -> ExecutionResult:
         """Execute agent-written code in SANDBOXED environment.
@@ -79,6 +89,11 @@ class RLMEnvironment:
 
         try:
             return self._execute_inner(code)
+        except FinalResultException as e:
+            # Agent called FINAL() - return the final result
+            return ExecutionResult(
+                success=True, result=e.result, execution_log=self.execution_log
+            )
         except TimeoutError as e:
             return ExecutionResult(
                 success=False, error=str(e), execution_log=self.execution_log
@@ -103,6 +118,9 @@ class RLMEnvironment:
         Returns:
             ExecutionResult
         """
+        # Clear print buffer for this execution
+        self._print_buffer = []
+
         # Log execution
         self.execution_log.append(f"Executing code (depth={self._recursive_depth})")
 
@@ -130,6 +148,17 @@ class RLMEnvironment:
             # Extract result from global namespace
             # Agent can set 'result' variable to return a value
             result = restricted_globals.get("result", None)
+
+            # TigerStyle: Enforce output size limit
+            result_str = str(result) if result is not None else ""
+            result_size_bytes = len(result_str.encode("utf-8"))
+
+            if result_size_bytes > MAX_OUTPUT_BYTES:
+                return ExecutionResult(
+                    success=False,
+                    error=f"Output size ({result_size_bytes} bytes) exceeds maximum ({MAX_OUTPUT_BYTES} bytes)",
+                    execution_log=self.execution_log,
+                )
 
             return ExecutionResult(
                 success=True, result=result, execution_log=self.execution_log
@@ -191,9 +220,81 @@ class RLMEnvironment:
             "get_module": self.codebase.get_module,
             "partition_by_crate": self.codebase.partition_by_crate,
             "get_index": self.codebase.get_index,
+            # RLM-specific methods
+            "FINAL": self._final,
+            "print": self._safe_print,
+            "map_reduce": self._map_reduce,
+            "spawn_recursive": self.spawn_recursive,
             # Result placeholder (agent sets this to return a value)
             "result": None,
         }
+
+    def _safe_print(self, *args: Any) -> None:
+        """Capture prints instead of sending to stdout.
+
+        Args:
+            *args: Values to print
+
+        TigerStyle: Print output is captured, not sent to stdout
+        """
+        output = " ".join(str(a) for a in args)
+        self._print_buffer.append(output)
+        self.execution_log.append(f"PRINT: {output}")
+
+    def _final(self, result: Any) -> None:
+        """Signal final result (terminates execution).
+
+        Args:
+            result: The final result to return
+
+        TigerStyle: Raises FinalResultException to terminate execution
+        """
+        self._final_result = result
+        self.execution_log.append(f"FINAL called with result: {result}")
+        raise FinalResultException(result)
+
+    def _map_reduce(
+        self, query: str, partitions: List[Any], aggregator: Optional[Callable] = None
+    ) -> Any:
+        """Partition + Map pattern with optional custom aggregation.
+
+        Args:
+            query: Question to ask for each partition
+            partitions: List of partitions to map over
+            aggregator: Optional function to aggregate results
+
+        Returns:
+            Aggregated results or list of partition results
+
+        TigerStyle: Map-reduce pattern for processing partitioned codebase
+        """
+        # TigerStyle: Validate preconditions
+        assert isinstance(query, str), "query must be string"
+        assert len(query) > 0, "query cannot be empty"
+        assert isinstance(partitions, list), "partitions must be list"
+        assert len(partitions) > 0, "partitions cannot be empty"
+
+        self.execution_log.append(
+            f"MAP_REDUCE: query='{query}' partitions={len(partitions)}"
+        )
+
+        results = []
+        for i, partition in enumerate(partitions):
+            # Call spawn_recursive for each partition
+            result = self.spawn_recursive(query, str(partition))
+            results.append(
+                {
+                    "partition": i,
+                    "partition_name": getattr(partition, "name", str(i)),
+                    "result": result,
+                }
+            )
+
+        # Apply custom aggregator if provided
+        if aggregator is not None:
+            return aggregator(results)
+
+        return results
 
     def spawn_recursive(self, query: str, context: str) -> str:
         """Spawn a recursive RLM call.
