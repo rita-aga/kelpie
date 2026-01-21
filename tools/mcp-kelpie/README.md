@@ -104,6 +104,13 @@ Add to your MCP settings (e.g., Claude Desktop config):
 | `detect_dead_code` | Detect unused dependencies and orphaned files | `check_deps?: boolean, check_orphans?: boolean` |
 | `detect_test_coverage_gaps` | Find modules without tests | (none) |
 
+### Constraint Enforcement Tools (Phase 4.2)
+
+| Tool | Description | Arguments |
+|------|-------------|-----------|
+| `constraint_check` | Check for P0 constraint violations | `check_types?: string[]` (placeholders, unwraps, dst_coverage, tigerstyle, planning) |
+| `constraint_list` | List all P0 constraints and enforcement rules | (none) |
+
 ## Architecture
 
 ```
@@ -117,7 +124,8 @@ tools/mcp-kelpie/
     ├── indexes.ts        # Index query & management (Phase 4.3 + 4.5)
     ├── verify.ts         # Verification by execution (Phase 4.4)
     ├── integrity.ts      # Hard integrity controls (Phase 4.7)
-    └── slop.ts           # Slop detection tools (Phase 4.8)
+    ├── slop.ts           # Slop detection tools (Phase 4.8)
+    └── constraints.ts    # P0 constraint enforcement (Phase 4.2)
 ```
 
 ## Hard Controls
@@ -248,7 +256,7 @@ npm start
 - ✅ Phase 4.7: Integrity Tools (2 tools - mark_phase_complete, start_plan_session)
 - ✅ Phase 4.8: Slop Detection Tools (2 tools - dead code, coverage gaps)
 
-**Total: 20 MCP tools implemented**
+**Total: 22 MCP tools implemented**
 
 ## Next Steps
 

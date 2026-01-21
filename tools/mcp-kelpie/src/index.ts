@@ -27,6 +27,7 @@ import { createIndexTools, IndexContext } from "./indexes.js";
 import { createVerificationTools, VerificationContext } from "./verify.js";
 import { createIntegrityTools, IntegrityContext } from "./integrity.js";
 import { createSlopTools, SlopContext } from "./slop.js";
+import { createConstraintTools, ConstraintsContext } from "./constraints.js";
 import { createAuditLogger } from "./audit.js";
 
 /**
@@ -101,6 +102,10 @@ async function main() {
     indexesPath: config.indexesPath,
     audit: auditContext,
   };
+  const constraintsContext: ConstraintsContext = {
+    codebasePath: config.codebasePath,
+    audit: auditContext,
+  };
 
   // Create MCP server
   const server = new Server(
@@ -121,8 +126,16 @@ async function main() {
   const verificationTools = createVerificationTools(verifyContext);
   const integrityTools = createIntegrityTools(integrityContext);
   const slopTools = createSlopTools(slopContext);
+  const constraintTools = createConstraintTools(constraintsContext);
 
-  const allTools: Tool[] = [...stateTools, ...indexTools, ...verificationTools, ...integrityTools, ...slopTools];
+  const allTools: Tool[] = [
+    ...stateTools,
+    ...indexTools,
+    ...verificationTools,
+    ...integrityTools,
+    ...slopTools,
+    ...constraintTools,
+  ];
 
   console.error(`[MCP Kelpie] Registered ${allTools.length} tools`);
 
@@ -191,6 +204,18 @@ async function main() {
       const slopTool = slopTools.find((t) => t.name === name);
       if (slopTool) {
         const handler = (slopTool as any).handler;
+        if (!handler) {
+          throw new Error(`Tool ${name} has no handler`);
+        }
+        const result = await handler(args || {});
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      const constraintTool = constraintTools.find((t) => t.name === name);
+      if (constraintTool) {
+        const handler = (constraintTool as any).handler;
         if (!handler) {
           throw new Error(`Tool ${name} has no handler`);
         }
