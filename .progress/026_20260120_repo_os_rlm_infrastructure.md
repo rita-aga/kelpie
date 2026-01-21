@@ -2488,6 +2488,45 @@ Topic extraction from test names provides valuable semantic organization. The in
 **Key Insight:**
 The module index provides a clear map of the codebase structure. It makes it easy to navigate the hierarchy (which modules exist in which crates) and understand the organization without manually exploring directories. This is especially useful for large crates like kelpie-server with 42 modules.
 
+### Phase 3: Semantic Indexing Infrastructure (2026-01-20)
+
+**Status:** Infrastructure Ready, LLM Generation Deferred
+
+**Infrastructure Created:**
+- Created `semantic/` directory structure with subdirectories
+- Documented semantic indexing approach (HCGS - Hierarchical Code Graph Summarization)
+- Designed schema for crate/module/file summaries
+- Planned constraint extraction and cross-validation
+- Comprehensive README with implementation guide
+
+**What Would Phase 3 Include:**
+1. **Hierarchical Summaries** - LLM-generated summaries (function → file → module → crate)
+2. **Constraint Extraction** - Extract and verify constraints from `.vision/CONSTRAINTS.md`
+3. **Cross-Validation** - Compare structural vs semantic indexes for inconsistencies
+4. **Embeddings (Optional)** - Vector embeddings for semantic search
+
+**Why Deferred:**
+- Requires LLM API integration (Anthropic API client, rate limiting, cost management)
+- Multi-agent orchestration adds complexity
+- Significant API costs to summarize 186 files across multiple levels
+- Structural indexes (Phase 2) are sufficient for Phase 4 (MCP Server)
+- Can be added later when cost/benefit is clear
+
+**Decision Rationale:**
+Phase 3 is valuable but not blocking. The structural indexes provide:
+- Complete symbol catalog (3,563 symbols)
+- Dependency graph (46 edges)
+- Test index (591 tests, 649 topics)
+- Module hierarchy (120 modules)
+
+This is sufficient data for building the MCP server (Phase 4), which will provide concrete value. Phase 3 semantic summaries can be added incrementally later when:
+- MCP server is validated
+- LLM summarization strategy is refined
+- Cost is justified
+
+**Key Insight:**
+Structural indexes are facts; semantic indexes are interpretations. Start with facts (Phase 2 ✅), build tools to query them (Phase 4 next), then add interpretations (Phase 3) when the value is proven. This avoids premature optimization and keeps development focused.
+
 ---
 
 ## What to Try [UPDATE AFTER EACH PHASE]
@@ -2514,6 +2553,7 @@ The module index provides a clear map of the codebase structure. It makes it eas
 | **Module index** | `cargo run -p kelpie-indexer -- modules` | Index 14 crates, discover 120 modules |
 | **View module hierarchy** | `cat .kelpie-index/structural/modules.json \| jq '.crates\[\] \| select(.name == "kelpie-core")'` | See kelpie-core module tree |
 | **Module count by crate** | `cat .kelpie-index/structural/modules.json \| jq '.crates \| map({name, module_count: (.modules\|length)})'` | See module counts |
+| **Semantic infrastructure** | `cat .kelpie-index/semantic/README.md` | See Phase 3 design and implementation guide |
 
 ### Doesn't Work Yet ❌
 | What | Why | When Expected |
