@@ -111,6 +111,13 @@ Add to your MCP settings (e.g., Claude Desktop config):
 | `constraint_check` | Check for P0 constraint violations | `check_types?: string[]` (placeholders, unwraps, dst_coverage, tigerstyle, planning) |
 | `constraint_list` | List all P0 constraints and enforcement rules | (none) |
 
+### RLM Execution Tools (Phase 4.7)
+
+| Tool | Description | Arguments |
+|------|-------------|-----------|
+| `rlm_execute` | Execute code in RLM sandbox with codebase access | `code: string` (Python code to execute) |
+| `rlm_map_reduce` | Execute map-reduce pattern in RLM sandbox | `map_code: string, reduce_code: string, partitions: number` |
+
 ## Architecture
 
 ```
@@ -125,7 +132,8 @@ tools/mcp-kelpie/
     ├── verify.ts         # Verification by execution (Phase 4.4)
     ├── integrity.ts      # Hard integrity controls (Phase 4.7)
     ├── slop.ts           # Slop detection tools (Phase 4.8)
-    └── constraints.ts    # P0 constraint enforcement (Phase 4.2)
+    ├── constraints.ts    # P0 constraint enforcement (Phase 4.2)
+    └── rlm.ts            # RLM sandbox execution (Phase 4.7)
 ```
 
 ## Hard Controls
@@ -256,7 +264,7 @@ npm start
 - ✅ Phase 4.7: Integrity Tools (2 tools - mark_phase_complete, start_plan_session)
 - ✅ Phase 4.8: Slop Detection Tools (2 tools - dead code, coverage gaps)
 
-**Total: 22 MCP tools implemented**
+**Total: 24 MCP tools implemented**
 
 ## Next Steps
 
