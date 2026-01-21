@@ -28,6 +28,8 @@ enum Commands {
     Symbols,
     /// Build only dependency graph
     Dependencies,
+    /// Build only test index
+    Tests,
     /// Build only specific files (incremental)
     Incremental { files: Vec<String> },
 }
@@ -87,9 +89,37 @@ struct GraphEdge {
     edge_type: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct TestIndex {
+    version: String,
+    description: String,
+    built_at: String,
+    git_sha: Option<String>,
+    tests: Vec<TestInfo>,
+    by_topic: HashMap<String, Vec<String>>,
+    by_type: HashMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct TestInfo {
+    name: String,
+    file: String,
+    line: u32,
+    #[serde(rename = "type")]
+    test_type: String,
+    topics: Vec<String>,
+    command: String,
+}
+
 struct SymbolVisitor {
     symbols: Vec<Symbol>,
     imports: Vec<String>,
+}
+
+struct TestVisitor {
+    tests: Vec<TestInfo>,
+    current_file: String,
+    crate_name: String,
 }
 
 impl SymbolVisitor {
@@ -248,6 +278,108 @@ impl<'ast> Visit<'ast> for SymbolVisitor {
         self.imports.push(cleaned);
 
         syn::visit::visit_item_use(self, node);
+    }
+}
+
+impl TestVisitor {
+    fn new(file_path: &Path, crate_name: String) -> Self {
+        Self {
+            tests: Vec::new(),
+            current_file: file_path.to_string_lossy().to_string(),
+            crate_name,
+        }
+    }
+
+    fn extract_topics(test_name: &str, file_path: &str) -> Vec<String> {
+        let mut topics = Vec::new();
+
+        // Extract from file path
+        if let Some(file_name) = Path::new(file_path).file_stem() {
+            let file_str = file_name.to_string_lossy().to_string();
+            // Split by underscore and filter common words
+            for part in file_str.split('_') {
+                if !["test", "dst", "chaos", "rs"].contains(&part) && !part.is_empty() {
+                    topics.push(part.to_lowercase());
+                }
+            }
+        }
+
+        // Extract from test name
+        let test_str = test_name.trim_start_matches("test_");
+        for part in test_str.split('_') {
+            if !["test", "dst", "chaos"].contains(&part) && !part.is_empty() {
+                let topic = part.to_lowercase();
+                if !topics.contains(&topic) {
+                    topics.push(topic);
+                }
+            }
+        }
+
+        topics
+    }
+
+    fn categorize_test(file_path: &str, is_in_tests_dir: bool) -> String {
+        if file_path.ends_with("_dst.rs") {
+            "dst".to_string()
+        } else if file_path.ends_with("_chaos.rs") {
+            "chaos".to_string()
+        } else if is_in_tests_dir {
+            "integration".to_string()
+        } else {
+            "unit".to_string()
+        }
+    }
+
+    fn generate_command(&self, test_name: &str, is_in_tests_dir: bool) -> String {
+        if is_in_tests_dir {
+            // Integration test
+            let test_file_stem = Path::new(&self.current_file)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown");
+            format!(
+                "cargo test -p {} --test {} {}",
+                self.crate_name, test_file_stem, test_name
+            )
+        } else {
+            // Unit test
+            format!("cargo test -p {} --lib {}", self.crate_name, test_name)
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for TestVisitor {
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        // Check if this is a test function
+        let is_test = node.attrs.iter().any(|attr| {
+            if let syn::Meta::Path(path) = &attr.meta {
+                path.is_ident("test")
+            } else if let syn::Meta::List(meta_list) = &attr.meta {
+                // Check for #[tokio::test] or similar
+                meta_list.path.segments.iter().any(|seg| seg.ident == "test")
+            } else {
+                false
+            }
+        });
+
+        if is_test {
+            let test_name = node.sig.ident.to_string();
+            let is_in_tests_dir = self.current_file.contains("/tests/");
+            let test_type = Self::categorize_test(&self.current_file, is_in_tests_dir);
+            let topics = Self::extract_topics(&test_name, &self.current_file);
+            let command = self.generate_command(&test_name, is_in_tests_dir);
+
+            self.tests.push(TestInfo {
+                name: test_name,
+                file: self.current_file.clone(),
+                line: 0, // Line numbers require source mapping
+                test_type,
+                topics,
+                command,
+            });
+        }
+
+        syn::visit::visit_item_fn(self, node);
     }
 }
 
@@ -460,6 +592,80 @@ fn build_dependency_graph(workspace_root: &Path) -> Result<DependencyGraph> {
     })
 }
 
+fn build_test_index(workspace_root: &Path) -> Result<TestIndex> {
+    println!("Scanning for test functions...");
+
+    let mut all_tests = Vec::new();
+
+    // Find all rust files in the workspace
+    let rust_files = find_rust_files(workspace_root);
+
+    for file_path in rust_files {
+        // Determine crate name from path
+        let crate_name = if let Some(crates_idx) = file_path.to_string_lossy().find("/crates/") {
+            let after_crates = &file_path.to_string_lossy()[crates_idx + 8..];
+            after_crates
+                .split('/')
+                .next()
+                .unwrap_or("unknown")
+                .to_string()
+        } else {
+            "kelpie".to_string()
+        };
+
+        // Parse file for tests
+        let content = match fs::read_to_string(&file_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let syntax = match syn::parse_file(&content) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+
+        let mut visitor = TestVisitor::new(&file_path, crate_name);
+        visitor.visit_file(&syntax);
+
+        all_tests.extend(visitor.tests);
+    }
+
+    println!("  Found {} tests", all_tests.len());
+
+    // Build by_topic index
+    let mut by_topic: HashMap<String, Vec<String>> = HashMap::new();
+    for test in &all_tests {
+        for topic in &test.topics {
+            by_topic
+                .entry(topic.clone())
+                .or_insert_with(Vec::new)
+                .push(test.name.clone());
+        }
+    }
+
+    // Build by_type index
+    let mut by_type: HashMap<String, Vec<String>> = HashMap::new();
+    for test in &all_tests {
+        by_type
+            .entry(test.test_type.clone())
+            .or_insert_with(Vec::new)
+            .push(test.name.clone());
+    }
+
+    println!("  Categorized by {} topics", by_topic.len());
+    println!("  Categorized by {} types", by_type.len());
+
+    Ok(TestIndex {
+        version: "1.0.0".to_string(),
+        description: "Test index with categorization and topics".to_string(),
+        built_at: chrono::Utc::now().to_rfc3339(),
+        git_sha: get_git_sha(workspace_root),
+        tests: all_tests,
+        by_topic,
+        by_type,
+    })
+}
+
 fn find_workspace_root() -> Result<PathBuf> {
     let mut current = std::env::current_dir()?;
 
@@ -515,6 +721,20 @@ fn main() -> Result<()> {
             println!("  Total nodes: {}", dep_graph.nodes.len());
             println!("  Total edges: {}", dep_graph.edges.len());
 
+            println!("\n=== Building Test Index ===");
+            let test_index = build_test_index(&workspace_root)?;
+
+            let output_path = workspace_root.join(".kelpie-index/structural/tests.json");
+            let json = serde_json::to_string_pretty(&test_index)?;
+            fs::write(&output_path, json)?;
+
+            println!("\n✓ Test index written to {}", output_path.display());
+            println!("  Total tests: {}", test_index.tests.len());
+            println!("  By type:");
+            for (test_type, tests) in &test_index.by_type {
+                println!("    {}: {}", test_type, tests.len());
+            }
+
             // Update freshness tracking
             println!("\n=== Updating Freshness Tracking ===");
             update_freshness(&workspace_root, &symbol_index.files)?;
@@ -551,6 +771,22 @@ fn main() -> Result<()> {
             println!("\n✓ Dependency graph written to {}", output_path.display());
             println!("  Total nodes: {}", graph.nodes.len());
             println!("  Total edges: {}", graph.edges.len());
+        }
+        Commands::Tests => {
+            println!("\n=== Building Test Index ===");
+            let test_index = build_test_index(&workspace_root)?;
+
+            // Write to .kelpie-index/structural/tests.json
+            let output_path = workspace_root.join(".kelpie-index/structural/tests.json");
+            let json = serde_json::to_string_pretty(&test_index)?;
+            fs::write(&output_path, json)?;
+
+            println!("\n✓ Test index written to {}", output_path.display());
+            println!("  Total tests: {}", test_index.tests.len());
+            println!("  By type:");
+            for (test_type, tests) in &test_index.by_type {
+                println!("    {}: {}", test_type, tests.len());
+            }
         }
         Commands::Incremental { files } => {
             println!("Incremental indexing not yet implemented");

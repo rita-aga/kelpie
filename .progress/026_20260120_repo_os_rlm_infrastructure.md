@@ -265,6 +265,46 @@ async function start_plan_session(plan_id: string): SessionResult {
 
 ---
 
+### Decision 9: DST Harness Adequacy Verification
+
+**Context:** How do we ensure the DST harness itself is complete enough to make tests meaningful?
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: Trust harness | Assume kelpie-dst is complete | Simple | Gaps undetected |
+| B: Manual audit | Human reviews harness periodically | Catches nuance | Doesn't scale, forgotten |
+| C: Automated capability audit | Tool verifies harness implements required concepts | Systematic | May miss subtle gaps |
+| D: Capability + Fidelity + Simulability | Multi-layer analysis of what harness can/can't do | Complete picture | Complex, requires maintenance |
+
+**Decision:** **Option D** - Three-layer harness adequacy verification:
+
+1. **Capability Audit** (AUTOMATED):
+   - Verify harness exports all required components (SimClock, SimStorage, SimNetwork, SimVm, etc.)
+   - Verify all 16 fault types from CONSTRAINTS.md are implemented
+   - Flag missing components or fault handlers
+
+2. **Fidelity Check** (DOCUMENTED):
+   - For each simulation component, explicitly document:
+     - What it models (e.g., SimStorage models transactions)
+     - What it does NOT model (e.g., SimStorage doesn't model FDB conflicts)
+     - Known gaps with severity and mitigation
+   - This creates a "simulation gap registry"
+
+3. **Simulability Analysis** (PER CRITICAL PATH):
+   - For each of the 8 critical paths, enumerate scenarios
+   - Determine which scenarios CAN be simulated vs CANNOT
+   - Calculate coverage quality (FULL/PARTIAL/POOR)
+   - Generate action items for improving simulability
+
+**Key Insight:** A test using the harness is only as good as the harness's fidelity to reality. If SimStorage doesn't model transaction conflicts, then a test for concurrent writes is meaningless.
+
+**Trade-offs accepted:**
+- Requires explicit documentation of simulation gaps (beneficial overhead)
+- May reveal that some critical scenarios are currently untestable (good to know)
+- Fidelity specs need maintenance as harness evolves (track with harness_evolution.jsonl)
+
+---
+
 ## Quick Decision Log
 
 | Time | Decision | Rationale | Trade-off |
@@ -2373,6 +2413,45 @@ Using syn for parsing is fast and deterministic. The indexer completes in ~1 sec
 **Key Insight:**
 Cargo metadata provides clean crate-level dependency information. Fine-grained type relationships (what structs implement what traits, what functions use what types) will require additional analysis, possibly using rust-analyzer LSP or deeper syn parsing. For now, crate-level deps are sufficient for Phase 2.2.
 
+### Phase 2.3: Test Index (Completed 2026-01-20)
+
+**Indexer Enhancement:**
+- Extended `tools/kelpie-indexer` with test function parsing
+- Added `tests` command alongside existing commands
+- Command: `cargo run --release -p kelpie-indexer -- tests`
+
+**Test Discovery:**
+- Scanned all Rust files across the workspace
+- Found **591 tests** total
+- Parsed test attributes (#[test], #[tokio::test])
+- Categorized into 3 types: unit (435), dst (141), integration (15)
+
+**Test Categorization:**
+- **DST tests:** Files ending in `_dst.rs` (deterministic simulation tests)
+- **Chaos tests:** Files ending in `_chaos.rs` (non-deterministic integration tests)
+- **Integration tests:** Tests in `tests/` directory (but not DST/chaos)
+- **Unit tests:** Tests in `src/` directories within crates
+
+**Topic Extraction:**
+- Extracted **649 unique topics** from test names and file paths
+- Topics come from both file names and test function names
+- Examples: "heartbeat", "storage", "actor", "lifecycle", "faults"
+- Common words filtered out: "test", "dst", "chaos"
+
+**Command Generation:**
+- Integration tests: `cargo test -p {crate} --test {file} {test_name}`
+- Unit tests: `cargo test -p {crate} --lib {test_name}`
+- Commands are ready to copy-paste for running specific tests
+
+**Output Structure:**
+- `.kelpie-index/structural/tests.json` with 3 sections:
+  - `tests`: Array of all test info (name, file, type, topics, command)
+  - `by_topic`: Map of topics to test names (for finding tests by subject)
+  - `by_type`: Map of test types to test names (for running all tests of a type)
+
+**Key Insight:**
+Topic extraction from test names provides valuable semantic organization. The index makes it easy to find tests related to specific features (e.g., all "storage" tests, all "heartbeat" tests) without needing to remember file locations or naming patterns.
+
 ---
 
 ## What to Try [UPDATE AFTER EACH PHASE]
@@ -2392,11 +2471,14 @@ Cargo metadata provides clean crate-level dependency information. Fine-grained t
 | **Dependency graph** | `cargo run -p kelpie-indexer -- dependencies` | Index 15 crates, build 46 dependency edges |
 | **View dependency graph** | `cat .kelpie-index/structural/dependencies.json \| jq '{node_count: (.nodes\|length), edge_count: (.edges\|length)}'` | See 15 nodes, 46 edges |
 | **View crate dependencies** | `cat .kelpie-index/structural/dependencies.json \| jq '.edges\[:5\]'` | See sample dependency relationships |
+| **Test index** | `cargo run -p kelpie-indexer -- tests` | Index 591 tests across 3 types |
+| **View test breakdown** | `cat .kelpie-index/structural/tests.json \| jq '.by_type \| map_values(length)'` | See 435 unit, 141 DST, 15 integration |
+| **Find tests by topic** | `cat .kelpie-index/structural/tests.json \| jq '.by_topic.storage\[:3\]'` | See tests related to "storage" |
+| **Get test command** | `cat .kelpie-index/structural/tests.json \| jq '.tests\[0\].command'` | See command to run a specific test |
 
 ### Doesn't Work Yet ❌
 | What | Why | When Expected |
 |------|-----|---------------|
-| Test index | Not implemented | Phase 2.3 |
 | Module hierarchy index | Not implemented | Phase 2.4 |
 | Semantic summaries | Not implemented | Phase 3 |
 | MCP server | Not implemented | Phase 4 |

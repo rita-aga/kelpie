@@ -268,6 +268,13 @@ impl AgentActor {
         let capabilities = agent.agent_type.capabilities();
         let all_tools = self.tool_registry.get_tool_definitions().await;
 
+        tracing::debug!(
+            agent_id = %ctx.id.id(),
+            agent_tool_ids = ?agent.tool_ids,
+            all_tool_names = ?all_tools.iter().map(|t| &t.name).collect::<Vec<_>>(),
+            "Tool filtering inputs"
+        );
+
         // TigerStyle: Tools allowed if in static capabilities OR in agent's tool_ids
         let tools: Vec<_> = all_tools
             .into_iter()

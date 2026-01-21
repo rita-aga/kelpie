@@ -239,6 +239,12 @@ impl UnifiedToolRegistry {
             description: Some(description_str),
         };
 
+        tracing::debug!(
+            tool_name = %name,
+            server = %server,
+            "Registering MCP tool in registry"
+        );
+
         self.tools.write().await.insert(name, tool);
     }
 
