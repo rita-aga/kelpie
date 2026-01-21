@@ -3095,10 +3095,26 @@ cat .agentfs/audit.jsonl | tail -5
 | Full rebuild | ~4.0s | ~1.0s | 4x |
 | Incremental (2 files) | N/A | ~1.0s | New capability |
 
+- ✅ **7.4: Phase 7 Review Fixes (2026-01-21)**
+  - Added auto-validation after full rebuild with `validate_indexes()` function
+  - 4 validation checks:
+    1. Git SHA consistency across all indexes
+    2. Test files exist in symbols index (with path normalization fix)
+    3. Module count consistency
+    4. Dependency node vs crate count comparison
+  - Added build progress tracking for resume capability:
+    - `BuildProgress` struct with started_at, completed_indexes, failed_indexes, git_sha
+    - `init_build_progress()` - Initialize tracking at build start
+    - `mark_index_completed()` - Track successful writes
+    - `mark_index_failed()` - Track failures (for future resume)
+    - `clear_build_progress()` - Clean up on success
+  - Fixed path normalization bug: test files used absolute paths, symbols used relative
+  - Build now fails if >50% of test files missing or other critical inconsistencies
+  - Build progress file (`.kelpie-index/meta/build_progress.json`) created during build, cleaned up on success
+
 **What Was Skipped:**
 
 - ❌ Semantic indexing with LLM agents (Phase 3 deferred, no structural changes needed)
-- ❌ Cross-validation between indexes (can be added later if needed)
 
 **Verification:**
 ```bash
@@ -3356,7 +3372,7 @@ DST_SEED=42 cargo test -p kelpie-dst 2>&1 | md5sum
 - [ ] Phase 4.10: Harness Adequacy Verification (capability audit, fidelity check, simulability analysis)
 - [x] **Phase 5: RLM skills (task, verify, explore, handoff, slop-hunt)** ✅
 - [x] **Phase 6: Hard controls (hooks, gates, audit)** ✅
-- [ ] Phase 7: Multi-agent orchestration
+- [x] **Phase 7: Parallel indexing + auto-validation + build progress tracking** ✅
 - [ ] Phase 8: Integration testing
 - [ ] Phase 9: Slop cleanup workflow (initial audit on kelpie)
 - [ ] Tests passing (`cargo test`)
