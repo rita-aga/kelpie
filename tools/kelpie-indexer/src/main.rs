@@ -30,6 +30,8 @@ enum Commands {
     Dependencies,
     /// Build only test index
     Tests,
+    /// Build only module index
+    Modules,
     /// Build only specific files (incremental)
     Incremental { files: Vec<String> },
 }
@@ -111,6 +113,30 @@ struct TestInfo {
     command: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct ModuleIndex {
+    version: String,
+    description: String,
+    built_at: String,
+    git_sha: Option<String>,
+    crates: Vec<CrateInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CrateInfo {
+    name: String,
+    root_file: String,
+    modules: Vec<ModuleInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ModuleInfo {
+    path: String,          // e.g., "kelpie_core::actor"
+    file: String,          // e.g., "crates/kelpie-core/src/actor.rs"
+    visibility: String,    // "pub" or "private"
+    submodules: Vec<String>, // Names of direct child modules
+}
+
 struct SymbolVisitor {
     symbols: Vec<Symbol>,
     imports: Vec<String>,
@@ -120,6 +146,11 @@ struct TestVisitor {
     tests: Vec<TestInfo>,
     current_file: String,
     crate_name: String,
+}
+
+struct ModuleVisitor {
+    modules: Vec<String>, // Module names declared in this file
+    pub_modules: Vec<String>, // Public module names
 }
 
 impl SymbolVisitor {
@@ -380,6 +411,29 @@ impl<'ast> Visit<'ast> for TestVisitor {
         }
 
         syn::visit::visit_item_fn(self, node);
+    }
+}
+
+impl ModuleVisitor {
+    fn new() -> Self {
+        Self {
+            modules: Vec::new(),
+            pub_modules: Vec::new(),
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for ModuleVisitor {
+    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
+        let mod_name = node.ident.to_string();
+        let is_pub = matches!(node.vis, syn::Visibility::Public(_));
+
+        self.modules.push(mod_name.clone());
+        if is_pub {
+            self.pub_modules.push(mod_name);
+        }
+
+        syn::visit::visit_item_mod(self, node);
     }
 }
 
@@ -666,6 +720,162 @@ fn build_test_index(workspace_root: &Path) -> Result<TestIndex> {
     })
 }
 
+fn build_module_index(workspace_root: &Path) -> Result<ModuleIndex> {
+    println!("Building module hierarchy...");
+
+    let mut crates = Vec::new();
+
+    // Find all crates in the workspace
+    let crates_dir = workspace_root.join("crates");
+    if crates_dir.exists() {
+        for entry in fs::read_dir(&crates_dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                let crate_name = entry.file_name().to_string_lossy().to_string();
+                let crate_path = entry.path();
+
+                // Check for src/lib.rs or src/main.rs
+                let lib_rs = crate_path.join("src/lib.rs");
+                let main_rs = crate_path.join("src/main.rs");
+
+                let root_file = if lib_rs.exists() {
+                    lib_rs
+                } else if main_rs.exists() {
+                    main_rs
+                } else {
+                    continue; // Skip crates without entry point
+                };
+
+                // Build module tree for this crate
+                let modules = build_crate_modules(&crate_name, &root_file, &crate_path)?;
+
+                crates.push(CrateInfo {
+                    name: crate_name,
+                    root_file: root_file.to_string_lossy().to_string(),
+                    modules,
+                });
+            }
+        }
+    }
+
+    println!("  Found {} crates", crates.len());
+    let total_modules: usize = crates.iter().map(|c| c.modules.len()).sum();
+    println!("  Found {} modules", total_modules);
+
+    Ok(ModuleIndex {
+        version: "1.0.0".to_string(),
+        description: "Module hierarchy for all crates".to_string(),
+        built_at: chrono::Utc::now().to_rfc3339(),
+        git_sha: get_git_sha(workspace_root),
+        crates,
+    })
+}
+
+fn build_crate_modules(
+    crate_name: &str,
+    root_file: &Path,
+    crate_path: &Path,
+) -> Result<Vec<ModuleInfo>> {
+    let mut modules = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+
+    // Start with the root file
+    let crate_module_path = crate_name.replace('-', "_");
+    collect_modules(
+        root_file,
+        &crate_module_path,
+        crate_path,
+        &mut modules,
+        &mut visited,
+    )?;
+
+    Ok(modules)
+}
+
+fn collect_modules(
+    file_path: &Path,
+    module_path: &str,
+    crate_root: &Path,
+    modules: &mut Vec<ModuleInfo>,
+    visited: &mut std::collections::HashSet<PathBuf>,
+) -> Result<()> {
+    // Avoid infinite loops
+    if visited.contains(file_path) {
+        return Ok(());
+    }
+    visited.insert(file_path.to_path_buf());
+
+    // Parse the file to find mod declarations
+    let content = match fs::read_to_string(file_path) {
+        Ok(c) => c,
+        Err(_) => return Ok(()), // Skip files we can't read
+    };
+
+    let syntax = match syn::parse_file(&content) {
+        Ok(s) => s,
+        Err(_) => return Ok(()), // Skip files we can't parse
+    };
+
+    let mut visitor = ModuleVisitor::new();
+    visitor.visit_file(&syntax);
+
+    let file_dir = file_path.parent().unwrap_or(crate_root);
+
+    // Process each module declaration
+    for mod_name in &visitor.modules {
+        let is_pub = visitor.pub_modules.contains(mod_name);
+        let visibility = if is_pub { "pub" } else { "private" };
+
+        let submodule_path = format!("{}::{}", module_path, mod_name);
+
+        // Try to find the module file
+        // Option 1: mod_name.rs in the same directory
+        let mod_file_1 = file_dir.join(format!("{}.rs", mod_name));
+        // Option 2: mod_name/mod.rs
+        let mod_file_2 = file_dir.join(mod_name).join("mod.rs");
+
+        let mod_file = if mod_file_1.exists() {
+            Some(mod_file_1)
+        } else if mod_file_2.exists() {
+            Some(mod_file_2)
+        } else {
+            None
+        };
+
+        if let Some(mod_file_path) = mod_file {
+            // Recursively collect submodules
+            let mut submodule_names = Vec::new();
+            let submodules_before = modules.len();
+
+            collect_modules(
+                &mod_file_path,
+                &submodule_path,
+                crate_root,
+                modules,
+                visited,
+            )?;
+
+            // Collect names of immediate children
+            for i in submodules_before..modules.len() {
+                if let Some(child_name) = modules[i].path.strip_prefix(&format!("{}::", submodule_path)) {
+                    if !child_name.contains("::") {
+                        submodule_names.push(child_name.to_string());
+                    }
+                }
+            }
+
+            modules.push(ModuleInfo {
+                path: submodule_path,
+                file: mod_file_path.to_string_lossy().to_string(),
+                visibility: visibility.to_string(),
+                submodules: submodule_names,
+            });
+        }
+    }
+
+    Ok(())
+}
+
 fn find_workspace_root() -> Result<PathBuf> {
     let mut current = std::env::current_dir()?;
 
@@ -735,6 +945,18 @@ fn main() -> Result<()> {
                 println!("    {}: {}", test_type, tests.len());
             }
 
+            println!("\n=== Building Module Index ===");
+            let module_index = build_module_index(&workspace_root)?;
+
+            let output_path = workspace_root.join(".kelpie-index/structural/modules.json");
+            let json = serde_json::to_string_pretty(&module_index)?;
+            fs::write(&output_path, json)?;
+
+            println!("\n✓ Module index written to {}", output_path.display());
+            println!("  Total crates: {}", module_index.crates.len());
+            let total_modules: usize = module_index.crates.iter().map(|c| c.modules.len()).sum();
+            println!("  Total modules: {}", total_modules);
+
             // Update freshness tracking
             println!("\n=== Updating Freshness Tracking ===");
             update_freshness(&workspace_root, &symbol_index.files)?;
@@ -787,6 +1009,20 @@ fn main() -> Result<()> {
             for (test_type, tests) in &test_index.by_type {
                 println!("    {}: {}", test_type, tests.len());
             }
+        }
+        Commands::Modules => {
+            println!("\n=== Building Module Index ===");
+            let module_index = build_module_index(&workspace_root)?;
+
+            // Write to .kelpie-index/structural/modules.json
+            let output_path = workspace_root.join(".kelpie-index/structural/modules.json");
+            let json = serde_json::to_string_pretty(&module_index)?;
+            fs::write(&output_path, json)?;
+
+            println!("\n✓ Module index written to {}", output_path.display());
+            println!("  Total crates: {}", module_index.crates.len());
+            let total_modules: usize = module_index.crates.iter().map(|c| c.modules.len()).sum();
+            println!("  Total modules: {}", total_modules);
         }
         Commands::Incremental { files } => {
             println!("Incremental indexing not yet implemented");

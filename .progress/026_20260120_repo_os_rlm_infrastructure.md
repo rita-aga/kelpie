@@ -2452,6 +2452,42 @@ Cargo metadata provides clean crate-level dependency information. Fine-grained t
 **Key Insight:**
 Topic extraction from test names provides valuable semantic organization. The index makes it easy to find tests related to specific features (e.g., all "storage" tests, all "heartbeat" tests) without needing to remember file locations or naming patterns.
 
+### Phase 2.4: Module Index (Completed 2026-01-20)
+
+**Indexer Enhancement:**
+- Extended `tools/kelpie-indexer` with module hierarchy parsing
+- Added `modules` command alongside existing commands
+- Command: `cargo run --release -p kelpie-indexer -- modules`
+
+**Module Discovery:**
+- Scanned **14 crates** in the workspace
+- Found **120 modules** total across all crates
+- Parsed `mod` declarations using syn visitor pattern
+- Mapped module paths to file paths (mod.rs vs module_name.rs)
+
+**Hierarchy Building:**
+- For each crate, start from lib.rs or main.rs
+- Recursively follow `mod` declarations to build tree
+- Capture public vs private visibility for each module
+- Track submodules for each parent module
+
+**Module Structure:**
+- Path: Full module path (e.g., `kelpie_server::actor::agent_actor`)
+- File: Absolute file path to the module file
+- Visibility: "pub" or "private"
+- Submodules: Names of immediate child modules
+
+**Crate Breakdown:**
+- kelpie-server: 42 modules (largest)
+- kelpie-dst: 13 modules
+- kelpie-vm: 10 modules
+- kelpie-sandbox: 10 modules
+- kelpie-core: 9 modules
+- 3 crates with 0 modules (simple single-file crates)
+
+**Key Insight:**
+The module index provides a clear map of the codebase structure. It makes it easy to navigate the hierarchy (which modules exist in which crates) and understand the organization without manually exploring directories. This is especially useful for large crates like kelpie-server with 42 modules.
+
 ---
 
 ## What to Try [UPDATE AFTER EACH PHASE]
@@ -2475,11 +2511,13 @@ Topic extraction from test names provides valuable semantic organization. The in
 | **View test breakdown** | `cat .kelpie-index/structural/tests.json \| jq '.by_type \| map_values(length)'` | See 435 unit, 141 DST, 15 integration |
 | **Find tests by topic** | `cat .kelpie-index/structural/tests.json \| jq '.by_topic.storage\[:3\]'` | See tests related to "storage" |
 | **Get test command** | `cat .kelpie-index/structural/tests.json \| jq '.tests\[0\].command'` | See command to run a specific test |
+| **Module index** | `cargo run -p kelpie-indexer -- modules` | Index 14 crates, discover 120 modules |
+| **View module hierarchy** | `cat .kelpie-index/structural/modules.json \| jq '.crates\[\] \| select(.name == "kelpie-core")'` | See kelpie-core module tree |
+| **Module count by crate** | `cat .kelpie-index/structural/modules.json \| jq '.crates \| map({name, module_count: (.modules\|length)})'` | See module counts |
 
 ### Doesn't Work Yet ❌
 | What | Why | When Expected |
 |------|-----|---------------|
-| Module hierarchy index | Not implemented | Phase 2.4 |
 | Semantic summaries | Not implemented | Phase 3 |
 | MCP server | Not implemented | Phase 4 |
 | RLM skills | Not implemented | Phase 5 |
