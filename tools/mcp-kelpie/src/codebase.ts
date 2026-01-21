@@ -30,15 +30,15 @@ async function executeCodebaseOp(
   return new Promise((resolve) => {
     const rlmEnvPath = join(codebasePath, "tools", "rlm-env");
 
-    const proc = spawn("python", ["-m", "rlm_env", "exec", "-"], {
-      cwd: rlmEnvPath,
-      env: {
-        ...process.env,
-        KELPIE_CODEBASE_PATH: codebasePath,
-        KELPIE_INDEXES_PATH: indexesPath,
-      },
-      timeout: CODEBASE_TIMEOUT_MS,
-    });
+    // TigerStyle: Match __main__.py CLI interface exactly
+    const proc = spawn(
+      "python",
+      ["-m", "rlm_env", "--codebase", codebasePath, "--indexes", indexesPath, "--stdin"],
+      {
+        cwd: rlmEnvPath,
+        timeout: CODEBASE_TIMEOUT_MS,
+      }
+    );
 
     let stdout = "";
     let stderr = "";

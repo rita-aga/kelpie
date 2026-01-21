@@ -42,16 +42,16 @@ async function executeRlmCode(
     // TigerStyle: Explicit path construction
     const rlmEnvPath = join(codebasePath, "tools", "rlm-env");
 
-    // Spawn Python subprocess
-    const proc = spawn("python", ["-m", "rlm_env", "exec", "-"], {
-      cwd: rlmEnvPath,
-      env: {
-        ...process.env,
-        KELPIE_CODEBASE_PATH: codebasePath,
-        KELPIE_INDEXES_PATH: indexesPath,
-      },
-      timeout: RLM_EXECUTION_TIMEOUT_MS,
-    });
+    // Spawn Python subprocess with correct CLI args
+    // TigerStyle: Match __main__.py CLI interface exactly
+    const proc = spawn(
+      "python",
+      ["-m", "rlm_env", "--codebase", codebasePath, "--indexes", indexesPath, "--stdin"],
+      {
+        cwd: rlmEnvPath,
+        timeout: RLM_EXECUTION_TIMEOUT_MS,
+      }
+    );
 
     let stdout = "";
     let stderr = "";
