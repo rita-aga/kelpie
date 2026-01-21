@@ -126,9 +126,7 @@ async fn create_server<R: Runtime + 'static>(
             }
             config
         }
-        MCPServerConfig::Sse { server_url, .. } => {
-            McpConfig::sse(&server.server_name, server_url)
-        }
+        MCPServerConfig::Sse { server_url, .. } => McpConfig::sse(&server.server_name, server_url),
         MCPServerConfig::StreamableHttp { server_url, .. } => {
             McpConfig::http(&server.server_name, server_url)
         }
@@ -207,34 +205,31 @@ async fn delete_server<R: Runtime + 'static>(
     State(state): State<AppState<R>>,
     Path(server_id): Path<String>,
 ) -> Result<(), ApiError> {
-    // TigerStyle: Clean up MCP tools before deleting server
-    // Get all registered tools to find ones belonging to this server
+    // TigerStyle: Get server details before deletion for proper cleanup
+    let server = state
+        .get_mcp_server(&server_id)
+        .await
+        .ok_or_else(|| ApiError::not_found("MCP server", &server_id))?;
+
+    // TigerStyle: Disconnect MCP client and clean up resources
+    // This prevents resource leaks from accumulated connections
     let registry = state.tool_registry();
-    let all_tools = registry.get_tool_definitions().await;
-    let prefix = format!("mcp_{}_", server_id);
-
-    let mut removed_count = 0;
-    for tool in all_tools {
-        if tool.name.starts_with(&prefix) {
-            registry.unregister_tool(&tool.name).await;
-            tracing::debug!(
-                server_id = %server_id,
-                tool_id = %tool.name,
-                "Unregistered MCP tool"
-            );
-            removed_count += 1;
-        }
-    }
-
-    if removed_count > 0 {
+    if let Err(e) = registry.disconnect_mcp_server(&server.server_name).await {
+        tracing::warn!(
+            server_id = %server_id,
+            server_name = %server.server_name,
+            error = %e,
+            "Failed to disconnect MCP client during delete (may not be connected)"
+        );
+    } else {
         tracing::info!(
             server_id = %server_id,
-            tool_count = removed_count,
-            "Unregistered MCP server tools from global registry"
+            server_name = %server.server_name,
+            "Disconnected MCP client and unregistered tools"
         );
     }
 
-    // Delete the server
+    // Delete the server record from storage
     state
         .delete_mcp_server(&server_id)
         .await

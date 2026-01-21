@@ -9,6 +9,9 @@
 //! - Concurrent teleports don't interfere with each other
 //! - Interrupted teleports leave system in consistent state
 
+// Allow direct tokio usage in test code
+#![allow(clippy::disallowed_methods)]
+
 use bytes::Bytes;
 use kelpie_dst::{
     Architecture, FaultConfig, FaultType, SimConfig, Simulation, SnapshotKind, TeleportPackage,

@@ -19,14 +19,15 @@ use std::sync::Arc;
 /// - Service wraps dispatcher
 /// - create_agent() → AgentActor activated
 /// - Returns AgentState with ID
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_service_create_agent() {
     let config = SimConfig::new(1001);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
             // Create service with dispatcher
-            let service = create_service(CurrentRuntime, &sim_env)?;
+            let service = create_service(kelpie_core::current_runtime(), &sim_env)?;
 
             // Create agent via service
             let request = CreateAgentRequest {
@@ -75,13 +76,14 @@ async fn test_dst_service_create_agent() {
 /// - send_message() → routes to AgentActor handle_message
 /// - Returns LLM response
 /// - Message history updated
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_service_send_message() {
     let config = SimConfig::new(1002);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(CurrentRuntime, &sim_env)?;
+            let service = create_service(kelpie_core::current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -132,13 +134,14 @@ async fn test_dst_service_send_message() {
 /// Contract:
 /// - get_agent() → returns current AgentState
 /// - Includes all metadata and blocks
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_service_get_agent() {
     let config = SimConfig::new(1003);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(CurrentRuntime, &sim_env)?;
+            let service = create_service(kelpie_core::current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -185,13 +188,14 @@ async fn test_dst_service_get_agent() {
 /// - update_agent() → updates AgentActor state
 /// - Returns updated AgentState
 /// - Changes persisted
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_service_update_agent() {
     let config = SimConfig::new(1004);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(CurrentRuntime, &sim_env)?;
+            let service = create_service(kelpie_core::current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -242,13 +246,14 @@ async fn test_dst_service_update_agent() {
 /// Contract:
 /// - delete_agent() → deactivates AgentActor
 /// - Subsequent get_agent() fails with NotFound
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_service_delete_agent() {
     let config = SimConfig::new(1005);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(CurrentRuntime, &sim_env)?;
+            let service = create_service(kelpie_core::current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -302,14 +307,15 @@ async fn test_dst_service_delete_agent() {
 /// - Storage failures → proper error propagation
 /// - Service doesn't panic or corrupt state
 /// - Errors are informative
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_service_dispatcher_failure() {
     let config = SimConfig::new(1006);
 
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.3))
         .run_async(|sim_env| async move {
-            let service = create_service(CurrentRuntime, &sim_env)?;
+            let service = create_service(kelpie_core::current_runtime(), &sim_env)?;
 
             let mut success_count = 0;
             let mut failure_count = 0;

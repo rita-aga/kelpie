@@ -5,7 +5,7 @@
 //! data loss and corruption.
 
 use async_trait::async_trait;
-use kelpie_core::Result;
+use kelpie_core::{Result, Runtime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -290,7 +290,9 @@ async fn test_update_with_forced_deactivation() {
                 }
 
                 // Small delay to allow async operations to complete
-                tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+                kelpie_core::current_runtime()
+                    .sleep(std::time::Duration::from_millis(5))
+                    .await;
             }
 
             println!("\nUpdate results:");

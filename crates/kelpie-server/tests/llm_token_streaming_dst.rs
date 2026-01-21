@@ -109,7 +109,8 @@ async fn test_dst_llm_token_streaming_basic() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(CurrentRuntime, &sim_env)?;
+            use kelpie_core::current_runtime;
+            let service = create_service(current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -195,7 +196,8 @@ async fn test_dst_llm_streaming_with_network_delay() {
             0.5, // 50% of operations delayed
         ))
         .run_async(|sim_env| async move {
-            let service = create_service(CurrentRuntime, &sim_env)?;
+            use kelpie_core::current_runtime;
+            let service = create_service(current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -258,7 +260,8 @@ async fn test_dst_llm_streaming_cancellation() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(CurrentRuntime, &sim_env)?;
+            use kelpie_core::current_runtime;
+            let service = create_service(current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -318,7 +321,8 @@ async fn test_dst_llm_streaming_with_tool_calls() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(CurrentRuntime, &sim_env)?;
+            use kelpie_core::current_runtime;
+            let service = create_service(current_runtime(), &sim_env)?;
 
             // Create agent with tool
             let request = CreateAgentRequest {
@@ -389,6 +393,7 @@ async fn test_dst_llm_streaming_concurrent() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
+            use kelpie_core::current_runtime;
             let runtime = current_runtime();
             let service = create_service(runtime.clone(), &sim_env)?;
 
@@ -486,7 +491,8 @@ async fn test_dst_llm_streaming_with_comprehensive_faults() {
             0.3,
         ))
         .run_async(|sim_env| async move {
-            let service = create_service(CurrentRuntime, &sim_env)?;
+            use kelpie_core::current_runtime;
+            let service = create_service(current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {

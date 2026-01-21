@@ -617,7 +617,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_memory_tools_registration() {
-        let state = AppState::new(TokioRuntime);
+        let state = AppState::new(kelpie_core::current_runtime());
         let registry = state.tool_registry();
 
         register_memory_tools(registry, state.clone()).await;
@@ -632,7 +632,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_core_memory_append_integration() {
-        let state = AppState::new(TokioRuntime);
+        let state = AppState::new(kelpie_core::current_runtime());
 
         // Create agent
         let agent = create_test_agent("test-agent");
@@ -666,7 +666,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_core_memory_replace_integration() {
-        let state = AppState::new(TokioRuntime);
+        let state = AppState::new(kelpie_core::current_runtime());
 
         // Create agent with existing block
         let agent = create_test_agent("test-agent");
@@ -703,7 +703,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_archival_memory_integration() {
-        let state = AppState::new(TokioRuntime);
+        let state = AppState::new(kelpie_core::current_runtime());
 
         // Create agent
         let agent = create_test_agent("test-agent");
@@ -797,7 +797,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_conversation_search_date() {
-        let state = AppState::new(TokioRuntime);
+        let state = AppState::new(kelpie_core::current_runtime());
 
         // Create agent
         let agent = create_test_agent("test-agent");
@@ -832,7 +832,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_conversation_search_date_unix_timestamp() {
-        let state = AppState::new(TokioRuntime);
+        let state = AppState::new(kelpie_core::current_runtime());
 
         // Create agent
         let agent = create_test_agent("test-agent");
@@ -861,7 +861,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_conversation_search_date_invalid_range() {
-        let state = AppState::new(TokioRuntime);
+        let state = AppState::new(kelpie_core::current_runtime());
 
         // Create agent
         let agent = create_test_agent("test-agent");
@@ -893,7 +893,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_conversation_search_date_invalid_format() {
-        let state = AppState::new(TokioRuntime);
+        let state = AppState::new(kelpie_core::current_runtime());
 
         // Create agent
         let agent = create_test_agent("test-agent");
@@ -922,7 +922,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_conversation_search_date_missing_params() {
-        let state = AppState::new(TokioRuntime);
+        let state = AppState::new(kelpie_core::current_runtime());
         let registry = state.tool_registry();
         register_memory_tools(registry, state.clone()).await;
 

@@ -238,12 +238,25 @@ impl Simulation {
         };
 
         // Run the test
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| SimulationError::RuntimeError(e.to_string()))?;
+        // TigerStyle: Explicit runtime selection for deterministic testing
+        #[cfg(not(madsim))]
+        {
+            // Production: Create tokio runtime for execution
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| SimulationError::RuntimeError(e.to_string()))?;
 
-        runtime.block_on(async { test(env).await.map_err(SimulationError::TestFailed) })
+            runtime.block_on(async { test(env).await.map_err(SimulationError::TestFailed) })
+        }
+
+        #[cfg(madsim)]
+        {
+            // DST: Use madsim's existing runtime context (no new runtime needed)
+            // When #[madsim::test] is used, madsim already controls the execution context
+            madsim::runtime::Handle::current()
+                .block_on(async { test(env).await.map_err(SimulationError::TestFailed) })
+        }
     }
 
     /// Run the simulation asynchronously (when already in an async context)

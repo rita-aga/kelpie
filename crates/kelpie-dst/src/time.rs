@@ -5,6 +5,9 @@
 //! Provides TimeProvider trait with two implementations:
 //! - SimTime: Uses SimClock, advances time instantly (no real delays)
 //! - RealTime: Uses tokio::time, for production and non-DST tests
+
+// Allow tokio usage in DST framework code (this IS the abstraction layer)
+#![allow(clippy::disallowed_methods)]
 //!
 //! ## Why This Exists
 //!

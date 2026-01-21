@@ -9,6 +9,7 @@ use kelpie_core::actor::{
 };
 use kelpie_core::constants::{ACTOR_IDLE_TIMEOUT_MS_DEFAULT, ACTOR_INVOCATION_TIMEOUT_MS_MAX};
 use kelpie_core::error::{Error, Result};
+use kelpie_core::Runtime;
 use kelpie_storage::{ActorKV, ScopedKV};
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::Arc;
@@ -244,12 +245,13 @@ where
             .swap_kv(Box::new(ArcContextKV(buffering_kv.clone())));
 
         // Execute the actor's invoke with the buffering KV
-        let result = tokio::time::timeout(
-            Duration::from_millis(ACTOR_INVOCATION_TIMEOUT_MS_MAX),
-            self.actor
-                .invoke(&mut self.context, operation, payload.clone()),
-        )
-        .await;
+        let result = kelpie_core::current_runtime()
+            .timeout(
+                Duration::from_millis(ACTOR_INVOCATION_TIMEOUT_MS_MAX),
+                self.actor
+                    .invoke(&mut self.context, operation, payload.clone()),
+            )
+            .await;
 
         // Restore the original KV
         let _ = self.context.swap_kv(original_kv);

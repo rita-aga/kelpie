@@ -499,9 +499,19 @@ fn test_dst_cluster_lifecycle() {
 
         let cluster_config = ClusterConfig::for_testing();
         let registry = Arc::new(MemoryRegistry::new());
-        let transport = Arc::new(MemoryTransport::new(node_id.clone(), addr));
+        let transport = Arc::new(MemoryTransport::new(
+            node_id.clone(),
+            addr,
+            kelpie_core::current_runtime(),
+        ));
 
-        let cluster = Cluster::new(node, cluster_config, registry, transport);
+        let cluster = Cluster::new(
+            node,
+            cluster_config,
+            registry,
+            transport,
+            kelpie_core::current_runtime(),
+        );
 
         // Initial state should be Stopped
         assert_eq!(cluster.state().await, ClusterState::Stopped);
@@ -537,9 +547,19 @@ fn test_dst_cluster_double_start() {
 
         let cluster_config = ClusterConfig::for_testing();
         let registry = Arc::new(MemoryRegistry::new());
-        let transport = Arc::new(MemoryTransport::new(node_id.clone(), addr));
+        let transport = Arc::new(MemoryTransport::new(
+            node_id.clone(),
+            addr,
+            kelpie_core::current_runtime(),
+        ));
 
-        let cluster = Cluster::new(node, cluster_config, registry, transport);
+        let cluster = Cluster::new(
+            node,
+            cluster_config,
+            registry,
+            transport,
+            kelpie_core::current_runtime(),
+        );
 
         // Start cluster
         cluster.start().await.map_err(|e| CoreError::Internal {
@@ -576,9 +596,19 @@ fn test_dst_cluster_try_claim() {
 
         let cluster_config = ClusterConfig::for_testing();
         let registry = Arc::new(MemoryRegistry::new());
-        let transport = Arc::new(MemoryTransport::new(node_id.clone(), addr));
+        let transport = Arc::new(MemoryTransport::new(
+            node_id.clone(),
+            addr,
+            kelpie_core::current_runtime(),
+        ));
 
-        let cluster = Cluster::new(node, cluster_config, registry, transport);
+        let cluster = Cluster::new(
+            node,
+            cluster_config,
+            registry,
+            transport,
+            kelpie_core::current_runtime(),
+        );
         cluster.start().await.map_err(|e| CoreError::Internal {
             message: e.to_string(),
         })?;

@@ -360,6 +360,8 @@ impl AgentStorage for FdbAgentRegistry {
     async fn list_agents(&self) -> Result<Vec<AgentMetadata>, StorageError> {
         let registry_id = Self::registry_actor_id().map_err(Self::map_core_error)?;
 
+        tracing::debug!("list_agents: scanning registry");
+
         // Scan all keys in registry (empty prefix = all keys)
         let kvs = self
             .fdb
@@ -367,14 +369,19 @@ impl AgentStorage for FdbAgentRegistry {
             .await
             .map_err(Self::map_core_error)?;
 
+        tracing::debug!(kv_count = kvs.len(), "list_agents: found kvs in registry");
+
         let mut agents = Vec::new();
-        for (_key, value) in kvs {
+        for (key, value) in kvs {
             let metadata = Self::deserialize_metadata(&value)?;
+            tracing::debug!(agent_id = %metadata.id, agent_name = %metadata.name, key_len = key.len(), "list_agents: deserialized agent");
             agents.push(metadata);
         }
 
         // Sort by ID for deterministic ordering
         agents.sort_by(|a, b| a.id.cmp(&b.id));
+
+        tracing::info!(agent_count = agents.len(), "list_agents complete");
 
         Ok(agents)
     }

@@ -72,6 +72,20 @@ jobs:
             DST_SEED=$seed cargo test -p kelpie-dst --release
           done
 
+  test-madsim:
+    name: Madsim DST Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run kelpie-server madsim tests
+        run: cargo test -p kelpie-server --features dst,madsim
+      - name: Run agent service DST tests
+        run: cargo test -p kelpie-server --features dst,madsim --test agent_service_dst
+      - name: Run delete atomicity tests
+        run: cargo test -p kelpie-server --features dst,madsim --test delete_atomicity_test
+
   docs:
     name: Documentation
     runs-on: ubuntu-latest

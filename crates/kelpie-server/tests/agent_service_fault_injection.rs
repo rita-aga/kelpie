@@ -7,7 +7,7 @@
 //! - Partial write scenarios
 //! - Concurrent operations with faults
 
-use kelpie_core::Result;
+use kelpie_core::{Result, Runtime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -155,7 +155,9 @@ async fn test_delete_agent_atomicity_crash() {
                     Ok(_) => {
                         // CRITICAL: Verify it's actually deleted
                         // Wait a bit to allow deactivation to complete
-                        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                        kelpie_core::current_runtime()
+                            .sleep(std::time::Duration::from_millis(10))
+                            .await;
 
                         match service.get_agent(agent_id).await {
                             Ok(agent) => {
@@ -243,7 +245,7 @@ async fn test_update_agent_concurrent_with_faults() {
             for i in 0..5 {
                 let service_clone = service.clone();
                 let agent_id = agent.id.clone();
-                let handle = tokio::spawn(async move {
+                let handle = kelpie_core::current_runtime().spawn(async move {
                     let update = serde_json::json!({
                         "name": format!("update-{}", i),
                         "description": format!("Description from thread {}", i),

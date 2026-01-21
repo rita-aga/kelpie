@@ -5,6 +5,9 @@
 //! - Same seed = identical execution order
 //! - Spawn tasks execute deterministically
 
+// Allow direct tokio usage in test code (tests madsim interception)
+#![allow(clippy::disallowed_methods)]
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};

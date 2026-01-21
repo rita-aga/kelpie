@@ -668,16 +668,100 @@ impl Actor for AgentActor {
         }
         // If no state exists, that's OK - will be created on first "create" operation
 
+        // Phase 2: Registry Gap Fix
+        // Self-register in the global registry if we have state (i.e., we are a valid agent)
+        if let Some(agent) = &ctx.state.agent {
+            // We need to write to "system/agent_registry"
+            // Since we don't have direct access to other actors' storage, we rely on the
+            // storage layer's ability to access the registry keyspace if configured.
+            // However, ActorContext only gives access to *our* storage.
+
+            // In the current architecture, the Actor cannot write to the Registry directly
+            // unless the Registry is part of its own storage or shared storage.
+            // FdbAgentRegistry uses a shared FDB connection.
+            // KvAdapter uses a shared ActorKV.
+
+            // If we are running with KvAdapter, we are in a simulation or test.
+            // We can try to write to a "well-known" key in our own storage that the Registry scanner looks for?
+            // No, the Registry scanner looks at "system/agent_registry".
+
+            // Ideally, we would send a message to the Registry actor:
+            // ctx.send(registry_id, RegisterAgent(agent)).await?
+            // But we don't have a Registry actor implemented as an Actor yet (it's just a storage abstraction).
+
+            // Workaround: Write a "metadata" key in our own namespace.
+            // And update KvAdapter to scan all actors? No, too expensive.
+
+            // Correct Fix: The "Registry" should be an Actor.
+            // But refactoring Registry to be an Actor is a larger task.
+
+            // For now, we will rely on the Service to register the agent on creation (which it does via AppState).
+            // But for Teleport/Recovery, the Service isn't involved.
+
+            // If we are recovering, the Registry should already have the entry (unless it was lost).
+            // If we are teleporting in, TeleportService is responsible for registering.
+
+            // So, maybe the "Registry Gap" is actually a "Teleport Gap"?
+            // TeleportService::teleport_in returns (VM, State). It does NOT register the agent.
+            // We should fix TeleportService to register the agent.
+
+            // But wait, the plan said "Implement self-registration in AgentActor::on_activate".
+            // This implies the Actor should do it.
+            // If the Actor can't write to the Registry, then the plan is flawed or assumes shared storage access.
+            // In FDB, we *can* write to any key.
+            // In SimStorage, we *can* write to any key if we have the handle.
+            // But ActorContext wraps the storage and scopes it to the actor.
+
+            // Let's assume for now that we can't easily fix this from within the Actor without breaking encapsulation.
+            // I will add a TODO comment here and focus on the TeleportService fix if needed.
+            // But wait, I must follow the plan.
+            // If I can't implement it, I should note it.
+
+            // Actually, `ctx.kv` is `Box<dyn ActorKV>`.
+            // Does `ActorKV` allow writing to other namespaces?
+            // `ActorKV` methods usually take `&self` and key.
+            // But `ActorContext` methods like `kv_set` don't take an ActorId, they use `self.id`.
+            // So we are indeed scoped.
+
+            tracing::debug!(agent_id = %agent.id, "Agent activated, self-registration skipped (scoped storage)");
+        }
+
         Ok(())
     }
 
     async fn on_deactivate(&self, ctx: &mut ActorContext<Self::State>) -> Result<()> {
-        // TigerStyle: Persist state on deactivation
+        // Phase 2: Storage Unification
+        // Write granular keys for API compatibility AND the BLOB for fast recovery
+
+        // TigerStyle: Keep agent_state BLOB for fast Actor recovery
         let state_key = b"agent_state";
         let state_bytes = serde_json::to_vec(&ctx.state).map_err(|e| Error::Internal {
             message: format!("Failed to serialize AgentActorState: {}", e),
         })?;
         ctx.kv_set(state_key, &state_bytes).await?;
+
+        // Write granular keys for API (AgentStorage) compatibility
+        // 1. Write memory blocks
+        if let Some(agent) = &ctx.state.agent {
+            let blocks_value = serde_json::to_vec(&agent.blocks).map_err(|e| Error::Internal {
+                message: format!("Failed to serialize blocks: {}", e),
+            })?;
+            ctx.kv_set(b"blocks", &blocks_value).await?;
+        }
+
+        // 2. Write messages as individual keys (message:0, message:1, ...)
+        let message_count = ctx.state.messages.len() as u64;
+        for (idx, message) in ctx.state.messages.iter().enumerate() {
+            let message_key = format!("message:{}", idx);
+            let message_value = serde_json::to_vec(message).map_err(|e| Error::Internal {
+                message: format!("Failed to serialize message {}: {}", idx, e),
+            })?;
+            ctx.kv_set(message_key.as_bytes(), &message_value).await?;
+        }
+
+        // 3. Write message count
+        let count_value = Bytes::from(message_count.to_string());
+        ctx.kv_set(b"message_count", &count_value).await?;
 
         Ok(())
     }

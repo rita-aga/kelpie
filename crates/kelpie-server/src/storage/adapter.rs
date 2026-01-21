@@ -105,50 +105,38 @@ impl KvAdapter {
     fn session_key(agent_id: &str, session_id: &str) -> Vec<u8> {
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
         assert!(!session_id.is_empty(), "session id cannot be empty");
-        let key = format!("sessions/{}/{}", agent_id, session_id);
-        assert!(
-            key.len() <= KEY_LENGTH_BYTES_MAX,
-            "session key too long: {} bytes",
-            key.len()
-        );
-        key.into_bytes()
+        // TigerStyle: Sessions are stored in the agent's namespace
+        format!("session:{}", session_id).into_bytes()
     }
 
     /// Generate prefix for listing sessions: `sessions/{agent_id}/`
-    fn session_prefix(agent_id: &str) -> Vec<u8> {
-        assert!(!agent_id.is_empty(), "agent id cannot be empty");
-        format!("sessions/{}/", agent_id).into_bytes()
+    fn session_prefix(_agent_id: &str) -> Vec<u8> {
+        // TigerStyle: Sessions are stored in the agent's namespace with prefix "session:"
+        b"session:".to_vec()
     }
 
-    /// Generate key for message: `messages/{agent_id}/{message_id}`
-    fn message_key(agent_id: &str, message_id: &str) -> Vec<u8> {
-        assert!(!agent_id.is_empty(), "agent id cannot be empty");
-        assert!(!message_id.is_empty(), "message id cannot be empty");
-        let key = format!("messages/{}/{}", agent_id, message_id);
-        assert!(
-            key.len() <= KEY_LENGTH_BYTES_MAX,
-            "message key too long: {} bytes",
-            key.len()
-        );
-        key.into_bytes()
+    /// Generate key for message: `message:{message_id}`
+    fn message_key(_agent_id: &str, message_id: &str) -> Vec<u8> {
+        // TigerStyle: Messages are stored in the agent's namespace
+        format!("message:{}", message_id).into_bytes()
+    }
+
+    /// Generate prefix for listing messages: `message:`
+    fn message_prefix(_agent_id: &str) -> Vec<u8> {
+        // TigerStyle: Messages are stored in the agent's namespace with prefix "message:"
+        b"message:".to_vec()
     }
 
     /// Generate prefix for listing messages: `messages/{agent_id}/`
-    fn message_prefix(agent_id: &str) -> Vec<u8> {
+    fn message_prefix_legacy(agent_id: &str) -> Vec<u8> {
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
         format!("messages/{}/", agent_id).into_bytes()
     }
 
     /// Generate key for blocks: `blocks/{agent_id}`
-    fn blocks_key(agent_id: &str) -> Vec<u8> {
-        assert!(!agent_id.is_empty(), "agent id cannot be empty");
-        let key = format!("blocks/{}", agent_id);
-        assert!(
-            key.len() <= KEY_LENGTH_BYTES_MAX,
-            "blocks key too long: {} bytes",
-            key.len()
-        );
-        key.into_bytes()
+    fn blocks_key(_agent_id: &str) -> Vec<u8> {
+        // TigerStyle: Blocks are stored in the agent's namespace
+        b"blocks".to_vec()
     }
 
     /// Generate key for custom tool: `tools/{name}`
@@ -424,8 +412,13 @@ impl AgentStorage for KvAdapter {
         let key = Self::blocks_key(agent_id);
         let value = Self::serialize(blocks)?;
 
+        // TigerStyle: Write to the agent's actor namespace
+        let actor_id = ActorId::new("agents", agent_id).map_err(|e| StorageError::Internal {
+            message: format!("Invalid agent id: {}", e),
+        })?;
+
         self.kv
-            .set(&self.actor_id, &key, &value)
+            .set(&actor_id, &key, &value)
             .await
             .map_err(|e| Self::map_kv_error("save_blocks", e))?;
 
@@ -438,9 +431,14 @@ impl AgentStorage for KvAdapter {
 
         let key = Self::blocks_key(agent_id);
 
+        // TigerStyle: Read from the agent's actor namespace
+        let actor_id = ActorId::new("agents", agent_id).map_err(|e| StorageError::Internal {
+            message: format!("Invalid agent id: {}", e),
+        })?;
+
         let bytes = self
             .kv
-            .get(&self.actor_id, &key)
+            .get(&actor_id, &key)
             .await
             .map_err(|e| Self::map_kv_error("load_blocks", e))?;
 
@@ -629,8 +627,13 @@ impl AgentStorage for KvAdapter {
         let key = Self::message_key(agent_id, &message.id);
         let value = Self::serialize(message)?;
 
+        // TigerStyle: Write to the agent's actor namespace
+        let actor_id = ActorId::new("agents", agent_id).map_err(|e| StorageError::Internal {
+            message: format!("Invalid agent id: {}", e),
+        })?;
+
         self.kv
-            .set(&self.actor_id, &key, &value)
+            .set(&actor_id, &key, &value)
             .await
             .map_err(|e| Self::map_kv_error("append_message", e))?;
 
@@ -648,9 +651,15 @@ impl AgentStorage for KvAdapter {
         assert!(limit <= 10000, "limit too large: {}", limit);
 
         let prefix = Self::message_prefix(agent_id);
+
+        // TigerStyle: Read from the agent's actor namespace
+        let actor_id = ActorId::new("agents", agent_id).map_err(|e| StorageError::Internal {
+            message: format!("Invalid agent id: {}", e),
+        })?;
+
         let pairs = self
             .kv
-            .scan_prefix(&self.actor_id, &prefix)
+            .scan_prefix(&actor_id, &prefix)
             .await
             .map_err(|e| Self::map_kv_error("load_messages", e))?;
 
@@ -702,9 +711,15 @@ impl AgentStorage for KvAdapter {
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
 
         let prefix = Self::message_prefix(agent_id);
+
+        // TigerStyle: Read from the agent's actor namespace
+        let actor_id = ActorId::new("agents", agent_id).map_err(|e| StorageError::Internal {
+            message: format!("Invalid agent id: {}", e),
+        })?;
+
         let keys = self
             .kv
-            .list_keys(&self.actor_id, &prefix)
+            .list_keys(&actor_id, &prefix)
             .await
             .map_err(|e| Self::map_kv_error("count_messages", e))?;
 
@@ -716,14 +731,20 @@ impl AgentStorage for KvAdapter {
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
 
         let prefix = Self::message_prefix(agent_id);
+
+        // TigerStyle: Write to the agent's actor namespace
+        let actor_id = ActorId::new("agents", agent_id).map_err(|e| StorageError::Internal {
+            message: format!("Invalid agent id: {}", e),
+        })?;
+
         let keys = self
             .kv
-            .list_keys(&self.actor_id, &prefix)
+            .list_keys(&actor_id, &prefix)
             .await
             .map_err(|e| Self::map_kv_error("delete_messages", e))?;
 
         for key in keys {
-            let _ = self.kv.delete(&self.actor_id, &key).await; // Continue on error
+            let _ = self.kv.delete(&actor_id, &key).await; // Continue on error
         }
 
         Ok(())

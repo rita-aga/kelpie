@@ -586,7 +586,7 @@ async fn test_dst_registry_concurrent_execution() {
 
     let result = Simulation::new(config)
         .run_async(|_env| async move {
-            use kelpie_core::{CurrentRuntime, Runtime};
+            use kelpie_core::{current_runtime, CurrentRuntime, Runtime};
             let runtime = current_runtime();
             let registry = Arc::new(create_registry_with_builtin(None).await);
 

@@ -6,6 +6,7 @@ use crate::error::{ClusterError, ClusterResult};
 use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::actor::ActorId;
+use kelpie_core::runtime::Runtime;
 // For future: RPC_MESSAGE_SIZE_BYTES_MAX for message validation
 use kelpie_registry::{Heartbeat, NodeId};
 use serde::{Deserialize, Serialize};
@@ -211,11 +212,13 @@ pub trait RpcHandler: Send + Sync {
 /// In-memory RPC transport for testing
 ///
 /// Messages are delivered directly through channels, simulating network behavior.
-pub struct MemoryTransport {
+pub struct MemoryTransport<RT: Runtime> {
     /// Local node ID
     node_id: NodeId,
     /// Local address
     addr: SocketAddr,
+    /// Runtime for task spawning
+    runtime: RT,
     /// Sender channels to other nodes
     senders: tokio::sync::RwLock<
         std::collections::HashMap<NodeId, tokio::sync::mpsc::Sender<(NodeId, RpcMessage)>>,
@@ -234,14 +237,15 @@ pub struct MemoryTransport {
     running: std::sync::atomic::AtomicBool,
 }
 
-impl MemoryTransport {
+impl<RT: Runtime> MemoryTransport<RT> {
     /// Create a new in-memory transport
-    pub fn new(node_id: NodeId, addr: SocketAddr) -> Self {
+    pub fn new(node_id: NodeId, addr: SocketAddr, runtime: RT) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel(1000);
 
         Self {
             node_id: node_id.clone(),
             addr,
+            runtime,
             senders: tokio::sync::RwLock::new({
                 let mut map = std::collections::HashMap::new();
                 map.insert(node_id, tx);
@@ -260,7 +264,7 @@ impl MemoryTransport {
     /// Note: This is a simplified implementation for testing.
     /// In production, actual TCP connections would be established.
     #[allow(dead_code)]
-    pub async fn connect(&self, other: &MemoryTransport) {
+    pub async fn connect(&self, other: &MemoryTransport<RT>) {
         let mut senders = self.senders.write().await;
         let mut other_senders = other.senders.write().await;
 
@@ -313,7 +317,7 @@ impl MemoryTransport {
 }
 
 #[async_trait]
-impl RpcTransport for MemoryTransport {
+impl<RT: Runtime + 'static> RpcTransport for MemoryTransport<RT> {
     async fn send(&self, target: &NodeId, message: RpcMessage) -> ClusterResult<()> {
         let senders = self.senders.read().await;
         let sender = senders
@@ -349,7 +353,12 @@ impl RpcTransport for MemoryTransport {
         self.send(target, message).await?;
 
         // Wait for response with timeout
-        match tokio::time::timeout(timeout, rx).await {
+        // Note: We use self.runtime.timeout if available, but Runtime trait doesn't have timeout method that returns Result<T, Elapsed> easily compatible here without mapping.
+        // Actually Runtime::timeout returns Result<T, ()>.
+        // tokio::time::timeout returns Result<T, Elapsed>.
+        // Let's use runtime.timeout and map error.
+
+        match self.runtime.timeout(timeout, rx).await {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(_)) => Err(ClusterError::rpc_failed(target, "response channel closed")),
             Err(_) => {
@@ -405,7 +414,9 @@ impl RpcTransport for MemoryTransport {
         let pending =
             std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
 
-        tokio::spawn(Self::process_messages(receiver, handler, pending));
+        let _ = self
+            .runtime
+            .spawn(Self::process_messages(receiver, handler, pending));
 
         Ok(())
     }
@@ -424,11 +435,13 @@ impl RpcTransport for MemoryTransport {
 /// TCP-based RPC transport for real network communication
 ///
 /// Wire protocol: [4-byte big-endian length][JSON payload]
-pub struct TcpTransport {
+pub struct TcpTransport<RT: Runtime> {
     /// Local node ID
     node_id: NodeId,
     /// Local listening address
     local_addr: SocketAddr,
+    /// Runtime for task spawning
+    runtime: RT,
     /// Active connections to other nodes
     connections:
         std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<NodeId, TcpConnection>>>,
@@ -456,12 +469,13 @@ struct TcpConnection {
     sender: tokio::sync::mpsc::Sender<RpcMessage>,
 }
 
-impl TcpTransport {
+impl<RT: Runtime + 'static> TcpTransport<RT> {
     /// Create a new TCP transport
-    pub fn new(node_id: NodeId, local_addr: SocketAddr) -> Self {
+    pub fn new(node_id: NodeId, local_addr: SocketAddr, runtime: RT) -> Self {
         Self {
             node_id,
             local_addr,
+            runtime,
             connections: std::sync::Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
@@ -524,14 +538,16 @@ impl TcpTransport {
 
         // Spawn writer task
         let target_clone = target.clone();
-        tokio::spawn(Self::writer_task(write_half, rx, target_clone.clone()));
+        let _ = self
+            .runtime
+            .spawn(Self::writer_task(write_half, rx, target_clone.clone()));
 
         // Spawn reader task
         let pending = self.pending.clone();
         let node_id = self.node_id.clone();
         let connections = self.connections.clone();
 
-        tokio::spawn(async move {
+        let _ = self.runtime.spawn(async move {
             Self::reader_task(read_half, pending, target_clone.clone(), node_id).await;
             // Remove connection on disconnect
             let mut conns = connections.write().await;
@@ -688,7 +704,8 @@ impl TcpTransport {
 
                             // Spawn writer task
                             let node_clone = temp_node_id.clone();
-                            tokio::spawn(Self::writer_task(write_half, rx, node_clone));
+                            let _ = kelpie_core::current_runtime()
+                                .spawn(Self::writer_task(write_half, rx, node_clone));
 
                             // Spawn reader task
                             let pending_clone = pending.clone();
@@ -696,7 +713,7 @@ impl TcpTransport {
                             let node_clone = temp_node_id.clone();
                             let connections_clone = connections.clone();
 
-                            tokio::spawn(async move {
+                            let _ = kelpie_core::current_runtime().spawn(async move {
                                 Self::reader_task(
                                     read_half,
                                     pending_clone,
@@ -727,7 +744,7 @@ impl TcpTransport {
 }
 
 #[async_trait]
-impl RpcTransport for TcpTransport {
+impl<RT: Runtime + 'static> RpcTransport for TcpTransport<RT> {
     async fn send(&self, target: &NodeId, message: RpcMessage) -> ClusterResult<()> {
         let sender = self.get_or_create_connection(target).await?;
 
@@ -764,7 +781,7 @@ impl RpcTransport for TcpTransport {
         }
 
         // Wait for response with timeout
-        match tokio::time::timeout(timeout, rx).await {
+        match self.runtime.timeout(timeout, rx).await {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(_)) => {
                 let mut pending = self.pending.write().await;
@@ -825,7 +842,7 @@ impl RpcTransport for TcpTransport {
         let pending = self.pending.clone();
         let local_node = self.node_id.clone();
 
-        tokio::spawn(Self::accept_task(
+        let _ = self.runtime.spawn(Self::accept_task(
             listener,
             connections,
             pending,
@@ -1018,7 +1035,9 @@ mod tests {
         transport2.register_node(node1_id.clone(), addr1).await;
 
         // Give the listeners time to start
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        kelpie_core::current_runtime()
+            .sleep(std::time::Duration::from_millis(10))
+            .await;
 
         // Send a heartbeat from node1 to node2
         let heartbeat = RpcMessage::Heartbeat(Heartbeat::new(
@@ -1033,7 +1052,9 @@ mod tests {
         transport1.send(&node2_id, heartbeat).await.unwrap();
 
         // Give time for message to be received
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        kelpie_core::current_runtime()
+            .sleep(std::time::Duration::from_millis(10))
+            .await;
 
         // Stop both
         transport1.stop().await.unwrap();

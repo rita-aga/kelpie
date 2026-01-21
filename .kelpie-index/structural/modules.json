@@ -1,8 +1,8 @@
 {
   "version": "1.0.0",
   "description": "Module hierarchy for all crates",
-  "built_at": "2026-01-21T00:24:37.129378+00:00",
-  "git_sha": "e1a18ba06c41d46b61757c675d9581c033c0a100",
+  "built_at": "2026-01-21T13:31:48.865227+00:00",
+  "git_sha": "08f18d45e77a1ab6a284f8dbcd124569dd772658",
   "crates": [
     {
       "name": "kelpie-server",

@@ -3,6 +3,9 @@
 //! TigerStyle: Full system DST with all components integrated.
 //! These tests verify the system handles multiple simultaneous faults gracefully.
 
+// Allow direct tokio usage in test code
+#![allow(clippy::disallowed_methods)]
+
 use bytes::Bytes;
 use kelpie_core::Result;
 use kelpie_dst::{

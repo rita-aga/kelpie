@@ -98,6 +98,7 @@ async fn test_dst_streaming_basic() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
+            use kelpie_core::current_runtime;
             let runtime = current_runtime();
             let service = create_service(runtime.clone(), &sim_env)?;
 
@@ -213,6 +214,7 @@ async fn test_dst_streaming_with_network_delay() {
             0.3,
         ))
         .run_async(|sim_env| async move {
+            use kelpie_core::current_runtime;
             let runtime = current_runtime();
             let service = create_service(runtime.clone(), &sim_env)?;
 
@@ -309,6 +311,7 @@ async fn test_dst_streaming_cancellation() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
+            use kelpie_core::current_runtime;
             let time = sim_env.io_context.time.clone();
             let runtime = current_runtime();
             let service = create_service(runtime.clone(), &sim_env)?;
@@ -402,6 +405,7 @@ async fn test_dst_streaming_backpressure() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
+            use kelpie_core::current_runtime;
             let time = sim_env.io_context.time.clone();
             let runtime = current_runtime();
             let service = create_service(runtime.clone(), &sim_env)?;
@@ -503,6 +507,7 @@ async fn test_dst_streaming_with_tool_calls() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
+            use kelpie_core::current_runtime;
             let runtime = current_runtime();
             let service = create_service(runtime.clone(), &sim_env)?;
 

@@ -276,7 +276,7 @@ async fn test_dst_llm_client_concurrent() {
 
     let result = Simulation::new(config)
         .run_async(|_sim_env| async move {
-            use kelpie_core::{CurrentRuntime, Runtime};
+            use kelpie_core::{current_runtime, CurrentRuntime, Runtime};
             let runtime = current_runtime();
 
             // Create 3 clients with different token sets

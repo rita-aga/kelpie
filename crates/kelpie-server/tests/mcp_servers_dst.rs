@@ -344,7 +344,7 @@ async fn test_dst_mcp_server_concurrent_creates() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.1))
         .run_async(|_env| async move {
-            use kelpie_core::{CurrentRuntime, Runtime};
+            use kelpie_core::{current_runtime, CurrentRuntime, Runtime};
             let runtime = current_runtime();
             let state = AppState::new(runtime.clone());
 

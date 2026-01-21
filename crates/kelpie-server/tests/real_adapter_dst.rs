@@ -174,7 +174,7 @@ async fn test_dst_concurrent_streaming_with_faults() {
             0.4, // 40% operations delayed
         ))
         .run_async(|sim_env| async move {
-            use kelpie_core::{CurrentRuntime, Runtime};
+            use kelpie_core::{current_runtime, CurrentRuntime, Runtime};
             let runtime = current_runtime();
             let time = sim_env.io_context.time.clone();
 

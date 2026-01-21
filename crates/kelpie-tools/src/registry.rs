@@ -4,11 +4,11 @@
 
 use crate::error::{ToolError, ToolResult};
 use crate::traits::{DynTool, Tool, ToolInput, ToolMetadata, ToolOutput};
+use kelpie_core::Runtime;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
-use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
 /// Maximum number of tools in a registry
@@ -160,7 +160,9 @@ impl ToolRegistry {
         let start = Instant::now();
 
         // Execute with timeout
-        let result = timeout(timeout_duration, tool.execute(input)).await;
+        let result = kelpie_core::current_runtime()
+            .timeout(timeout_duration, tool.execute(input))
+            .await;
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -289,7 +291,9 @@ mod tests {
         }
 
         async fn execute(&self, _input: ToolInput) -> ToolResult<ToolOutput> {
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            kelpie_core::current_runtime()
+                .sleep(std::time::Duration::from_secs(10))
+                .await;
             Ok(ToolOutput::success("done"))
         }
     }

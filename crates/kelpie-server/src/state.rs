@@ -792,21 +792,83 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
     /// List agents (dual-mode)
     ///
     /// Phase 6.5: Currently always uses HashMap since AgentService doesn't have list support yet.
-    /// TODO: Implement registry/index infrastructure for actor-based list operations.
+    /// TigerStyle: List agents from durable storage when configured, otherwise from HashMap.
+    /// This ensures list operations reflect persisted state in FDB mode.
     pub async fn list_agents_async(
         &self,
         limit: usize,
         cursor: Option<&str>,
     ) -> Result<(Vec<AgentState>, Option<String>), StateError> {
-        // TODO: When AgentService supports list operations (requires registry):
-        // if let Some(service) = self.agent_service() {
-        //     service.list_agents(limit, cursor).await...
-        // } else {
-        //     self.list_agents(limit, cursor)
-        // }
+        // TigerStyle: Read from storage when configured to maintain consistency
+        if let Some(storage) = &self.inner.storage {
+            // Load all agents from storage
+            let agent_metadatas =
+                storage
+                    .list_agents()
+                    .await
+                    .map_err(|e| StateError::Internal {
+                        message: format!("Failed to list agents from storage: {}", e),
+                    })?;
 
-        // For now, always use HashMap (works in both modes)
-        self.list_agents(limit, cursor)
+            // Convert AgentMetadata to AgentState
+            let mut agents: Vec<AgentState> = Vec::with_capacity(agent_metadatas.len());
+            for metadata in agent_metadatas {
+                // Load blocks for each agent
+                let blocks =
+                    storage
+                        .load_blocks(&metadata.id)
+                        .await
+                        .map_err(|e| StateError::Internal {
+                            message: format!("Failed to load blocks: {}", e),
+                        })?;
+
+                agents.push(AgentState {
+                    id: metadata.id,
+                    name: metadata.name,
+                    agent_type: metadata.agent_type,
+                    model: metadata.model,
+                    embedding: metadata.embedding,
+                    system: metadata.system,
+                    description: metadata.description,
+                    blocks,
+                    tool_ids: metadata.tool_ids,
+                    tags: metadata.tags,
+                    metadata: metadata.metadata,
+                    project_id: None, // TODO: Add project_id to AgentMetadata
+                    created_at: metadata.created_at,
+                    updated_at: metadata.updated_at,
+                });
+            }
+
+            // Sort by created_at
+            agents.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+            // Apply cursor (skip until we find the cursor ID)
+            let start_idx = if let Some(cursor_id) = cursor {
+                agents
+                    .iter()
+                    .position(|a| a.id == cursor_id)
+                    .map(|i| i + 1)
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+
+            // Paginate
+            let page: Vec<_> = agents.into_iter().skip(start_idx).take(limit + 1).collect();
+            let (items, next_cursor) = if page.len() > limit {
+                let items: Vec<_> = page.into_iter().take(limit).collect();
+                let next_cursor = items.last().map(|a| a.id.clone());
+                (items, next_cursor)
+            } else {
+                (page, None)
+            };
+
+            Ok((items, next_cursor))
+        } else {
+            // Fall back to HashMap for in-memory mode
+            self.list_agents(limit, cursor)
+        }
     }
 
     // Note: list_agents not yet implemented in AgentService
@@ -821,6 +883,8 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
     /// TigerStyle: Async operation for storage backend writes.
     /// Returns Ok(()) if no storage configured (in-memory only mode).
     pub async fn persist_agent(&self, agent: &AgentState) -> Result<(), StorageError> {
+        tracing::debug!(agent_id = %agent.id, name = %agent.name, "persist_agent called");
+
         if let Some(storage) = &self.inner.storage {
             use crate::storage::AgentMetadata;
 
@@ -838,10 +902,14 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 created_at: agent.created_at,
                 updated_at: agent.updated_at,
             };
+            tracing::debug!(agent_id = %agent.id, "calling storage.save_agent");
             storage.save_agent(&metadata).await?;
+            tracing::info!(agent_id = %agent.id, "agent metadata persisted to FDB");
 
             // Also persist blocks
             storage.save_blocks(&agent.id, &agent.blocks).await?;
+        } else {
+            tracing::debug!(agent_id = %agent.id, "no storage configured, skipping persist");
         }
         Ok(())
     }

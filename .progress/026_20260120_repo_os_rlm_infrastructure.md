@@ -28,9 +28,9 @@ When coding agents work on kelpie:
 5. **P0 constraints ignored** - Natural language instructions get skipped
 6. **No verification** - "Is feature X done?" reads MD instead of running tests
 
-## Solution: Repo OS + RLM + Hard Control Layer
+## Solution: Repo OS + RLM + Hard Control + Codebase Intelligence
 
-Build an infrastructure layer with **two complementary systems**:
+Build an infrastructure layer with **three complementary systems**:
 
 1. **RLM (Recursive Language Models)** - Efficient context management
    - Agent never sees full codebase directly
@@ -45,9 +45,18 @@ Build an infrastructure layer with **two complementary systems**:
    - Verification by execution, not by trusting docs
    - Solves: stale MD files, P0 violations, agent lies
 
+3. **Codebase Intelligence Layer** - Thorough, truthful answers
+   - **IS vs SHOULD comparison**: Compare actual code against specs/expectations
+   - **Spec Adapters**: Normalize any spec format (OpenAPI, TLA+, patterns) to requirements
+   - **Agent-driven examination**: Intelligent analysis, not mechanical grep
+   - **Issue storage to AgentFS**: Persistent, structural issue tracking across sessions
+   - **Thoroughness verification**: Examination logs prove all partitions were checked
+   - Solves: inconsistent findings, no accumulation, unknown completeness
+
 Together:
 - **RLM** ensures agent CAN explore the codebase efficiently (capability)
 - **Hard Control Layer** ensures agent MUST verify claims (enforcement)
+- **Codebase Intelligence** ensures agent answers TRUTHFULLY with evidence (quality)
 
 ---
 
@@ -811,6 +820,13 @@ async function start_plan_session(plan_id: string): SessionResult {
 | 2026-01-20 13:00 | Separate RLM from Hard Control Layer | RLM=capability, Control=enforcement | Clearer architecture |
 | 2026-01-20 13:30 | Python REPL for RLM (RestrictedPython) | Sandboxed, simple subprocess from MCP | Python as dependency |
 | 2026-01-20 13:30 | 30s timeout, 3-level depth, 100KB output limits | Prevent runaway execution | Limits complex analysis |
+| 2026-01-21 | Codebase Intelligence Layer (Phase 10) | General solution for "is work real/correct?" | Third system to maintain |
+| 2026-01-21 | IS vs SHOULD comparison framework | Ground truth vs expectation | Requires spec adapters |
+| 2026-01-21 | Agent-driven (not mechanical) analysis | Intelligent issue detection | LLM costs for examination |
+| 2026-01-21 | Issue storage in AgentFS | Persistent, accumulating issues | Schema maintenance |
+| 2026-01-21 | Spec adapters for normalization | Generic to any spec format | Per-spec adapter needed |
+| 2026-01-21 | Thoroughness verification via examination log | Prove completeness | Log storage overhead |
+| 2026-01-21 | codebase_question MCP tool entry point | Single entry for any question | Spawns RLM subprocess |
 
 ---
 
@@ -821,7 +837,30 @@ async function start_plan_session(plan_id: string): SessionResult {
 │                              AGENT LAYER                                    │
 │                       (Claude Code + Skills)                                │
 │                                                                             │
-│    User Query: "Find all dead code and remove it"                          │
+│    User Query: "What's the state of DST coverage?"                         │
+│                              │                                              │
+│                              ▼                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │            CODEBASE INTELLIGENCE LAYER (Phase 10)                   │    │
+│  │                                                                     │    │
+│  │  1. Understand question → scope analysis                           │    │
+│  │  2. Load expectations (SHOULD) from specs:                         │    │
+│  │     • spec_adapters load: OpenAPI, TLA+, pattern rules             │    │
+│  │     • Normalized to Requirement objects                            │    │
+│  │  3. Systematic examination (via RLM):                              │    │
+│  │     • Agent-driven analysis of each partition                      │    │
+│  │     • Compare IS (actual code) vs SHOULD (spec requirements)       │    │
+│  │     • Surface issues to AgentFS as structured records              │    │
+│  │  4. Thoroughness verification:                                     │    │
+│  │     • Log examined partitions                                      │    │
+│  │     • Prove ALL relevant areas were checked                        │    │
+│  │  5. Synthesize evidence-backed answer                              │    │
+│  │                                                                     │    │
+│  │  Key components:                                                    │    │
+│  │  • codebase_question MCP tool (entry point)                        │    │
+│  │  • Issue storage schema in AgentFS                                 │    │
+│  │  • Pre-built spec configs (Letta, DST, TLA+)                       │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
 │                              │                                              │
 │                              ▼                                              │
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
@@ -924,11 +963,12 @@ async function start_plan_session(plan_id: string): SessionResult {
 
 | Layer | Purpose | Mechanism |
 |-------|---------|-----------|
+| **Codebase Intelligence** | Thorough, truthful answers | IS vs SHOULD comparison, spec adapters, issue storage |
 | **RLM Layer** | Efficient codebase exploration | REPL + recursive calls, codebase as variable |
 | **Hard Control Layer** | Enforcement, verification | MCP tool gates, evidence required |
 | **Hard Floor** | Final safety net | Git hooks, CI checks |
 | **Index Layer** | Queryable knowledge | Structural + semantic indexes |
-| **AgentFS** | Persistent agent state | SQLite-backed, audit trail |
+| **AgentFS** | Persistent agent state | SQLite-backed, audit trail, issues table |
 | **Execution** | Ground truth | Actual test runs, tool output |
 
 ---
@@ -3353,6 +3393,534 @@ DST_SEED=42 cargo test -p kelpie-dst 2>&1 | md5sum
 
 ---
 
+### Phase 10: Codebase Intelligence Layer
+
+**Goal:** Enable thorough, truthful, evidence-backed answers to ANY question about the codebase - whether "generate full docs" or "assess DST state" - with consistent expectations, accumulated issues, and verified thoroughness.
+
+**Why This Layer:**
+- RLM provides efficient context management (HOW to examine)
+- Hard Controls provide enforcement (MUST verify)
+- This layer provides INTELLIGENCE (WHAT to check, compare against WHAT, store findings WHERE)
+
+Without this layer:
+- Each agent invents their own expectations
+- Issues found and lost between sessions
+- No verification that examination was thorough
+- Different agents give different answers to same question
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  LAYER 3: CODEBASE INTELLIGENCE (This Phase)                 │
+│  - Spec adapters (IS vs SHOULD framework)                    │
+│  - Agent-driven examination workflow                         │
+│  - Issue storage to AgentFS                                  │
+│  - Thoroughness verification                                 │
+└─────────────────────────────────────────────────────────────┘
+                            │ uses
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│  LAYER 2: RLM INFRASTRUCTURE (Phase 3b)                      │
+│  - CodebaseContext, partition+map, recursive calls           │
+└─────────────────────────────────────────────────────────────┘
+                            │ uses
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│  LAYER 1: BASE TOOLS (Phase 4)                               │
+│  - MCP tools, AgentFS, Indexes                               │
+└─────────────────────────────────────────────────────────────┘
+```
+
+- [ ] **10.1: Spec Adapter Framework**
+
+  Define how to normalize ANY specification into comparable requirements:
+
+  ```python
+  # tools/rlm-env/rlm_env/specs.py
+
+  @dataclass
+  class Requirement:
+      """Normalized requirement from any spec source"""
+      id: str
+      source: str                    # "letta_openapi", "dst_rules", "actor.tla"
+      description: str               # Human-readable expectation
+      verification_hint: str         # Guidance for examining agent
+      context: dict                  # Source-specific details
+
+  class SpecAdapter(ABC):
+      """Base class for normalizing specs to requirements"""
+
+      @abstractmethod
+      def load(self, source: str) -> List[Requirement]:
+          """Load and parse specification into requirements"""
+          pass
+
+      @abstractmethod
+      def applies_to(self, requirement: Requirement, module: str) -> bool:
+          """Check if requirement applies to given module"""
+          pass
+  ```
+
+  **Adapters to implement:**
+
+  ```python
+  class OpenAPIAdapter(SpecAdapter):
+      """For API compatibility (Letta, etc.)
+
+      Extracts: endpoints, request/response schemas, behaviors
+      Source: OpenAPI YAML/JSON files
+      """
+
+  class PatternRuleAdapter(SpecAdapter):
+      """For structural requirements (DST coverage, etc.)
+
+      Extracts: file patterns, function patterns, required properties
+      Source: YAML rule files like dst-coverage.yaml
+      """
+
+  class TLAPlusAdapter(SpecAdapter):
+      """For formal specifications
+
+      Extracts: invariants, state predicates, temporal properties
+      Source: TLA+ spec files
+      """
+
+  class TypeContractAdapter(SpecAdapter):
+      """For type-level requirements
+
+      Extracts: function signatures, trait bounds, type constraints
+      Source: Rust code itself (types ARE specs)
+      """
+  ```
+
+  **Example specs:**
+
+  ```yaml
+  # .kelpie-index/specs/dst-coverage.yaml
+  source: dst_rules
+  rules:
+    - id: storage_dst_coverage
+      description: "All pub async fn in storage layer must have DST test"
+      file_pattern: "crates/kelpie-storage/**/*.rs"
+      function_pattern: "pub async fn"
+      required:
+        - test_file_suffix: "_dst.rs"
+        - fault_injection: ["StorageWriteFail", "StorageReadFail"]
+
+    - id: actor_crash_recovery
+      description: "Actor recovery must have DST with crash faults"
+      file_pattern: "crates/kelpie-runtime/src/actor.rs"
+      function_pattern: "recover_actor|restore_state"
+      required:
+        - fault_injection: ["CrashBeforeWrite", "CrashAfterWrite"]
+  ```
+
+- [ ] **10.2: Issue Storage Schema**
+
+  Extend AgentFS to store structured issues:
+
+  ```sql
+  -- In .agentfs/agent.db
+
+  CREATE TABLE issues (
+      id TEXT PRIMARY KEY,
+      found_at INTEGER NOT NULL,
+      found_by TEXT NOT NULL,          -- agent session ID
+
+      -- Classification
+      category TEXT NOT NULL,          -- stub, gap, mismatch, incomplete, fake_dst, etc.
+      severity TEXT NOT NULL,          -- critical, high, medium, low
+
+      -- SHOULD (expectation)
+      spec_source TEXT,                -- "letta_openapi", "dst_rules", etc.
+      spec_requirement_id TEXT,        -- Reference to specific requirement
+      should_description TEXT NOT NULL,
+
+      -- IS (reality)
+      is_description TEXT NOT NULL,
+      location TEXT,                   -- file:line
+      evidence TEXT,                   -- Code snippet or analysis
+
+      -- Agent analysis
+      analysis TEXT NOT NULL,          -- Why this is an issue
+      suggested_fix TEXT,
+      confidence REAL,                 -- 0-1, agent's confidence
+
+      -- Status tracking
+      status TEXT DEFAULT 'open',      -- open, confirmed, disputed, fixed, wont_fix
+      verified_by TEXT,                -- Another agent/human confirmed
+      fixed_in_commit TEXT,
+
+      -- Relationships
+      related_issues TEXT,             -- JSON array of related issue IDs
+      blocks TEXT,                     -- JSON array - what can't work until fixed
+      blocked_by TEXT                  -- JSON array - what must be fixed first
+  );
+
+  CREATE INDEX idx_issues_severity ON issues(severity);
+  CREATE INDEX idx_issues_status ON issues(status);
+  CREATE INDEX idx_issues_spec ON issues(spec_source);
+  CREATE INDEX idx_issues_category ON issues(category);
+
+  -- Examination log for thoroughness verification
+  CREATE TABLE examination_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      question TEXT NOT NULL,          -- The question being answered
+      module TEXT NOT NULL,            -- What was examined
+      examined_at INTEGER NOT NULL,
+      issues_found INTEGER,
+      notes TEXT
+  );
+  ```
+
+  **MCP tools for issues:**
+
+  ```typescript
+  // tools/mcp-kelpie/src/issues.ts
+
+  issue_record(issue: Issue): string           // Record new issue, return ID
+  issue_update(id: string, updates: Partial<Issue>): void
+  issue_query(filters: IssueFilters): Issue[]  // Query by severity, status, spec, etc.
+  issue_summary(): IssueSummary                // Counts by category/severity
+  issue_related(id: string): Issue[]           // Find related issues
+  ```
+
+- [ ] **10.3: Agent-Driven Examination Workflow**
+
+  The core workflow that answers ANY codebase question:
+
+  ```python
+  # tools/rlm-env/rlm_env/intelligence.py
+
+  async def answer_codebase_question(
+      question: str,
+      specs: List[SpecAdapter] = None
+  ) -> Answer:
+      """
+      Answer ANY question about the codebase with:
+      - Thorough examination (RLM-driven)
+      - Consistent expectations (from specs)
+      - Accumulated issues (to AgentFS)
+      - Verified thoroughness (examination log)
+      """
+
+      # 1. UNDERSTAND & SCOPE
+      scope = await RLM(f"""
+          Analyze this question and determine examination scope:
+
+          Question: {question}
+
+          Determine:
+          - What parts of codebase are relevant?
+          - What specs/expectations apply?
+          - What specific things need to be checked?
+          - How to partition for thorough coverage?
+      """)
+
+      # 2. LOAD EXPECTATIONS (SHOULD)
+      requirements = []
+      if specs:
+          for spec in specs:
+              reqs = spec.load()
+              requirements.extend([r for r in reqs if spec.applies_to(r, scope)])
+      else:
+          # Agent extracts implicit expectations from question
+          requirements = await RLM(f"""
+              What should be true for this question to have a positive answer?
+              Extract as specific, verifiable requirements.
+
+              Question: {question}
+          """)
+
+      # 3. SYSTEMATIC EXAMINATION (RLM)
+      partitions = codebase.partition_by_scope(scope)
+      all_findings = []
+
+      for partition in partitions:
+          # Log that we're examining this partition
+          agentfs.log_examination(session_id, question, partition.name)
+
+          # Agent examines ONE partition thoroughly
+          finding = await RLM(f"""
+              Examine this code thoroughly:
+
+              Partition: {partition.name}
+
+              EXPECTATIONS (what SHOULD be true):
+              {[r.description for r in requirements if r.applies_to(partition)]}
+
+              For this partition:
+              1. What actually exists? (IS)
+              2. Does it satisfy the expectations? (IS vs SHOULD)
+              3. What's missing, broken, stubbed, or suspicious?
+              4. Provide EVIDENCE for every claim
+
+              Be thorough. Be skeptical. Don't trust comments.
+          """, partition)
+
+          all_findings.append(finding)
+
+          # Record issues to AgentFS (structured, persistent)
+          for issue in finding.issues:
+              agentfs.record_issue({
+                  "found_by": session_id,
+                  "spec_source": issue.spec_source,
+                  "should_description": issue.should,
+                  "is_description": issue.is_,
+                  "evidence": issue.evidence,
+                  "analysis": issue.analysis,
+                  "severity": issue.severity,
+                  "confidence": issue.confidence
+              })
+
+      # 4. SYNTHESIZE ANSWER
+      answer = await RLM(f"""
+          Synthesize a complete, truthful answer:
+
+          Question: {question}
+
+          All findings:
+          {all_findings}
+
+          All issues (from AgentFS):
+          {agentfs.query_issues(session_id=session_id)}
+
+          Examination coverage:
+          {agentfs.get_examination_log(session_id)}
+
+          Provide:
+          - Direct answer to the question
+          - What's working (with evidence)
+          - What's broken/missing/fake (with evidence)
+          - Severity and priority of issues
+          - What was examined (for thoroughness verification)
+      """)
+
+      return answer
+  ```
+
+- [ ] **10.4: Codebase Question MCP Tool**
+
+  Single entry point for any codebase question:
+
+  ```typescript
+  // tools/mcp-kelpie/src/intelligence.ts
+
+  /**
+   * Ask ANY question about the codebase.
+   * Returns thorough, truthful, evidence-backed answer.
+   *
+   * Examples:
+   * - "What's the state of DST?"
+   * - "Is Letta compatibility complete?"
+   * - "What's broken in the storage layer?"
+   * - "Generate documentation for the agent module"
+   */
+  export const codebase_question = {
+      name: "codebase_question",
+      description: "Ask any question about the codebase with thorough, evidence-backed answer",
+      inputSchema: {
+          type: "object",
+          properties: {
+              question: {
+                  type: "string",
+                  description: "The question to answer"
+              },
+              specs: {
+                  type: "array",
+                  items: { type: "string" },
+                  description: "Optional spec sources to compare against (e.g., 'letta_openapi', 'dst_rules')"
+              },
+              scope: {
+                  type: "string",
+                  description: "Optional scope limitation (e.g., 'crates/kelpie-storage/')"
+              }
+          },
+          required: ["question"]
+      },
+      handler: async (args) => {
+          // Spawn RLM environment with intelligence workflow
+          const result = await rlm_execute(`
+              from rlm_env.intelligence import answer_codebase_question
+
+              specs = load_specs(${JSON.stringify(args.specs || [])})
+              answer = await answer_codebase_question(
+                  question=${JSON.stringify(args.question)},
+                  specs=specs
+              )
+              FINAL(answer)
+          `);
+
+          return result;
+      }
+  };
+  ```
+
+- [ ] **10.5: Thoroughness Verification**
+
+  Ensure examination was actually thorough:
+
+  ```python
+  # tools/rlm-env/rlm_env/thoroughness.py
+
+  def verify_thoroughness(session_id: str, scope: Scope) -> ThortoughnessReport:
+      """
+      Verify that examination actually covered everything.
+      Prevents agents from skipping parts and giving confident answers.
+      """
+
+      examination_log = agentfs.get_examination_log(session_id)
+      expected_partitions = scope.all_partitions()
+
+      examined = set(e.module for e in examination_log)
+      expected = set(p.name for p in expected_partitions)
+
+      missing = expected - examined
+      extra = examined - expected  # Examined more than expected (OK)
+
+      return ThortoughnessReport(
+          complete=len(missing) == 0,
+          examined_count=len(examined),
+          expected_count=len(expected),
+          missing_partitions=list(missing),
+          coverage_percent=len(examined) / len(expected) * 100 if expected else 100
+      )
+  ```
+
+  **Hard control integration:**
+
+  ```python
+  # Before returning answer, verify thoroughness
+  thoroughness = verify_thoroughness(session_id, scope)
+
+  if not thoroughness.complete:
+      # Don't return partial answer as complete
+      answer.add_warning(f"""
+          ⚠️ INCOMPLETE EXAMINATION
+          Missing: {thoroughness.missing_partitions}
+          Coverage: {thoroughness.coverage_percent}%
+      """)
+
+  # Include thoroughness in answer metadata
+  answer.metadata["thoroughness"] = thoroughness
+  ```
+
+- [ ] **10.6: Pre-built Spec Configurations**
+
+  Common spec configurations ready to use:
+
+  ```yaml
+  # .kelpie-index/specs/presets.yaml
+
+  presets:
+    dst_assessment:
+      description: "Assess DST state: coverage, fakes, harness quality"
+      specs:
+        - type: pattern_rules
+          source: .kelpie-index/specs/dst-coverage.yaml
+      checks:
+        - coverage_completeness
+        - determinism_verification
+        - fault_injection_adequacy
+        - harness_completeness
+
+    letta_compatibility:
+      description: "Verify Letta API compatibility"
+      specs:
+        - type: openapi
+          source: https://raw.githubusercontent.com/letta-ai/letta/main/openapi.yaml
+        - type: test_suite
+          source: tests/letta_compatibility/
+      checks:
+        - endpoint_existence
+        - schema_match
+        - behavior_match
+        - no_stub_responses
+
+    formal_verification:
+      description: "Verify code against TLA+/Stateright specs"
+      specs:
+        - type: tlaplus
+          source: specs/*.tla
+        - type: stateright
+          source: tests/model/*.rs
+      checks:
+        - invariant_preservation
+        - state_machine_match
+  ```
+
+  **Usage:**
+
+  ```typescript
+  // Use preset configuration
+  codebase_question({
+      question: "What's the state of DST?",
+      specs: ["preset:dst_assessment"]
+  })
+
+  // Or custom
+  codebase_question({
+      question: "Does our agent implementation match the TLA+ spec?",
+      specs: ["specs/agent.tla"]
+  })
+  ```
+
+- [ ] **10.7: Issue Dashboard Skill**
+
+  Skill for reviewing accumulated issues:
+
+  ```markdown
+  # .claude/skills/issue-dashboard.md
+
+  When asked about issues, use the issue query tools:
+
+  ## Common Queries
+
+  ### "What are the critical issues?"
+  ```
+  issues = issue_query(severity="critical", status="open")
+  for issue in issues:
+      print(f"- [{issue.id}] {issue.should_description}")
+      print(f"  Location: {issue.location}")
+      print(f"  Evidence: {issue.evidence[:200]}")
+  ```
+
+  ### "What's blocking Letta compatibility?"
+  ```
+  issues = issue_query(spec_source="letta%", status="open")
+  summary = issue_summary(spec_source="letta%")
+  print(f"Total: {summary.total}, Critical: {summary.critical}, High: {summary.high}")
+  ```
+
+  ### "What issues did the last agent find?"
+  ```
+  recent = issue_query(order_by="found_at DESC", limit=20)
+  ```
+
+  ### "What's been fixed?"
+  ```
+  fixed = issue_query(status="fixed", order_by="fixed_in_commit")
+  ```
+  ```
+
+**Verification:**
+
+```bash
+# Test the intelligence workflow
+mcp.codebase_question("What's the state of DST in this repo?", specs=["preset:dst_assessment"])
+
+# Verify issues were recorded
+sqlite3 .agentfs/agent.db "SELECT COUNT(*) FROM issues WHERE spec_source LIKE 'dst%'"
+
+# Verify examination was thorough
+sqlite3 .agentfs/agent.db "SELECT module, examined_at FROM examination_log ORDER BY examined_at"
+
+# Query issue summary
+mcp.issue_summary()
+```
+
+---
+
 ## Checkpoints
 
 - [x] Codebase understood
@@ -3375,6 +3943,14 @@ DST_SEED=42 cargo test -p kelpie-dst 2>&1 | md5sum
 - [x] **Phase 7: Parallel indexing + auto-validation + build progress tracking** ✅
 - [ ] Phase 8: Integration testing
 - [ ] Phase 9: Slop cleanup workflow (initial audit on kelpie)
+- [ ] Phase 10: Codebase Intelligence Layer
+- [ ] Phase 10.1: Spec Adapter Framework
+- [ ] Phase 10.2: Issue Storage Schema (AgentFS tables)
+- [ ] Phase 10.3: Agent-Driven Examination Workflow
+- [ ] Phase 10.4: Codebase Question MCP Tool
+- [ ] Phase 10.5: Thoroughness Verification
+- [ ] Phase 10.6: Pre-built Spec Configurations (Letta, DST, TLA+)
+- [ ] Phase 10.7: Issue Dashboard Skill
 - [ ] Tests passing (`cargo test`)
 - [ ] Clippy clean (`cargo clippy`)
 - [ ] Code formatted (`cargo fmt`)
@@ -3403,6 +3979,14 @@ DST_SEED=42 cargo test -p kelpie-dst 2>&1 | md5sum
 - [ ] Full index build → query → verify flow
 - [ ] Constraint extraction → enforcement flow
 - [ ] Multi-agent coordination
+
+**Codebase Intelligence tests (Phase 10):**
+- [ ] Spec adapter loads Letta OpenAPI and produces Requirements
+- [ ] Issue storage CRUD operations (create, query, update status)
+- [ ] Examination workflow surfaces real issues from known problematic code
+- [ ] Thoroughness verification detects unexamined partitions
+- [ ] codebase_question MCP tool spawns RLM and returns structured answer
+- [ ] IS vs SHOULD comparison detects stub implementations vs spec
 
 **Commands:**
 ```bash
@@ -3439,6 +4023,11 @@ cargo test -p kelpie-dst index
 | Semantic summaries drift | Navigation misleads | Use for navigation only, always verify claims by execution |
 | MCP server becomes bottleneck | Slow agent operations | Cache aggressively, parallel tool calls |
 | Agent ignores soft controls | Workflow not followed | Hard floor catches via pre-commit hooks |
+| Spec adapter misparses external spec | Wrong SHOULD expectations | Validate adapter output against known spec samples |
+| Agent-driven analysis misses issues | False sense of completeness | Thoroughness verification, multiple passes, cross-reference |
+| Issue storage grows unbounded | Performance degradation | Pagination, archival for closed issues, indexes |
+| Specs drift from actual expectations | Misleading comparison | Generate specs from code/external sources, not manual |
+| Examination takes too long | User impatience | Progressive disclosure, summary first, details on request |
 
 ---
 

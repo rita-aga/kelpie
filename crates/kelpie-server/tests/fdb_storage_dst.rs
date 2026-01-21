@@ -340,7 +340,7 @@ async fn test_dst_fdb_session_checkpoint_with_conflicts() {
                     message_type: "assistant_message".to_string(),
                     role: MessageRole::Assistant,
                     content: format!("Response {}", i),
-                    tool_calls: None,
+                    tool_call: None,
                     tool_call_id: None,
                     created_at: chrono::Utc::now(),
                 };
@@ -463,7 +463,7 @@ async fn test_dst_fdb_messages_with_high_fault_rate() {
                     message_type: "user_message".to_string(),
                     role: MessageRole::User,
                     content: format!("Message {}", i),
-                    tool_calls: None,
+                    tool_call: None,
                     tool_call_id: None,
                     created_at: chrono::Utc::now(),
                 };
@@ -547,7 +547,7 @@ async fn test_dst_fdb_concurrent_operations() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.1))
         .run_async(|env| async move {
-            use kelpie_core::{CurrentRuntime, Runtime};
+            use kelpie_core::{current_runtime, CurrentRuntime, Runtime};
             let runtime = current_runtime();
             let storage = Arc::new(create_storage(&env));
 
@@ -715,7 +715,7 @@ async fn test_dst_fdb_crash_recovery() {
                     message_type: "user_message".to_string(),
                     role: MessageRole::User,
                     content: format!("Pre-crash message {}", i),
-                    tool_calls: None,
+                    tool_call: None,
                     tool_call_id: None,
                     created_at: chrono::Utc::now(),
                 };
@@ -936,7 +936,7 @@ async fn test_dst_fdb_delete_cascade() {
                 message_type: "user_message".to_string(),
                 role: MessageRole::User,
                 content: "Test message".to_string(),
-                tool_calls: None,
+                tool_call: None,
                 tool_call_id: None,
                 created_at: chrono::Utc::now(),
             };

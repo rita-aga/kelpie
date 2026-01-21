@@ -7,12 +7,12 @@ use crate::error::{ClusterError, ClusterResult};
 use crate::migration::{plan_migrations, MigrationCoordinator};
 use crate::rpc::{RpcMessage, RpcTransport};
 use kelpie_core::actor::ActorId;
+use kelpie_core::runtime::{JoinHandle, Runtime};
 use kelpie_registry::{Heartbeat, NodeId, NodeInfo, NodeStatus, PlacementDecision, Registry};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Notify, RwLock};
-use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
 /// Cluster state
@@ -31,7 +31,7 @@ pub enum ClusterState {
 /// The main cluster coordinator
 ///
 /// Manages cluster membership, heartbeats, and actor placement.
-pub struct Cluster<R: Registry + 'static, T: RpcTransport + 'static> {
+pub struct Cluster<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> {
     /// Local node information
     local_node: NodeInfo,
     /// Cluster configuration
@@ -40,6 +40,8 @@ pub struct Cluster<R: Registry + 'static, T: RpcTransport + 'static> {
     registry: Arc<R>,
     /// RPC transport
     transport: Arc<T>,
+    /// Runtime for task spawning and time
+    runtime: RT,
     /// Migration coordinator
     migration: Arc<MigrationCoordinator<R, T>>,
     /// Current cluster state
@@ -57,13 +59,14 @@ pub struct Cluster<R: Registry + 'static, T: RpcTransport + 'static> {
     heartbeat_sequence: AtomicU64,
 }
 
-impl<R: Registry + 'static, T: RpcTransport + 'static> Cluster<R, T> {
+impl<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> Cluster<R, T, RT> {
     /// Create a new cluster instance
     pub fn new(
         local_node: NodeInfo,
         config: ClusterConfig,
         registry: Arc<R>,
         transport: Arc<T>,
+        runtime: RT,
     ) -> Self {
         let migration = Arc::new(MigrationCoordinator::new(
             local_node.id.clone(),
@@ -77,6 +80,7 @@ impl<R: Registry + 'static, T: RpcTransport + 'static> Cluster<R, T> {
             config,
             registry,
             transport,
+            runtime,
             migration,
             state: RwLock::new(ClusterState::Stopped),
             heartbeat_task: RwLock::new(None),
@@ -192,12 +196,14 @@ impl<R: Registry + 'static, T: RpcTransport + 'static> Cluster<R, T> {
 
         // Stop heartbeat task
         if let Some(task) = self.heartbeat_task.write().await.take() {
-            task.abort();
+            // Wait for task to finish (signaled via shutdown notify)
+            let _ = task.await;
         }
 
         // Stop failure detection task
         if let Some(task) = self.failure_task.write().await.take() {
-            task.abort();
+            // Wait for task to finish (signaled via shutdown notify)
+            let _ = task.await;
         }
 
         // Notify cluster of leave
@@ -253,13 +259,12 @@ impl<R: Registry + 'static, T: RpcTransport + 'static> Cluster<R, T> {
         let interval = Duration::from_millis(self.config.heartbeat.interval_ms);
         let shutdown = self.shutdown.clone();
         let sequence = Arc::new(AtomicU64::new(0));
+        let runtime = self.runtime.clone();
 
-        let task = tokio::spawn(async move {
-            let mut interval_timer = tokio::time::interval(interval);
-
+        let task = self.runtime.spawn(async move {
             loop {
                 tokio::select! {
-                    _ = interval_timer.tick() => {
+                    _ = runtime.sleep(interval) => {
                         // Get current actor count
                         let actor_count = registry
                             .list_actors_on_node(&node_id)
@@ -302,13 +307,12 @@ impl<R: Registry + 'static, T: RpcTransport + 'static> Cluster<R, T> {
         let local_node_id = self.local_node.id.clone();
         let interval = Duration::from_millis(self.config.heartbeat.interval_ms);
         let shutdown = self.shutdown.clone();
+        let runtime = self.runtime.clone();
 
-        let task = tokio::spawn(async move {
-            let mut interval_timer = tokio::time::interval(interval);
-
+        let task = self.runtime.spawn(async move {
             loop {
                 tokio::select! {
-                    _ = interval_timer.tick() => {
+                    _ = runtime.sleep(interval) => {
                         // Check for failed nodes (if registry supports it)
                         // For MemoryRegistry, we'd need to add a method to check timeouts
 
@@ -446,6 +450,7 @@ fn now_ms() -> u64 {
 mod tests {
     use super::*;
     use crate::rpc::MemoryTransport;
+    use kelpie_core::TokioRuntime;
     use kelpie_registry::MemoryRegistry;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -467,8 +472,9 @@ mod tests {
         let config = ClusterConfig::single_node(addr);
         let registry = Arc::new(MemoryRegistry::new());
         let transport = Arc::new(MemoryTransport::new(node_id.clone(), addr));
+        let runtime = TokioRuntime;
 
-        let cluster = Cluster::new(node, config, registry, transport);
+        let cluster = Cluster::new(node, config, registry, transport, runtime);
 
         assert_eq!(cluster.local_node_id(), &node_id);
         assert_eq!(cluster.state().await, ClusterState::Stopped);
@@ -484,8 +490,9 @@ mod tests {
         let config = ClusterConfig::for_testing();
         let registry = Arc::new(MemoryRegistry::new());
         let transport = Arc::new(MemoryTransport::new(node_id.clone(), addr));
+        let runtime = TokioRuntime;
 
-        let cluster = Cluster::new(node, config, registry, transport);
+        let cluster = Cluster::new(node, config, registry, transport, runtime);
 
         cluster.start().await.unwrap();
         assert!(cluster.is_running().await);
@@ -504,8 +511,9 @@ mod tests {
         let config = ClusterConfig::for_testing();
         let registry = Arc::new(MemoryRegistry::new());
         let transport = Arc::new(MemoryTransport::new(node_id.clone(), addr));
+        let runtime = TokioRuntime;
 
-        let cluster = Cluster::new(node, config, registry, transport);
+        let cluster = Cluster::new(node, config, registry, transport, runtime);
         cluster.start().await.unwrap();
 
         let nodes = cluster.list_nodes().await.unwrap();
@@ -525,8 +533,9 @@ mod tests {
         let config = ClusterConfig::for_testing();
         let registry = Arc::new(MemoryRegistry::new());
         let transport = Arc::new(MemoryTransport::new(node_id.clone(), addr));
+        let runtime = TokioRuntime;
 
-        let cluster = Cluster::new(node, config, registry, transport);
+        let cluster = Cluster::new(node, config, registry, transport, runtime);
         cluster.start().await.unwrap();
 
         let actor_id = ActorId::new("test", "actor-1").unwrap();

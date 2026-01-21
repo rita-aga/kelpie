@@ -1218,7 +1218,7 @@ pub async fn load_mcp_tool<R: Runtime + 'static>(
                 state
                     .tool_registry()
                     .register_mcp_tool(
-                        tool_id.to_string(),  // Use full ID, not short name
+                        tool_id.to_string(), // Use full ID, not short name
                         tool.description.clone(),
                         tool.input_schema.clone(),
                         server.server_name.clone(),
@@ -1233,7 +1233,7 @@ pub async fn load_mcp_tool<R: Runtime + 'static>(
                 );
 
                 return Some(crate::llm::ToolDefinition {
-                    name: tool_id.to_string(),  // Use full ID to match agent.tool_ids
+                    name: tool_id.to_string(), // Use full ID to match agent.tool_ids
                     description: tool.description,
                     input_schema: tool.input_schema,
                 });

@@ -2,6 +2,9 @@
 //!
 //! TigerStyle: In-memory storage with fault injection, including transaction support.
 
+// Allow tokio usage in DST framework code (this IS the abstraction layer)
+#![allow(clippy::disallowed_methods)]
+
 use crate::fault::{FaultInjector, FaultType};
 use crate::rng::DeterministicRng;
 use async_trait::async_trait;

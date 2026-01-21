@@ -12,7 +12,7 @@
 #![cfg(feature = "dst")]
 
 use async_trait::async_trait;
-use kelpie_core::{CurrentRuntime, Result, Runtime};
+use kelpie_core::{current_runtime, CurrentRuntime, Result, Runtime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -163,7 +163,8 @@ async fn test_dst_agent_message_basic() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(CurrentRuntime, &sim_env)?;
+            use kelpie_core::current_runtime;
+            let service = create_service(current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -256,7 +257,8 @@ async fn test_dst_agent_message_with_tool_call() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(CurrentRuntime, &sim_env)?;
+            use kelpie_core::current_runtime;
+            let service = create_service(current_runtime(), &sim_env)?;
 
             // Create agent with shell tool
             let request = CreateAgentRequest {
@@ -329,7 +331,7 @@ async fn test_dst_agent_message_with_storage_fault() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.3))
         .run_async(|sim_env| async move {
-            let service = create_service(CurrentRuntime, &sim_env)?;
+            let service = create_service(current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -398,7 +400,8 @@ async fn test_dst_agent_message_history() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(CurrentRuntime, &sim_env)?;
+            use kelpie_core::current_runtime;
+            let service = create_service(current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -473,6 +476,7 @@ async fn test_dst_agent_message_concurrent() {
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
+            use kelpie_core::current_runtime;
             let runtime = current_runtime();
             let service = create_service(runtime.clone(), &sim_env)?;
 

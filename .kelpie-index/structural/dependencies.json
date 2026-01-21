@@ -1,8 +1,8 @@
 {
   "version": "1.0.0",
   "description": "Crate dependency graph from cargo metadata",
-  "built_at": "2026-01-20T23:12:05.018252+00:00",
-  "git_sha": "c5b51c1bd93cd54c738f76386993b3dd869ee933",
+  "built_at": "2026-01-21T13:31:48.758808+00:00",
+  "git_sha": "08f18d45e77a1ab6a284f8dbcd124569dd772658",
   "nodes": [
     {
       "id": "kelpie-core",

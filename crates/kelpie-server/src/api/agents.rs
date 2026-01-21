@@ -27,6 +27,8 @@ pub struct ListAgentsQuery {
     pub after: Option<String>,
     /// Filter by project ID
     pub project_id: Option<String>,
+    /// Filter by agent name (exact match)
+    pub name: Option<String>,
 }
 
 fn default_limit() -> usize {
@@ -174,6 +176,13 @@ async fn create_agent<R: Runtime + 'static>(
     // Create agent via dual-mode method
     let mut created = state.create_agent_async(request).await?;
 
+    // TigerStyle: Persist agent metadata to storage for list operations
+    // This indexes the agent in FDB so list_agents_async can find it
+    state
+        .persist_agent(&created)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to persist agent metadata: {}", e)))?;
+
     // Look up and attach standalone blocks by ID (letta-code compatibility)
     // Note: This is a temporary workaround until standalone blocks are integrated into the actor model
     for block_id in block_ids {
@@ -182,11 +191,6 @@ async fn create_agent<R: Runtime + 'static>(
         } else {
             tracing::warn!(block_id = %block_id, "standalone block not found, skipping");
         }
-    }
-
-    // Persist to durable storage (if configured)
-    if let Err(e) = state.persist_agent(&created).await {
-        tracing::warn!(agent_id = %created.id, error = %e, "failed to persist agent to storage");
     }
 
     // TigerStyle: Validate tool references (MCP tools already registered at server creation)
@@ -381,7 +385,7 @@ async fn list_agents<R: Runtime + 'static>(
     // The `after` parameter is what the Letta SDK uses for pagination
     let pagination_cursor = query.cursor.as_deref().or(query.after.as_deref());
 
-    let (items, cursor, total) = if let Some(project_id) = query.project_id.as_deref() {
+    let (mut items, cursor, total) = if let Some(project_id) = query.project_id.as_deref() {
         let mut agents = state.list_agents_by_project(project_id)?;
         agents.sort_by(|a, b| a.created_at.cmp(&b.created_at));
         let total = agents.len();
@@ -412,6 +416,11 @@ async fn list_agents<R: Runtime + 'static>(
         let total = state.agent_count()?;
         (items, cursor, total)
     };
+
+    // TigerStyle: Apply name filter if provided (Letta SDK compatibility)
+    if let Some(name_filter) = query.name.as_deref() {
+        items.retain(|agent| agent.name == name_filter);
+    }
 
     Ok(Json(ListResponse {
         items,

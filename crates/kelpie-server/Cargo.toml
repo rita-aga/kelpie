@@ -13,7 +13,7 @@ default = ["fdb"]
 otel = ["kelpie-core/otel", "prometheus"]
 dst = ["kelpie-tools/dst", "dep:kelpie-dst"]
 fdb = ["dep:foundationdb", "kelpie-storage/fdb"]
-madsim = ["kelpie-core/madsim"]
+madsim = ["kelpie-core/madsim", "kelpie-dst?/madsim"]
 
 [dependencies]
 # Core kelpie crates

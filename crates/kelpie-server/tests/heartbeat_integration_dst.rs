@@ -100,7 +100,7 @@ fn test_message_write_fault_after_pause() {
                 role: kelpie_server::models::MessageRole::Tool,
                 content: tool_result.output.clone(),
                 tool_call_id: Some("call-1".to_string()),
-                tool_calls: None,
+                tool_call: None,
                 created_at: chrono::Utc::now(),
             };
 
@@ -214,7 +214,7 @@ fn test_probabilistic_faults_during_pause_flow() {
                     role: kelpie_server::models::MessageRole::Tool,
                     content: tool_result.output,
                     tool_call_id: Some(format!("call-{}", i)),
-                    tool_calls: None,
+                    tool_call: None,
                     created_at: chrono::Utc::now(),
                 };
 
@@ -337,7 +337,7 @@ fn test_multiple_simultaneous_faults() {
                 role: kelpie_server::models::MessageRole::Tool,
                 content: "test".to_string(),
                 tool_call_id: None,
-                tool_calls: None,
+                tool_call: None,
                 created_at: chrono::Utc::now(),
             };
             assert!(
@@ -391,7 +391,7 @@ fn test_fault_injection_determinism() {
                         role: kelpie_server::models::MessageRole::Tool,
                         content: format!("content-{}", i),
                         tool_call_id: None,
-                        tool_calls: None,
+                        tool_call: None,
                         created_at: chrono::Utc::now(),
                     };
                     results.push(state.add_message(&agent_id, message).is_ok());
