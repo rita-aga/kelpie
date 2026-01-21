@@ -3320,7 +3320,7 @@ DST_SEED=42 cargo test -p kelpie-dst 2>&1 | md5sum
 - [ ] Phase 4: MCP server (query, verify, integrity, slop detection, DST coverage)
 - [ ] Phase 4.9: DST Coverage & Integrity Tools (critical path mapping, fault type coverage, determinism verification, enforcement gate)
 - [ ] Phase 4.10: Harness Adequacy Verification (capability audit, fidelity check, simulability analysis)
-- [ ] Phase 5: RLM skills (task, verify, explore, handoff, slop-hunt)
+- [x] **Phase 5: RLM skills (task, verify, explore, handoff, slop-hunt)** ✅
 - [ ] Phase 6: Hard controls (hooks, gates, audit)
 - [ ] Phase 7: Multi-agent orchestration
 - [ ] Phase 8: Integration testing
@@ -3771,6 +3771,86 @@ The MCP server provides a **hard control layer** that agents cannot bypass. Unli
 
 ---
 
+### Phase 5: RLM Skills and Soft Controls (Completed 2026-01-20)
+
+**Status:** All 6 RLM skills created and documented
+
+**Skills Created:**
+
+1. **rlm-task.md** (4.9 KB) - Task Development Workflow
+   - Guides agents through full task lifecycle
+   - Enforces verification-first development
+   - Integrates constraint checking and index queries
+   - Requires proof for task completion
+
+2. **rlm-verify.md** (7.4 KB) - Verification Workflow
+   - Core principle: Trust execution, not documentation
+   - Find tests → Run tests → Report results → Store verified facts
+   - Never trust MD files or comments for factual claims
+   - Create audit trail of verification
+
+3. **rlm-explore.md** (11 KB) - Codebase Exploration
+   - Strategy: Start broad (modules), narrow down (symbols), read precisely (code)
+   - Use indexes for NAVIGATION, not TRUTH
+   - Efficient exploration patterns for different scenarios
+   - Integration with test discovery
+
+4. **constraint-injection-prompt.md** (7.8 KB) - System Prompt Prefix
+   - All P0 constraints with examples
+   - Available MCP tools and their purposes
+   - Workflow requirements and key principles
+   - Anti-patterns to avoid
+   - Trust model (what to trust vs. what not to trust)
+
+5. **rlm-handoff.md** (12 KB) - Agent Handoff Protocol
+   - **MANDATORY**: Call `mcp.start_plan_session()` first
+   - Re-verifies ALL previously completed phases
+   - Trust verification reports, not checkboxes
+   - Fix or unmark failed phases before proceeding
+   - Detailed trust model and failure investigation patterns
+
+6. **rlm-slop-hunt.md** (14 KB) - Slop Detection and Cleanup
+   - 7 categories of slop (dead code, orphaned code, duplicates, fake DST, incomplete, etc.)
+   - 6-phase process: Detection → Classification → Verification → Propose → Execute → Re-run
+   - Verify before deleting (never blind deletion)
+   - One item at a time with test verification
+
+**Supporting Documentation:**
+
+7. **README.md** (8.5 KB) - Skills Overview
+   - Explains RLM skills concept
+   - Describes each skill and when to use it
+   - Examples of skill usage
+   - Integration with MCP tools and hard controls
+   - Skill design philosophy and trust model
+
+**What Works:**
+- ✅ All 6 skills created with comprehensive workflows
+- ✅ Clear documentation of when to use each skill
+- ✅ Integration patterns with MCP tools
+- ✅ Examples for each skill workflow
+- ✅ Verification-first development principles enforced
+- ✅ Hard controls (MCP) + Soft controls (Skills) architecture
+
+**Key Insight:**
+
+Skills are **soft controls** that guide agent behavior, while MCP tools provide **hard controls** that enforce verification. This layered approach ensures:
+
+1. **Capability** - Skills teach agents HOW to work efficiently (RLM pattern)
+2. **Enforcement** - Hard controls ensure agents MUST verify (can't bypass)
+3. **Trust Model** - Execution is truth; documentation is untrusted
+4. **Accountability** - Audit trails via AgentFS track all operations
+
+Even if an agent ignores skill guidance, the hard controls (MCP tool gates, git hooks) catch violations.
+
+**File Sizes:**
+- Total: ~66 KB of structured agent guidance
+- Average: ~9.4 KB per skill
+- Most comprehensive: rlm-slop-hunt.md (14 KB)
+- Most concise: rlm-task.md (4.9 KB)
+
+---
+
 ## What to Try [UPDATE AFTER EACH PHASE]
 
 ### Works Now ✅
@@ -3808,6 +3888,14 @@ The MCP server provides a **hard control layer** that agents cannot bypass. Unli
 | **Index tools** | Check tools/mcp-kelpie/src/indexes.ts | 5 tools: index_symbols, index_tests, index_modules, index_deps, index_status |
 | **Verification tools** | Check tools/mcp-kelpie/src/verify.ts | 4 tools: verify_by_tests, verify_claim, verify_all_tests, verify_clippy |
 | **MCP README** | `cat tools/mcp-kelpie/README.md` | See MCP server documentation with tool descriptions |
+| **RLM Skills directory** | `ls .claude/skills/` | See 7 files: 6 skills + README |
+| **RLM Task Skill** | `cat .claude/skills/rlm-task.md` | See task development workflow (4.9 KB) |
+| **RLM Verify Skill** | `cat .claude/skills/rlm-verify.md` | See verification workflow (7.4 KB) |
+| **RLM Explore Skill** | `cat .claude/skills/rlm-explore.md` | See codebase exploration patterns (11 KB) |
+| **RLM Handoff Skill** | `cat .claude/skills/rlm-handoff.md` | See agent handoff protocol (12 KB) |
+| **RLM Slop Hunt Skill** | `cat .claude/skills/rlm-slop-hunt.md` | See slop detection and cleanup (14 KB) |
+| **Constraint Injection Prompt** | `cat .claude/skills/constraint-injection-prompt.md` | See P0 constraints and system prompt (7.8 KB) |
+| **Skills README** | `cat .claude/skills/README.md` | See skills overview, philosophy, examples (8.5 KB) |
 
 ### Doesn't Work Yet ❌
 | What | Why | When Expected |
