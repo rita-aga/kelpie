@@ -120,6 +120,19 @@ pub trait Runtime: Send + Sync + Clone {
     where
         F: Future + Send + 'static,
         F::Output: Send + 'static;
+
+    /// Run a future with a timeout
+    ///
+    /// Preconditions:
+    /// - duration must be < 1 hour (safety limit)
+    ///
+    /// Returns:
+    /// - Ok(T) if the future completed within the timeout
+    /// - Err(()) if the timeout elapsed before completion
+    async fn timeout<F>(&self, duration: Duration, future: F) -> Result<F::Output, ()>
+    where
+        F: Future + Send,
+        F::Output: Send;
 }
 
 // Note: We cannot have a single current_runtime() that returns a trait object
@@ -141,6 +154,8 @@ pub trait Runtime: Send + Sync + Clone {
 #[derive(Debug, Clone)]
 pub struct TokioRuntime;
 
+// Allow raw tokio calls in TokioRuntime implementation (this is the abstraction layer)
+#[allow(clippy::disallowed_methods)]
 #[async_trait::async_trait]
 impl Runtime for TokioRuntime {
     fn now(&self) -> Instant {
@@ -178,6 +193,18 @@ impl Runtime for TokioRuntime {
             })
         })
     }
+
+    async fn timeout<F>(&self, duration: Duration, future: F) -> Result<F::Output, ()>
+    where
+        F: Future + Send,
+        F::Output: Send,
+    {
+        assert!(
+            duration < Duration::from_secs(3600),
+            "timeout duration too long (>1 hour)"
+        );
+        tokio::time::timeout(duration, future).await.map_err(|_| ())
+    }
 }
 
 // =============================================================================
@@ -195,11 +222,11 @@ pub struct MadsimRuntime;
 #[async_trait::async_trait]
 impl Runtime for MadsimRuntime {
     fn now(&self) -> Instant {
-        let madsim_instant = madsim::time::Instant::now();
-        // Convert madsim::time::Instant to our Instant
-        // madsim uses nanos internally, we use millis
-        let elapsed = madsim_instant.elapsed();
-        Instant::from_millis(elapsed.as_millis() as u64)
+        // Get current virtual time as duration since simulation start
+        // madsim::time::Instant represents time since simulation epoch
+        let duration_since_epoch =
+            madsim::time::Instant::now().duration_since(madsim::time::Instant::from_nanos(0));
+        Instant::from_millis(duration_since_epoch.as_millis() as u64)
     }
 
     async fn sleep(&self, duration: Duration) {
@@ -222,6 +249,20 @@ impl Runtime for MadsimRuntime {
     {
         let handle = madsim::task::spawn(future);
         Box::pin(async move { handle.await.map_err(|_| JoinError::Panicked) })
+    }
+
+    async fn timeout<F>(&self, duration: Duration, future: F) -> Result<F::Output, ()>
+    where
+        F: Future + Send,
+        F::Output: Send,
+    {
+        assert!(
+            duration < Duration::from_secs(3600),
+            "timeout duration too long (>1 hour)"
+        );
+        madsim::time::timeout(duration, future)
+            .await
+            .map_err(|_| ())
     }
 }
 
