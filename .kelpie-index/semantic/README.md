@@ -14,8 +14,6 @@ semantic/
 │   │   └── {module}/
 │   │       └── module_summary.json
 │   └── README.md
-├── embeddings/         # Vector embeddings for semantic search (optional)
-│   └── README.md
 └── validation_issues.json  # Cross-validation findings
 ```
 
@@ -136,15 +134,6 @@ Stored in: `../constraints/extracted.json`
 ```
 
 Stored in: `validation_issues.json`
-
-## Phase 3.4: Embeddings (Optional)
-
-**Goal:** Generate vector embeddings for semantic search.
-
-- Use fastembed (already in dependencies)
-- Embed: function summaries, file summaries, test descriptions
-- Store as binary files (git-ignored due to size)
-- Enable queries like "find code related to actor lifecycle"
 
 ## Why Deferred?
 

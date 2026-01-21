@@ -40,6 +40,259 @@ Build an infrastructure layer that:
 
 ---
 
+## How RLM Works
+
+### What is RLM?
+
+**RLM (Recursive Language Model)** is a controller pattern where the LLM is treated as a **subroutine inside a program**, not as the program itself.
+
+```
+Traditional Agent:                    RLM Pattern:
+┌─────────────────┐                  ┌─────────────────────────────────────┐
+│      LLM        │                  │           CONTROLLER                │
+│  (in control)   │                  │  (program logic, state machine)     │
+│                 │                  │                                     │
+│  - decides what │                  │  ┌─────────────┐                    │
+│    to do next   │                  │  │    LLM      │  ← subroutine      │
+│  - manages own  │                  │  │  (reasoning │     called when    │
+│    state        │                  │  │   engine)   │     needed         │
+│  - hopes to     │                  │  └─────────────┘                    │
+│    follow rules │                  │                                     │
+└─────────────────┘                  │  - Controller manages state         │
+        │                            │  - Controller enforces invariants   │
+        ▼                            │  - Controller decides control flow  │
+   (unstructured                     └─────────────────────────────────────┘
+    text output)                                    │
+                                                    ▼
+                                            (structured state
+                                             + verified outputs)
+```
+
+### The Key Insight
+
+In traditional prompting, we **hope** the LLM follows instructions:
+- "Please verify by running tests" → LLM might skip it
+- "Don't trust MD files" → LLM might read them anyway
+- "Update the plan after each phase" → LLM might forget
+
+In RLM, we **enforce** behavior through the controller:
+- LLM can't mark complete without verification → Tool requires proof
+- LLM can't access stale data → Tool checks freshness before returning
+- LLM state persists across sessions → Controller manages AgentFS
+
+### RLM Control Flow in Our System
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              RLM CONTROL LOOP                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+1. SESSION START
+   ┌──────────────────────────────────────────────────────────────────────────┐
+   │ Controller: start_plan_session(plan_id)                                  │
+   │                                                                          │
+   │ • Load plan from AgentFS                                                 │
+   │ • HARD: Re-verify ALL previously completed phases (can't skip)          │
+   │ • Inject P0 constraints into context                                     │
+   │ • Present verification report to LLM                                     │
+   │                                                                          │
+   │ LLM receives: { plan, verification_report, constraints, current_phase }  │
+   └──────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+2. TASK EXECUTION (Loop)
+   ┌──────────────────────────────────────────────────────────────────────────┐
+   │                                                                          │
+   │  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐                │
+   │  │    LLM      │────▶│  MCP Tools  │────▶│  AgentFS    │                │
+   │  │  (reason)   │     │  (execute)  │     │  (persist)  │                │
+   │  └─────────────┘     └─────────────┘     └─────────────┘                │
+   │         │                   │                   │                        │
+   │         │                   │                   │                        │
+   │         ▼                   ▼                   ▼                        │
+   │  "I need to check    Tool: index_query()   State updated:               │
+   │   if FDB tests pass"  │                     { verified_fact:            │
+   │         │             │ HARD: Check         "fdb_tests_pass": true,    │
+   │         │             │ freshness first     evidence: {...} }           │
+   │         │             │                                                  │
+   │         │             │ Returns: fresh                                   │
+   │         │             │ data or error                                    │
+   │         │                                                                │
+   │         ▼                                                                │
+   │  "Tests pass, now     Tool: mark_phase_complete(phase, evidence)        │
+   │   mark phase done"     │                                                 │
+   │                        │ HARD: Requires evidence parameter              │
+   │                        │ HARD: Re-runs verification commands            │
+   │                        │ HARD: Only stores if all pass                  │
+   │                        │                                                 │
+   │                        ▼                                                 │
+   │                   Success OR Error (can't lie)                          │
+   │                                                                          │
+   └──────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+3. SESSION END / HANDOFF
+   ┌──────────────────────────────────────────────────────────────────────────┐
+   │ Controller: All state persisted in AgentFS                               │
+   │                                                                          │
+   │ Next agent calls start_plan_session() → Loop restarts at step 1         │
+   │ • All completions re-verified (HARD)                                     │
+   │ • Failed verifications flagged                                           │
+   │ • New agent sees ground truth, not previous agent's claims              │
+   └──────────────────────────────────────────────────────────────────────────┘
+```
+
+### Soft Controls vs Hard Controls
+
+| Control Type | Mechanism | Can LLM Bypass? | Examples |
+|--------------|-----------|-----------------|----------|
+| **Soft** | Prompt injection, skills | Yes (might ignore) | "Verify by execution", "Update plan after each phase" |
+| **Hard** | Tool parameters, gates, hooks | No (enforced by code) | Evidence required for completion, freshness check before query |
+
+**Our Layered Approach:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  SOFT CONTROLS (Skills, Prompts)                                │
+│  • RLM task workflow instructions                               │
+│  • "Prefer structural indexes over semantic"                    │
+│  • "Verify claims by execution"                                 │
+│                                                                 │
+│  LLM MIGHT follow these. We hope it does.                       │
+├─────────────────────────────────────────────────────────────────┤
+│  HARD CONTROLS (MCP Tool Gates)                                 │
+│  • index_query() → MUST pass freshness check                    │
+│  • mark_phase_complete() → MUST provide evidence                │
+│  • mark_phase_complete() → System re-runs verification          │
+│  • start_plan_session() → System re-verifies all completions    │
+│                                                                 │
+│  LLM CANNOT bypass these. Code enforces.                        │
+├─────────────────────────────────────────────────────────────────┤
+│  HARD FLOOR (Git Hooks, CI)                                     │
+│  • Pre-commit: tests must pass                                  │
+│  • Pre-commit: clippy must pass                                 │
+│  • Pre-commit: DST coverage for critical paths                  │
+│  • CI: determinism verification                                 │
+│                                                                 │
+│  Even if LLM + tools fail, this catches it.                     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Concrete Example: "Is the streaming feature complete?"
+
+**Without RLM (Traditional Agent):**
+```
+User: Is the streaming feature complete?
+
+Agent: *reads .progress/015_streaming.md*
+       "According to the plan, Phase 3 is marked [x] complete"
+       "Yes, streaming is complete!"
+
+Reality: Tests are failing, but agent trusted the MD file.
+```
+
+**With RLM:**
+```
+User: Is the streaming feature complete?
+
+Agent: *calls mcp.verify_claim("streaming feature complete")*
+
+Controller (MCP Tool):
+  1. Find relevant tests: index_tests("streaming") → 12 tests
+  2. Run tests: verify_by_tests("streaming")
+  3. Results: 10 pass, 2 fail
+  4. Return: { verified: false, evidence: { passed: 10, failed: 2, failures: [...] } }
+
+Agent: "Streaming is NOT complete. 2 tests are failing:
+        - test_streaming_backpressure (timeout)
+        - test_streaming_error_recovery (assertion failed)
+        Here are the failure details..."
+
+Reality: Agent was forced to verify by execution, couldn't just trust MD.
+```
+
+### Concrete Example: Agent Handoff
+
+**Without RLM:**
+```
+Agent A: "I finished Phase 2, marking complete" *updates MD file*
+         *session ends*
+
+Agent B: *reads MD file* "Phase 2 is done, starting Phase 3"
+         *builds on broken foundation*
+
+Reality: Phase 2 had a bug, Agent B inherited the lie.
+```
+
+**With RLM:**
+```
+Agent A: *calls mark_phase_complete("phase_2", evidence)*
+         Controller re-runs verification → passes
+         Stores completion with proof in AgentFS
+         *session ends*
+
+Agent B: *calls start_plan_session("plan_015")*
+         Controller automatically re-verifies ALL phases
+
+         Verification report:
+         - Phase 1: ✅ verified (3/3 checks pass)
+         - Phase 2: ❌ UNVERIFIED (test_x now failing)
+
+         Agent B receives: "Phase 2 failed verification.
+                           Previous agent's completion is invalid.
+                           Fix before proceeding."
+
+Reality: System caught the regression, Agent B knows the truth.
+```
+
+### RLM State Management
+
+```
+AgentFS Structure:
+┌─────────────────────────────────────────────────────────────────┐
+│ .agentfs/agent.db (SQLite)                                      │
+├─────────────────────────────────────────────────────────────────┤
+│ agent_state (KV store)                                          │
+│ ├── current_task: "Implement Phase 3 of streaming"              │
+│ ├── current_plan: "plan_015"                                    │
+│ ├── context_window_usage: 45000                                 │
+│ └── last_action: "verified fdb storage tests"                   │
+├─────────────────────────────────────────────────────────────────┤
+│ verified_facts (execution proofs)                               │
+│ ├── { claim: "FDB tests pass", method: "cargo test",            │
+│ │     result: "47 passed", timestamp: "...", git_sha: "..." }   │
+│ └── { claim: "No clippy warnings", method: "cargo clippy", ...} │
+├─────────────────────────────────────────────────────────────────┤
+│ completions/{plan_id}/{phase}                                   │
+│ ├── phase_1: { status: "verified", evidence: {...} }            │
+│ ├── phase_2: { status: "verified", evidence: {...} }            │
+│ └── phase_3: { status: "in_progress" }                          │
+├─────────────────────────────────────────────────────────────────┤
+│ audit_log (every tool call)                                     │
+│ ├── { tool: "index_query", args: {...}, result: {...}, ts: ...} │
+│ └── { tool: "mark_phase_complete", args: {...}, ... }           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Why This Works
+
+1. **LLM is powerful but unreliable** - Great at reasoning, bad at following rules consistently
+2. **Controller is reliable but dumb** - Can't reason, but always follows rules
+3. **Combine them** - LLM does the thinking, controller does the enforcement
+
+The LLM decides WHAT to do. The controller ensures HOW it's done is correct.
+
+```
+LLM: "I think Phase 2 is done"           → Opinion (might be wrong)
+Controller: "Prove it"                    → Enforcement
+LLM: "Here's my evidence: [tests, outputs]"
+Controller: *runs verification*           → Ground truth
+Controller: "2 tests failed, not done"    → Correction
+LLM: "OK, I need to fix those tests"      → Adapts to reality
+```
+
+---
+
 ## Options & Decisions
 
 ### Decision 1: Index Storage Backend
@@ -2503,7 +2756,6 @@ The module index provides a clear map of the codebase structure. It makes it eas
 1. **Hierarchical Summaries** - LLM-generated summaries (function → file → module → crate)
 2. **Constraint Extraction** - Extract and verify constraints from `.vision/CONSTRAINTS.md`
 3. **Cross-Validation** - Compare structural vs semantic indexes for inconsistencies
-4. **Embeddings (Optional)** - Vector embeddings for semantic search
 
 **Why Deferred:**
 - Requires LLM API integration (Anthropic API client, rate limiting, cost management)
