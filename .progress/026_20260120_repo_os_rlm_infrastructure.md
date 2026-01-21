@@ -3937,20 +3937,25 @@ Even if an agent ignores skill guidance, the hard controls (MCP tool gates, git 
      ```
    - Also requires proof parameter (non-empty string)
 
-4. **Audit Trail** - MCP logging (Phase 4, enhanced in Phase 6)
-   - Location: `tools/mcp-kelpie/src/audit.ts`
-   - **IMPORTANT FIX**: Now includes result and git_sha columns (plan requirement)
+4. **Audit Trail** - MCP logging (Phase 4, enhanced in Phase 6, completed 2026-01-21)
+   - Location: `tools/mcp-kelpie/src/audit.ts` + `tools/mcp-kelpie/src/index.ts`
+   - **IMPORTANT FIX 1**: Schema now includes result and git_sha columns (plan requirement)
+   - **IMPORTANT FIX 2**: Results logged after tool execution in main path
    - Every MCP tool call logged to `.agentfs/agent.db`
-   - Includes: timestamp, event name, data (JSON), result (JSON), git_sha
+   - Logs three types of events:
+     - `tool_call`: Tool invocation with arguments
+     - `tool_result`: Tool result data (logged after successful execution)
+     - `tool_error`: Error message if tool fails
+   - All events include: timestamp, event name, data (JSON), result (JSON), git_sha
    - Captures git SHA at time of operation for full traceability
    - Example log entry:
      ```json
      {
        "timestamp": 1737380400000,
-       "event": "task_complete",
-       "data": {"task_id": 1, "proof_length": 234},
-       "result": {"success": true, "p0_checks_passed": true},
-       "git_sha": "82244509ae1654ef"
+       "event": "tool_result",
+       "data": {"tool": "index_symbols"},
+       "result": {"success": true, "matches": [...], "count": 42},
+       "git_sha": "7c5ed35b"
      }
      ```
    - Immutable audit trail for traceability
