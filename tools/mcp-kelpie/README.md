@@ -125,6 +125,14 @@ Add to your MCP settings (e.g., Claude Desktop config):
 | `dst_coverage_check` | Check DST coverage for critical paths | (none) |
 | `dst_gaps_report` | Generate detailed report of DST coverage gaps | (none) |
 
+### Codebase Access Tools
+
+| Tool | Description | Arguments |
+|------|-------------|-----------|
+| `codebase_grep` | Search codebase for pattern (regex) | `pattern: string, file_pattern?: string, max_results?: number` |
+| `codebase_peek` | Read lines from file around line number | `file_path: string, line: number, context?: number` |
+| `codebase_read_section` | Read specific section (function, struct, impl) | `file_path: string, symbol: string` |
+
 ## Architecture
 
 ```
@@ -141,7 +149,8 @@ tools/mcp-kelpie/
     ├── slop.ts           # Slop detection tools (Phase 4.8)
     ├── constraints.ts    # P0 constraint enforcement (Phase 4.2)
     ├── rlm.ts            # RLM sandbox execution (Phase 4.7)
-    └── dst.ts            # DST coverage checking (Phase 4.9)
+    ├── dst.ts            # DST coverage checking (Phase 4.9)
+    └── codebase.ts       # Direct codebase access (grep, peek, read_section)
 ```
 
 ## Hard Controls
@@ -272,7 +281,7 @@ npm start
 - ✅ Phase 4.7: Integrity Tools (2 tools - mark_phase_complete, start_plan_session)
 - ✅ Phase 4.8: Slop Detection Tools (2 tools - dead code, coverage gaps)
 
-**Total: 26 MCP tools implemented**
+**Total: 29 MCP tools implemented**
 
 ## Next Steps
 
