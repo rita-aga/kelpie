@@ -195,8 +195,13 @@ Refactor the agent registry from a storage abstraction to a proper Actor, enabli
 - All tests still passing (166/166)
 - Pagination and cursor support maintained
 
-**Doesn't Work Yet**:
-- DST coverage for registry operations (Phase 5)
+### Phase 5: DST Coverage ✅
+**Works Now**:
+- 5 comprehensive DST tests for RegistryActor
+- Tests use message-passing API (invoke method)
+- Coverage: basic operations, deactivation survival, concurrent registrations, lifecycle, unregister
+- All tests passing under deterministic simulation
+- Tests verify registry consistency under fault injection
 
 **Known Limitations**:
 - Single-node only (no distributed registry yet)
@@ -342,7 +347,7 @@ let response = dispatcher.invoke(
 - [x] Phase 2: AgentActor self-registration
 - [x] Phase 3: TeleportService migration
 - [x] Phase 4: API layer migration
-- [ ] Phase 5: DST coverage
+- [x] Phase 5: DST coverage
 
 ## Notes
 
