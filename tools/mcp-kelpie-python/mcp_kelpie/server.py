@@ -12,13 +12,18 @@ Architecture:
 """
 
 import asyncio
+import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
+from mcp.types import TextContent, Tool
+
+from .tools import ALL_TOOLS, ToolHandlers
 
 # Configure logging
 logging.basicConfig(
@@ -29,130 +34,58 @@ logging.basicConfig(
 logger = logging.getLogger("mcp-kelpie")
 
 
-class KelpieMCPServer:
+def create_server() -> tuple[Server, ToolHandlers]:
+    """Create and configure MCP server.
+
+    Returns:
+        Tuple of (server, handlers)
     """
-    Main MCP server for Kelpie Repo OS.
+    # Get codebase path from environment or current directory
+    codebase_path = Path(os.getenv("KELPIE_CODEBASE_PATH", os.getcwd())).resolve()
 
-    Provides 40+ tools across categories:
-    - RLM (6 tools): repl_load, repl_exec, repl_sub_llm, etc.
-    - VerificationFS (10+ tools): vfs_init, vfs_fact_add, etc.
-    - Tool Trajectory (4 tools): vfs_tool_start/success/error/list
-    - Index (4 tools): index_symbols, index_tests, index_modules, index_deps
-    - Verification (4 tools): verify_by_tests, verify_claim, etc.
-    - DST (3 tools): dst_coverage_check, dst_gaps_report, harness_check
-    - Codebase (3 tools): codebase_grep, codebase_peek, codebase_read_section
-    - Issues (6 tools): issue_record, issue_update, examination_log, etc.
-    - Constraints (2 tools): constraint_check, constraint_list
-    """
+    logger.info(f"Kelpie MCP Server initializing")
+    logger.info(f"Codebase: {codebase_path}")
 
-    def __init__(self, codebase_path: str | None = None):
-        """
-        Initialize Kelpie MCP server.
+    # Initialize handlers
+    handlers = ToolHandlers(codebase_path)
 
-        Args:
-            codebase_path: Path to codebase root. Defaults to current directory.
-        """
-        self.codebase_path = Path(codebase_path or Path.cwd()).resolve()
-        self.indexes_path = self.codebase_path / ".kelpie-index"
-        self.agentfs_path = self.codebase_path / ".agentfs"
-
-        # Ensure directories exist
-        self.indexes_path.mkdir(exist_ok=True)
-        self.agentfs_path.mkdir(exist_ok=True)
-
-        logger.info(f"Kelpie MCP Server initializing")
-        logger.info(f"Codebase: {self.codebase_path}")
-        logger.info(f"Indexes: {self.indexes_path}")
-        logger.info(f"AgentFS: {self.agentfs_path}")
-
-        # Server components (initialized lazily)
-        self._rlm_env = None
-        self._agentfs = None
-        self._indexer = None
-
-    async def initialize(self):
-        """Initialize server components."""
-        logger.info("Initializing server components...")
-
-        # TODO: Initialize components
-        # self._rlm_env = RLMEnvironment()
-        # self._agentfs = VerificationFS.open(...)
-        # self._indexer = StructuralIndexer(self.codebase_path)
-
-        logger.info("Server initialized successfully")
-
-    async def shutdown(self):
-        """Clean up resources."""
-        logger.info("Shutting down server...")
-
-        # TODO: Cleanup
-        # if self._agentfs:
-        #     await self._agentfs.close()
-        # if self._rlm_env:
-        #     await self._rlm_env.cleanup()
-
-        logger.info("Server shutdown complete")
-
-    # TODO: Tool handlers will be implemented in separate modules
-    # async def handle_repl_load(self, **kwargs): ...
-    # async def handle_vfs_init(self, **kwargs): ...
-    # async def handle_index_symbols(self, **kwargs): ...
-
-
-def create_server() -> Server:
-    """Create and configure MCP server."""
+    # Create MCP server
     server = Server("kelpie-mcp")
 
-    kelpie = KelpieMCPServer()
-
     @server.list_tools()
-    async def list_tools():
+    async def list_tools() -> list[Tool]:
         """List available tools."""
-        # TODO: Return tool definitions
-        return {
-            "tools": [
-                {
-                    "name": "repl_load",
-                    "description": "Load files into server variable by glob pattern",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "pattern": {"type": "string"},
-                            "var_name": {"type": "string"},
-                            "path": {"type": "string"},
-                        },
-                        "required": ["pattern", "var_name"],
-                    },
-                },
-                # TODO: Add all 40+ tool definitions
-            ]
-        }
+        return [
+            Tool(
+                name=tool["name"],
+                description=tool["description"],
+                inputSchema=tool["inputSchema"],
+            )
+            for tool in ALL_TOOLS
+        ]
 
     @server.call_tool()
-    async def call_tool(name: str, arguments: dict[str, Any]):
+    async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         """Handle tool invocation."""
         logger.info(f"Tool called: {name}")
 
-        # TODO: Route to appropriate handler
-        if name == "repl_load":
-            return await kelpie.handle_repl_load(**arguments)
-        # ... etc
+        try:
+            result = await handlers.handle_tool(name, arguments or {})
+            return [TextContent(type="text", text=json.dumps(result, indent=2, default=str))]
+        except Exception as e:
+            logger.error(f"Tool error: {e}", exc_info=True)
+            return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
 
-        raise ValueError(f"Unknown tool: {name}")
-
-    return server
+    return server, handlers
 
 
 async def main():
     """Main entry point for MCP server."""
     logger.info("Starting Kelpie MCP Server...")
 
-    # Get codebase path from environment or current directory
-    import os
+    server, handlers = create_server()
 
-    codebase_path = os.getenv("KELPIE_CODEBASE_PATH", os.getcwd())
-
-    server = create_server()
+    logger.info(f"Registered {len(ALL_TOOLS)} tools")
 
     async with stdio_server() as (read_stream, write_stream):
         logger.info("Server running on stdio")
