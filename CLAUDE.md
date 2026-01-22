@@ -463,17 +463,17 @@ Kelpie includes a **Repo OS** infrastructure for AI agent-driven development. Th
 ### Quick Reference
 
 ```bash
-# Build all indexes (parallel, ~1s)
-cargo run --release -p kelpie-indexer -- full
-
-# Incremental rebuild after file changes
-cargo run -p kelpie-indexer -- incremental path/to/changed/file.rs
+# Build all indexes (Python indexer with tree-sitter)
+cd tools/mcp-kelpie-python && uv run --prerelease=allow python3 -c "
+from mcp_kelpie.indexer import build_indexes
+build_indexes('/path/to/kelpie', '.kelpie-index/structural')
+"
 
 # Run indexer tests
-cargo test -p kelpie-indexer
+cd tools/mcp-kelpie-python && uv run --prerelease=allow pytest tests/test_indexer.py -v
 
-# Run MCP server tests
-cd tools/mcp-kelpie && npm test
+# Run MCP server tests (92 tests)
+cd tools/mcp-kelpie-python && uv run --prerelease=allow pytest tests/ -v
 ```
 
 ### Structural Indexes
@@ -487,25 +487,31 @@ Located in `.kelpie-index/structural/`:
 | `tests.json` | All tests with topics and commands | Find tests for "storage" |
 | `modules.json` | Module hierarchy per crate | What modules exist in kelpie-server? |
 
-### MCP Server (Decision: KEEP)
+### MCP Server (VDE-Aligned Python)
 
-The MCP server (`tools/mcp-kelpie/`) provides tools for AI agent development.
+The MCP server (`tools/mcp-kelpie-python/`) provides 33 tools for AI agent development, built with VDE (Verification-Driven Exploration) architecture.
 
-**Why MCP over simpler CLI?**
-- **Hard controls** - MCP tools can gate completion (`state_task_complete` requires proof)
-- **IDE integration** - Works with Cursor, VS Code, and other MCP-compatible editors
-- **Audit trail** - All tool calls logged to AgentFS
-- **Structured I/O** - JSON-RPC protocol handles complex inputs/outputs
+**Architecture:**
+- **Single Python server** - All tools in one MCP server (not separate TypeScript/Rust)
+- **tree-sitter indexing** - Fast, accurate Rust parsing for structural indexes
+- **AgentFS integration** - Persistent state via `agentfs-sdk`
+- **Sandboxed execution** - RLM REPL with RestrictedPython
 
-**Trade-off acknowledged**: MCP adds complexity vs. a single Python CLI (like VDE). But hard controls require programmatic enforcement that simple CLI can't provide.
+**Tool categories (33 tools):**
+- **REPL (5)** - `repl_load`, `repl_exec`, `repl_query`, `repl_state`, `repl_clear`
+- **VFS/AgentFS (11)** - `vfs_init`, `vfs_fact_*`, `vfs_invariant_*`, `vfs_tool_*`
+- **Index (6)** - `index_symbols`, `index_tests`, `index_modules`, `index_deps`, `index_status`, `index_refresh`
+- **Verification (4)** - `verify_claim`, `verify_all_tests`, `verify_clippy`, `verify_fmt`
+- **DST (3)** - `dst_coverage_check`, `dst_gaps_report`, `harness_check`
+- **Codebase (4)** - `codebase_grep`, `codebase_peek`, `codebase_read_section`, `codebase_list_files`
 
-**Tool categories:**
-- **Index queries** - `index_symbols`, `index_tests`, `index_modules`, `index_deps`
-- **Verification** - `verify_by_tests`, `verify_claim`
-- **State management** - `state_task_start`, `state_task_complete`, `state_verified_fact`
-- **Codebase exploration** - `codebase_scope`, `issue_dashboard`
+**Running the server:**
+```bash
+cd tools/mcp-kelpie-python
+KELPIE_CODEBASE_PATH=/path/to/kelpie uv run --prerelease=allow mcp-kelpie
+```
 
-**Note**: For verification, prefer CLI commands directly (Phase 16.6) over MCP wrappers. MCP is for state management and hard controls, not for wrapping simple shell commands.
+**Note**: For verification, prefer CLI commands directly over MCP wrappers. MCP is for state management, indexing, and RLM execution.
 
 ### Hard Controls
 
@@ -518,19 +524,20 @@ The infrastructure enforces verification-first development:
 
 ### AgentFS Storage
 
-State is stored using [Turso AgentFS](https://github.com/tursodatabase/agentfs) compatible schema:
+State is stored using [Turso AgentFS](https://github.com/tursodatabase/agentfs) Python SDK:
 
 ```bash
-# Namespaced keys (AgentFS KV pattern)
-state:{key}      # General agent state
-task:{id}        # Task tracking
-vfs:fact:{id}    # Verified facts (VFS namespace)
+# Namespaced keys (VFS pattern)
+session:{id}     # Verification session
+fact:{id}        # Verified facts with evidence
+invariant:{name} # Invariant verification status
+tool:{id}        # Tool call tracking
 
-# Tool call timeline (AgentFS pattern)
-tool_calls table # Records all tool invocations for auditability
+# Storage location
+.agentfs/agentfs-{session_id}.db  # SQLite database per session
 ```
 
-The `agentfs-sdk` npm package is installed. Full migration to native AgentFS is possible when needed.
+The `agentfs-sdk` Python package handles all persistence. State survives across MCP restarts.
 
 ### RLM Skills (Verification-First Development)
 
@@ -608,9 +615,10 @@ cargo clippy --workspace -- -W dead_code
 
 | Component | Tests | Command |
 |-----------|-------|---------|
-| Indexer (unit) | 7 | `cargo test -p kelpie-indexer --test indexer_tests` |
-| Indexer (consistency) | 8 | `cargo test -p kelpie-indexer --test consistency_tests` |
-| MCP tools | 25+ | `cd tools/mcp-kelpie && npm test` |
+| Indexer (Python) | 21 | `cd tools/mcp-kelpie-python && uv run pytest tests/test_indexer.py -v` |
+| RLM Environment | 49 | `cd tools/mcp-kelpie-python && uv run pytest tests/test_rlm.py -v` |
+| MCP Tools | 22 | `cd tools/mcp-kelpie-python && uv run pytest tests/test_tools.py -v` |
+| **Total** | **92** | `cd tools/mcp-kelpie-python && uv run pytest tests/ -v` |
 
 ## Vision-Aligned Planning (MANDATORY)
 

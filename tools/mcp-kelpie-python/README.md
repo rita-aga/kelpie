@@ -26,10 +26,10 @@ Based on QuickHouse VDE implementation (see `.progress/VDE.md`).
 ```bash
 cd tools/mcp-kelpie-python
 
-# Install dependencies
-pip install -e .
+# Install with uv (recommended)
+uv sync --prerelease=allow
 
-# Install dev dependencies
+# Or with pip
 pip install -e ".[dev]"
 ```
 
@@ -38,73 +38,68 @@ pip install -e ".[dev]"
 ### Start MCP Server
 
 ```bash
-mcp-kelpie
+# Set codebase path and run
+KELPIE_CODEBASE_PATH=/path/to/kelpie uv run --prerelease=allow mcp-kelpie
 ```
 
 ### Run Tests
 
 ```bash
-pytest
+# All tests (92 tests)
+uv run --prerelease=allow pytest tests/ -v
+
+# Specific test file
+uv run --prerelease=allow pytest tests/test_indexer.py -v
+uv run --prerelease=allow pytest tests/test_rlm.py -v
+uv run --prerelease=allow pytest tests/test_tools.py -v
 ```
 
-## Tool Categories
+## Tool Categories (33 Tools)
 
-### RLM Tools (6 tools)
-- `repl_load` - Load files into server variable by glob
+### REPL Tools (5 tools)
+- `repl_load` - Load files into server variable by glob pattern
 - `repl_exec` - Execute Python code on loaded variables
 - `repl_query` - Evaluate expression and return result
-- `repl_sub_llm` - Spawn sub-LLM to analyze variable
 - `repl_state` - Show current variable names/sizes
 - `repl_clear` - Clear variables to free memory
 
-### VerificationFS Tools (10+ tools)
-- `vfs_init` - Initialize session
-- `vfs_fact_add/check/list` - Record and query verified facts
-- `vfs_invariant_verify/status` - Track invariant verification
-- `vfs_spec_read` - Record TLA+ spec reading
-- `vfs_exploration_log` - Log exploration actions
-- `vfs_status` - Session status
-- `vfs_export` - Export session to JSON
+### VFS/AgentFS Tools (11 tools)
+- `vfs_init` - Initialize verification session
+- `vfs_fact_add` - Record a verified fact with evidence
+- `vfs_fact_check` - Check if a claim has been verified
+- `vfs_fact_list` - List all verified facts
+- `vfs_invariant_verify` - Mark an invariant as verified
+- `vfs_invariant_status` - Check invariant verification status
+- `vfs_status` - Get session status
+- `vfs_tool_start` - Start tracking a tool call
+- `vfs_tool_success` - Mark tool call as successful
+- `vfs_tool_error` - Mark tool call as failed
+- `vfs_tool_list` - List all tool calls with timing
 
-### Tool Trajectory (AgentFS built-in)
-- `vfs_tool_start` - Start tool call tracking
-- `vfs_tool_success` - Mark tool call success
-- `vfs_tool_error` - Mark tool call failure
-- `vfs_tool_list` - List tool call history
-
-### Index Tools (4 tools)
-- `index_symbols` - Query symbols (functions, structs, traits)
-- `index_tests` - Query test index
-- `index_modules` - Query module hierarchy
-- `index_deps` - Query dependency graph
+### Index Tools (6 tools)
+- `index_symbols` - Find symbols matching a pattern
+- `index_tests` - Find tests by name pattern or crate
+- `index_modules` - Get module hierarchy information
+- `index_deps` - Get dependency graph information
+- `index_status` - Get status of all indexes
+- `index_refresh` - Rebuild indexes
 
 ### Verification Tools (4 tools)
-- `verify_by_tests` - Run specific tests
-- `verify_claim` - Verify arbitrary claim
-- `verify_all_tests` - Full test suite
-- `verify_clippy` - Linting check
+- `verify_claim` - Verify a claim by executing a command
+- `verify_all_tests` - Run all tests (cargo test --all)
+- `verify_clippy` - Run Rust linter (cargo clippy)
+- `verify_fmt` - Check code formatting (cargo fmt --check)
 
 ### DST Tools (3 tools)
-- `dst_coverage_check` - Verify critical path coverage
-- `dst_gaps_report` - Find missing coverage
-- `harness_check` - Validate harnesses
+- `dst_coverage_check` - Check DST coverage for critical paths
+- `dst_gaps_report` - Generate report of DST coverage gaps
+- `harness_check` - Check if DST harness supports required fault types
 
-### Codebase Tools (3 tools)
-- `codebase_grep` - Search without loading context
-- `codebase_peek` - Sample file structure
-- `codebase_read_section` - Focused reads
-
-### Issue Tools (6 tools)
-- `issue_record` - Record new issue
-- `issue_update` - Update issue status
-- `issue_query` - Query issues
-- `issue_summary` - Get issue overview
-- `examination_log` - Log what was examined
-- `thoroughness_check` - Verify complete coverage
-
-### Constraint Tools (2 tools)
-- `constraint_check` - Check P0 constraints
-- `constraint_list` - List all constraints
+### Codebase Tools (4 tools)
+- `codebase_grep` - Search for pattern in codebase files
+- `codebase_peek` - Peek at first N lines of a file
+- `codebase_read_section` - Read a section of a file by line range
+- `codebase_list_files` - List files matching a glob pattern
 
 ## Architecture
 
