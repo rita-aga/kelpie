@@ -500,11 +500,12 @@ impl VmInstance for VzVm {
             return Err(VmError::ExecTimeout { timeout_ms });
         }
 
-        let result = tokio::time::timeout(
-            std::time::Duration::from_millis(timeout_ms),
-            self.exec_via_vsock(cmd, args, options),
-        )
-        .await;
+        let result = kelpie_core::current_runtime()
+            .timeout(
+                std::time::Duration::from_millis(timeout_ms),
+                self.exec_via_vsock(cmd, args, options),
+            )
+            .await;
 
         match result {
             Ok(result) => result,

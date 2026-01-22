@@ -799,98 +799,8 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
         limit: usize,
         cursor: Option<&str>,
     ) -> Result<(Vec<AgentState>, Option<String>), StateError> {
-        // Phase 4: Use RegistryActor if dispatcher available, otherwise fallback to storage
-        if let Some(dispatcher) = &self.inner.dispatcher {
-            // Use RegistryActor for listing agents
-            use crate::actor::{ListRequest, ListResponse};
-            use bytes::Bytes;
-            use kelpie_core::actor::ActorId;
-
-            let registry_id =
-                ActorId::new("system", "agent_registry").map_err(|e| StateError::Internal {
-                    message: format!("Failed to create registry ActorId: {}", e),
-                })?;
-
-            let request = ListRequest { filter: None };
-            let payload = serde_json::to_vec(&request).map_err(|e| StateError::Internal {
-                message: format!("Failed to serialize ListRequest: {}", e),
-            })?;
-
-            let response = dispatcher
-                .invoke(registry_id, "list".to_string(), Bytes::from(payload))
-                .await
-                .map_err(|e| StateError::Internal {
-                    message: format!("Failed to invoke RegistryActor: {}", e),
-                })?;
-
-            let list_response: ListResponse =
-                serde_json::from_slice(&response).map_err(|e| StateError::Internal {
-                    message: format!("Failed to deserialize ListResponse: {}", e),
-                })?;
-
-            let agent_metadatas = list_response.agents;
-
-            // Convert AgentMetadata to AgentState
-            let mut agents: Vec<AgentState> = Vec::with_capacity(agent_metadatas.len());
-            for metadata in agent_metadatas {
-                // Load blocks for each agent (still need storage for blocks)
-                let blocks = if let Some(storage) = &self.inner.storage {
-                    storage
-                        .load_blocks(&metadata.id)
-                        .await
-                        .map_err(|e| StateError::Internal {
-                            message: format!("Failed to load blocks: {}", e),
-                        })?
-                } else {
-                    vec![]
-                };
-
-                agents.push(AgentState {
-                    id: metadata.id,
-                    name: metadata.name,
-                    agent_type: metadata.agent_type,
-                    model: metadata.model,
-                    embedding: metadata.embedding,
-                    system: metadata.system,
-                    description: metadata.description,
-                    blocks,
-                    tool_ids: metadata.tool_ids,
-                    tags: metadata.tags,
-                    metadata: metadata.metadata,
-                    project_id: None, // TODO: Add project_id to AgentMetadata
-                    created_at: metadata.created_at,
-                    updated_at: metadata.updated_at,
-                });
-            }
-
-            // Sort by created_at descending (newest first)
-            agents.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-
-            // Apply cursor (skip until we find the cursor ID)
-            let start_idx = if let Some(cursor_id) = cursor {
-                agents
-                    .iter()
-                    .position(|a| a.id == cursor_id)
-                    .map(|i| i + 1)
-                    .unwrap_or(0)
-            } else {
-                0
-            };
-
-            // Take limit + 1 to check if there are more results
-            let page: Vec<_> = agents.into_iter().skip(start_idx).take(limit + 1).collect();
-
-            // If we got limit + 1 results, there's more data
-            let (items, next_cursor) = if page.len() > limit {
-                let items: Vec<_> = page.into_iter().take(limit).collect();
-                let next_cursor = items.last().map(|a| a.id.clone());
-                (items, next_cursor)
-            } else {
-                (page, None)
-            };
-
-            return Ok((items, next_cursor));
-        } else if let Some(storage) = &self.inner.storage {
+        // Use storage if available (works with or without dispatcher)
+        if let Some(storage) = &self.inner.storage {
             // Fallback to direct storage access (backward compatible)
             // Load all agents from storage
             let agent_metadatas =
@@ -995,7 +905,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             };
             tracing::debug!(agent_id = %agent.id, "calling storage.save_agent");
             storage.save_agent(&metadata).await?;
-            tracing::info!(agent_id = %agent.id, "agent metadata persisted to FDB");
+            tracing::info!(agent_id = %agent.id, "agent metadata persisted to storage");
 
             // Also persist blocks
             storage.save_blocks(&agent.id, &agent.blocks).await?;

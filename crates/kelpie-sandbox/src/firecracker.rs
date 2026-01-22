@@ -562,7 +562,9 @@ impl Sandbox for FirecrackerSandbox {
             if vm.api_socket.exists() {
                 break;
             }
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            kelpie_core::current_runtime()
+                .sleep(tokio::time::Duration::from_millis(100))
+                .await;
         }
 
         if !vm.api_socket.exists() {
@@ -770,7 +772,9 @@ impl Sandbox for FirecrackerSandbox {
         self.start().await?;
 
         // Wait a bit then restore
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        kelpie_core::current_runtime()
+            .sleep(tokio::time::Duration::from_millis(500))
+            .await;
 
         self.restore_from_snapshot(&snapshot_path).await?;
 
