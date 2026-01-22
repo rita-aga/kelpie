@@ -1167,6 +1167,26 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
 
     /// Get agent count
     pub fn agent_count(&self) -> Result<usize, StateError> {
+        // TigerStyle: Read from storage when configured to maintain consistency
+        // In-memory count may be stale in dual-mode operation
+        if let Some(storage) = &self.inner.storage {
+            // Use blocking task to call async storage method
+            let storage = storage.clone();
+            let count = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async move {
+                    storage
+                        .list_agents()
+                        .await
+                        .map(|agents| agents.len())
+                        .map_err(|e| StateError::Internal {
+                            message: format!("Failed to count agents from storage: {}", e),
+                        })
+                })
+            })?;
+            return Ok(count);
+        }
+
+        // Fallback to in-memory count
         let agents = self
             .inner
             .agents

@@ -533,7 +533,9 @@ mod tests {
         }
 
         // Give the async release time to complete
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        kelpie_core::TokioRuntime
+            .sleep(Duration::from_millis(10))
+            .await;
 
         let stats = pool.stats().await;
         assert_eq!(stats.total_returned, 1);

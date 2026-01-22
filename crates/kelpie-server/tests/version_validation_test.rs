@@ -29,9 +29,8 @@ async fn test_version_validation_same_major_minor() -> Result<()> {
     // Setup: Service with version 1.0.0
     let storage = Arc::new(LocalTeleportStorage::new());
     let factory = Arc::new(MockVmFactory::new());
-    let agent_storage = mock_agent_storage();
-    let service = TeleportService::new(storage.clone(), factory.clone(), agent_storage)
-        .with_base_image_version("1.0.0");
+    let service =
+        TeleportService::new(storage.clone(), factory.clone()).with_base_image_version("1.0.0");
 
     // Create VM and teleport out
     let mut vm = factory
@@ -66,9 +65,8 @@ async fn test_version_validation_patch_difference_allowed() -> Result<()> {
     // Setup: Service with version 1.0.0 creates package
     let storage = Arc::new(LocalTeleportStorage::new());
     let factory = Arc::new(MockVmFactory::new());
-    let agent_storage = mock_agent_storage();
-    let service_v1 = TeleportService::new(storage.clone(), factory.clone(), agent_storage.clone())
-        .with_base_image_version("1.0.0");
+    let service_v1 =
+        TeleportService::new(storage.clone(), factory.clone()).with_base_image_version("1.0.0");
 
     // Create VM and teleport out with v1.0.0
     let mut vm = factory
@@ -89,8 +87,8 @@ async fn test_version_validation_patch_difference_allowed() -> Result<()> {
         .await?;
 
     // Service with version 1.0.1 tries to restore
-    let service_v2 = TeleportService::new(storage.clone(), factory.clone(), agent_storage.clone())
-        .with_base_image_version("1.0.1");
+    let service_v2 =
+        TeleportService::new(storage.clone(), factory.clone()).with_base_image_version("1.0.1");
 
     // Teleport in should succeed (PATCH difference allowed)
     let result = service_v2.teleport_in(&package_id, test_config()).await;
@@ -107,10 +105,8 @@ async fn test_version_validation_major_mismatch_rejected() -> Result<()> {
     // Setup: Service with version 1.0.0 creates package
     let storage_v1 = Arc::new(LocalTeleportStorage::new().with_expected_image_version("1.0.0"));
     let factory = Arc::new(MockVmFactory::new());
-    let agent_storage = mock_agent_storage();
     let service_v1 =
-        TeleportService::new(storage_v1.clone(), factory.clone(), agent_storage.clone())
-            .with_base_image_version("1.0.0");
+        TeleportService::new(storage_v1.clone(), factory.clone()).with_base_image_version("1.0.0");
 
     // Create VM and teleport out
     let mut vm = factory
@@ -136,8 +132,8 @@ async fn test_version_validation_major_mismatch_rejected() -> Result<()> {
     let package = storage_v1.download(&package_id).await.unwrap();
     storage_v2.upload(package).await.unwrap();
 
-    let service_v2 = TeleportService::new(storage_v2, factory.clone(), agent_storage.clone())
-        .with_base_image_version("2.0.0");
+    let service_v2 =
+        TeleportService::new(storage_v2, factory.clone()).with_base_image_version("2.0.0");
 
     // Teleport in should FAIL (MAJOR mismatch)
     let result = service_v2.teleport_in(&package_id, test_config()).await;
@@ -162,10 +158,8 @@ async fn test_version_validation_minor_mismatch_rejected() -> Result<()> {
     // Setup: Service with version 1.1.0 creates package
     let storage_v1 = Arc::new(LocalTeleportStorage::new().with_expected_image_version("1.1.0"));
     let factory = Arc::new(MockVmFactory::new());
-    let agent_storage = mock_agent_storage();
     let service_v1 =
-        TeleportService::new(storage_v1.clone(), factory.clone(), agent_storage.clone())
-            .with_base_image_version("1.1.0");
+        TeleportService::new(storage_v1.clone(), factory.clone()).with_base_image_version("1.1.0");
 
     // Create VM and teleport out
     let mut vm = factory
@@ -191,8 +185,8 @@ async fn test_version_validation_minor_mismatch_rejected() -> Result<()> {
     let package = storage_v1.download(&package_id).await.unwrap();
     storage_v2.upload(package).await.unwrap();
 
-    let service_v2 = TeleportService::new(storage_v2, factory.clone(), agent_storage.clone())
-        .with_base_image_version("1.2.0");
+    let service_v2 =
+        TeleportService::new(storage_v2, factory.clone()).with_base_image_version("1.2.0");
 
     // Teleport in should FAIL (MINOR mismatch)
     let result = service_v2.teleport_in(&package_id, test_config()).await;
@@ -213,8 +207,7 @@ async fn test_version_validation_with_prerelease() -> Result<()> {
     // Setup: Service with version 1.0.0-dev-20260115-abc1234
     let storage = Arc::new(LocalTeleportStorage::new());
     let factory = Arc::new(MockVmFactory::new());
-    let agent_storage = mock_agent_storage();
-    let service = TeleportService::new(storage.clone(), factory.clone(), agent_storage.clone())
+    let service = TeleportService::new(storage.clone(), factory.clone())
         .with_base_image_version("1.0.0-dev-20260115-abc1234");
 
     // Create VM and teleport out
@@ -236,7 +229,7 @@ async fn test_version_validation_with_prerelease() -> Result<()> {
         .await?;
 
     // Service with different prerelease but same MAJOR.MINOR.PATCH tries to restore
-    let service_v2 = TeleportService::new(storage.clone(), factory.clone(), agent_storage.clone())
+    let service_v2 = TeleportService::new(storage.clone(), factory.clone())
         .with_base_image_version("1.0.0-prod-20260116-def5678");
 
     // Teleport in should succeed (prerelease metadata ignored for compatibility)
