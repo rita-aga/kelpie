@@ -8,12 +8,12 @@
 //!
 //! DST Support: Works with SimTeleportStorage for fault injection testing.
 
-use crate::actor::AgentActorState;
-use crate::storage::{
-    AgentMetadata, AgentStorage, Architecture, SnapshotKind, TeleportPackage, TeleportStorage,
-};
+use crate::actor::{AgentActorState, RegisterRequest};
+use crate::storage::{AgentMetadata, Architecture, SnapshotKind, TeleportPackage, TeleportStorage};
 use bytes::Bytes;
+use kelpie_core::actor::ActorId;
 use kelpie_core::{Error, Result};
+use kelpie_runtime::DispatcherHandle;
 use kelpie_vm::{VmConfig, VmFactory, VmInstance, VmSnapshot, VmSnapshotMetadata};
 use std::sync::Arc;
 
@@ -21,36 +21,44 @@ use std::sync::Arc;
 ///
 /// TigerStyle: Clean abstraction, explicit error handling, testable.
 #[derive(Clone)]
-pub struct TeleportService<S, F, A>
+pub struct TeleportService<S, F>
 where
     S: TeleportStorage,
     F: VmFactory,
-    A: AgentStorage,
 {
     /// Teleport storage backend
     storage: Arc<S>,
     /// VM factory for creating VM instances
     vm_factory: Arc<F>,
-    /// Agent storage for registry operations
-    agent_storage: Arc<A>,
+    /// Optional dispatcher for RegistryActor registration
+    /// If None, registration is skipped (backward compatible)
+    dispatcher: Option<DispatcherHandle<kelpie_core::TokioRuntime>>,
     /// Expected base image version
     base_image_version: String,
 }
 
-impl<S, F, A> TeleportService<S, F, A>
+impl<S, F> TeleportService<S, F>
 where
     S: TeleportStorage,
     F: VmFactory,
-    A: AgentStorage,
 {
-    /// Create a new TeleportService
-    pub fn new(storage: Arc<S>, vm_factory: Arc<F>, agent_storage: Arc<A>) -> Self {
+    /// Create a new TeleportService without dispatcher (backward compatible)
+    pub fn new(storage: Arc<S>, vm_factory: Arc<F>) -> Self {
         Self {
             storage,
             vm_factory,
-            agent_storage,
+            dispatcher: None,
             base_image_version: "1.0.0".to_string(),
         }
+    }
+
+    /// Create TeleportService with dispatcher for RegistryActor registration
+    pub fn with_dispatcher(
+        mut self,
+        dispatcher: DispatcherHandle<kelpie_core::TokioRuntime>,
+    ) -> Self {
+        self.dispatcher = Some(dispatcher);
+        self
     }
 
     /// Set the expected base image version
@@ -234,49 +242,71 @@ where
         // Extract agent state
         let agent_state = package.agent_state.unwrap_or_default();
 
-        // Step 6: Register agent in global registry (Option 2 fix for registry gap)
-        // Deserialize agent state to extract metadata
+        // Step 6: Register agent in global registry (Option 1: RegistryActor)
+        // Deserialize agent state to extract metadata and send message to RegistryActor
         if !agent_state.is_empty() {
-            match serde_json::from_slice::<AgentActorState>(&agent_state) {
-                Ok(actor_state) => {
-                    if let Some(agent) = actor_state.agent {
-                        // Convert AgentState to AgentMetadata
-                        let metadata = AgentMetadata {
-                            id: agent.id.clone(),
-                            name: agent.name.clone(),
-                            agent_type: agent.agent_type.clone(),
-                            model: agent.model.clone(),
-                            embedding: agent.embedding.clone(),
-                            system: agent.system.clone(),
-                            description: agent.description.clone(),
-                            tool_ids: agent.tool_ids.clone(),
-                            tags: agent.tags.clone(),
-                            metadata: agent.metadata.clone(),
-                            created_at: agent.created_at,
-                            updated_at: agent.updated_at,
-                        };
+            if let Some(ref dispatcher) = self.dispatcher {
+                match serde_json::from_slice::<AgentActorState>(&agent_state) {
+                    Ok(actor_state) => {
+                        if let Some(agent) = actor_state.agent {
+                            // Convert AgentState to AgentMetadata
+                            let metadata = AgentMetadata {
+                                id: agent.id.clone(),
+                                name: agent.name.clone(),
+                                agent_type: agent.agent_type.clone(),
+                                model: agent.model.clone(),
+                                embedding: agent.embedding.clone(),
+                                system: agent.system.clone(),
+                                description: agent.description.clone(),
+                                tool_ids: agent.tool_ids.clone(),
+                                tags: agent.tags.clone(),
+                                metadata: agent.metadata.clone(),
+                                created_at: agent.created_at,
+                                updated_at: agent.updated_at,
+                            };
 
-                        // Register in global registry
-                        self.agent_storage
-                            .save_agent(&metadata)
-                            .await
-                            .map_err(|e| Error::Internal {
-                                message: format!("Failed to register teleported agent: {}", e),
-                            })?;
+                            // Send register message to RegistryActor
+                            let registry_id = ActorId::new("system", "agent_registry")?;
+                            let request = RegisterRequest { metadata };
+                            let payload =
+                                serde_json::to_vec(&request).map_err(|e| Error::Internal {
+                                    message: format!("Failed to serialize RegisterRequest: {}", e),
+                                })?;
 
-                        tracing::info!(
-                            agent_id = %agent.id,
-                            "Agent registered in global registry after teleport"
+                            match dispatcher
+                                .invoke(registry_id, "register".to_string(), Bytes::from(payload))
+                                .await
+                            {
+                                Ok(_) => {
+                                    tracing::info!(
+                                        agent_id = %agent.id,
+                                        "Agent registered via RegistryActor after teleport"
+                                    );
+                                }
+                                Err(e) => {
+                                    // Non-fatal: registration failure doesn't prevent teleport
+                                    tracing::warn!(
+                                        agent_id = %agent.id,
+                                        error = %e,
+                                        "Failed to register with RegistryActor (non-fatal)"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            package_id = %package_id,
+                            error = %e,
+                            "Failed to deserialize agent state for registration"
                         );
                     }
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        package_id = %package_id,
-                        error = %e,
-                        "Failed to deserialize agent state for registration, skipping registry update"
-                    );
-                }
+            } else {
+                tracing::debug!(
+                    package_id = %package_id,
+                    "No dispatcher configured, skipping RegistryActor registration"
+                );
             }
         }
 
@@ -389,7 +419,7 @@ impl From<TeleportPackage> for TeleportPackageInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{KvAdapter, LocalTeleportStorage};
+    use crate::storage::LocalTeleportStorage;
     use kelpie_vm::{MockVmFactory, VmConfig, VmState};
 
     fn test_config() -> VmConfig {
@@ -405,9 +435,7 @@ mod tests {
     async fn test_teleport_service_roundtrip() {
         let storage = Arc::new(LocalTeleportStorage::new());
         let factory = Arc::new(MockVmFactory::new());
-        let kv = Arc::new(kelpie_storage::MemoryKV::new());
-        let agent_storage = Arc::new(KvAdapter::new(kv));
-        let service = TeleportService::new(storage, factory.clone(), agent_storage);
+        let service = TeleportService::new(storage, factory.clone());
 
         let mut vm = factory.create_vm(test_config()).unwrap();
         vm.start().await.unwrap();
@@ -449,9 +477,7 @@ mod tests {
     async fn test_teleport_service_checkpoint() {
         let storage = Arc::new(LocalTeleportStorage::new());
         let factory = Arc::new(MockVmFactory::new());
-        let kv = Arc::new(kelpie_storage::MemoryKV::new());
-        let agent_storage = Arc::new(KvAdapter::new(kv));
-        let service = TeleportService::new(storage, factory.clone(), agent_storage);
+        let service = TeleportService::new(storage, factory.clone());
 
         let mut vm = factory.create_vm(test_config()).unwrap();
         vm.start().await.unwrap();

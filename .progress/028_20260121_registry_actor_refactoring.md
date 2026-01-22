@@ -165,13 +165,29 @@ Refactor the agent registry from a storage abstraction to a proper Actor, enabli
 
 ## What to Try (Updated After Each Phase)
 
-### Phase 1: Core RegistryActor ✅ (to be updated)
+### Phase 1: Core RegistryActor ✅
 **Works Now**:
-- (To be filled after implementation)
+- RegistryActor with 4 operations (register, unregister, list, get)
+- Message-based API via actor invocations
+- State persistence with metrics tracking
+- 5 unit tests all passing
+
+### Phase 2: AgentActor Self-Registration ✅
+**Works Now**:
+- AgentActor.with_dispatcher() builder method
+- Self-registration on activation
+- Non-fatal registration (doesn't block activation)
+- Backward compatible (dispatcher optional)
+
+### Phase 3: TeleportService Migration ✅
+**Works Now**:
+- TeleportService uses DispatcherHandle instead of AgentStorage
+- with_dispatcher() builder method
+- Registration via RegistryActor message passing
+- Backward compatible (dispatcher optional)
+- All tests still passing (166/166)
 
 **Doesn't Work Yet**:
-- Self-registration from AgentActor (Phase 2)
-- TeleportService integration (Phase 3)
 - API layer integration (Phase 4)
 
 **Known Limitations**:
@@ -313,9 +329,9 @@ let response = dispatcher.invoke(
 
 ## Progress Tracking
 
-- [ ] Phase 1: Core RegistryActor implementation
-- [ ] Phase 2: AgentActor self-registration
-- [ ] Phase 3: TeleportService migration
+- [x] Phase 1: Core RegistryActor implementation
+- [x] Phase 2: AgentActor self-registration
+- [x] Phase 3: TeleportService migration
 - [ ] Phase 4: API layer migration
 - [ ] Phase 5: DST coverage
 
