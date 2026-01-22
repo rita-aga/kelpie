@@ -5,7 +5,7 @@ Handles session lifecycle, tracking active sessions, and cleanup.
 """
 
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 from .wrapper import VerificationFS
 
@@ -31,6 +31,7 @@ class SessionManager:
         self.project_root = project_root
         self._active_session: Optional[VerificationFS] = None
         self._session_id: Optional[str] = None
+        self._context_manager: Optional[Any] = None
 
     def generate_session_id(self) -> str:
         """
@@ -52,13 +53,19 @@ class SessionManager:
         Returns:
             VerificationFS instance
         """
+        # Close any existing session first
+        if self._active_session:
+            await self.close_session()
+
         if not session_id:
             session_id = self.generate_session_id()
 
         self._session_id = session_id
 
         # Open VerificationFS (creates or resumes session)
-        vfs = await VerificationFS.open(session_id, task, self.project_root).__aenter__()
+        # Store the context manager to properly call __aexit__ later
+        self._context_manager = VerificationFS.open(session_id, task, self.project_root)
+        vfs = await self._context_manager.__aenter__()
         self._active_session = vfs
 
         return vfs
@@ -83,7 +90,9 @@ class SessionManager:
 
     async def close_session(self):
         """Close the active session."""
-        if self._active_session:
-            await self._active_session.afs.close()
+        if self._context_manager:
+            # Properly call __aexit__ to clean up
+            await self._context_manager.__aexit__(None, None, None)
+            self._context_manager = None
             self._active_session = None
             self._session_id = None

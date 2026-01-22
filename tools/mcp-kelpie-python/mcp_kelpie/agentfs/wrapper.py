@@ -16,11 +16,16 @@ Key features:
 import hashlib
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from agentfs import AgentFS, AgentFSOptions
+from agentfs_sdk import AgentFS, AgentFSOptions
+
+
+def _utcnow() -> datetime:
+    """Get current UTC time (timezone-aware)."""
+    return datetime.now(timezone.utc)
 
 
 class VerificationFS:
@@ -99,7 +104,7 @@ class VerificationFS:
         session_data = {
             "id": self.session_id,
             "task": self.task,
-            "started_at": datetime.utcnow().isoformat(),
+            "started_at": _utcnow().isoformat(),
             "project_root": str(self.project_root),
         }
         await self.afs.kv.set(session_key, session_data)
@@ -133,7 +138,7 @@ class VerificationFS:
             "claim": claim,
             "evidence": evidence,
             "source": source,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": _utcnow().isoformat(),
             "command": command,
             "query": query,
         }
@@ -150,10 +155,11 @@ class VerificationFS:
         Returns:
             List of matching facts
         """
-        # Get all facts
+        # kv.list returns List[Dict] with 'key' and 'value' fields
+        items = await self.afs.kv.list(self.PREFIX_FACT)
         facts = []
-        async for key in self.afs.kv.list(prefix=self.PREFIX_FACT):
-            fact = await self.afs.kv.get(key)
+        for item in items:
+            fact = item.get("value")
             if fact and claim_pattern.lower() in fact.get("claim", "").lower():
                 facts.append(fact)
         return facts
@@ -165,11 +171,8 @@ class VerificationFS:
         Returns:
             List of all facts
         """
-        facts = []
-        async for key in self.afs.kv.list(prefix=self.PREFIX_FACT):
-            fact = await self.afs.kv.get(key)
-            if fact:
-                facts.append(fact)
+        items = await self.afs.kv.list(self.PREFIX_FACT)
+        facts = [item["value"] for item in items if item.get("value")]
 
         # Sort by timestamp
         facts.sort(key=lambda f: f.get("timestamp", ""), reverse=True)
@@ -197,7 +200,7 @@ class VerificationFS:
             "name": name,
             "component": component,
             "method": method,
-            "verified_at": datetime.utcnow().isoformat(),
+            "verified_at": _utcnow().isoformat(),
             "evidence": evidence,
         }
         key = f"{self.PREFIX_INVARIANT}{component}:{name}"
@@ -211,15 +214,12 @@ class VerificationFS:
             component: Component name
 
         Returns:
-            Dict with "verified" and "unverified" lists
+            Dict with "verified" and "verified_count"
         """
         # Get all verified invariants for this component
-        verified = []
         prefix = f"{self.PREFIX_INVARIANT}{component}:"
-        async for key in self.afs.kv.list(prefix=prefix):
-            inv = await self.afs.kv.get(key)
-            if inv:
-                verified.append(inv)
+        items = await self.afs.kv.list(prefix)
+        verified = [item["value"] for item in items if item.get("value")]
 
         return {
             "component": component,
@@ -246,18 +246,14 @@ class VerificationFS:
             "path": path,
             "description": description,
             "invariants": invariants,
-            "read_at": datetime.utcnow().isoformat(),
+            "read_at": _utcnow().isoformat(),
         }
         await self.afs.kv.set(f"{self.PREFIX_SPEC}{name}", spec)
 
     async def list_specs(self) -> list[dict[str, Any]]:
         """List all TLA+ specs that have been read."""
-        specs = []
-        async for key in self.afs.kv.list(prefix=self.PREFIX_SPEC):
-            spec = await self.afs.kv.get(key)
-            if spec:
-                specs.append(spec)
-        return specs
+        items = await self.afs.kv.list(self.PREFIX_SPEC)
+        return [item["value"] for item in items if item.get("value")]
 
     # ==================== Exploration Logging ====================
 
@@ -276,17 +272,14 @@ class VerificationFS:
             "action": action,
             "target": target,
             "result": result,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": _utcnow().isoformat(),
         }
         await self.afs.kv.set(f"{self.PREFIX_EXPLORATION}{log_id}", log)
 
     async def list_explorations(self) -> list[dict[str, Any]]:
         """List all exploration logs."""
-        logs = []
-        async for key in self.afs.kv.list(prefix=self.PREFIX_EXPLORATION):
-            log = await self.afs.kv.get(key)
-            if log:
-                logs.append(log)
+        items = await self.afs.kv.list(self.PREFIX_EXPLORATION)
+        logs = [item["value"] for item in items if item.get("value")]
 
         # Sort by timestamp
         logs.sort(key=lambda l: l.get("timestamp", ""), reverse=True)
@@ -311,7 +304,7 @@ class VerificationFS:
             "query": query,
             "query_type": query_type,
             "result": result,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": _utcnow().isoformat(),
             "ttl_minutes": ttl_minutes,
         }
         await self.afs.kv.set(f"{self.PREFIX_CACHE}{cache_key}", entry)
@@ -333,9 +326,9 @@ class VerificationFS:
             return None
 
         # Check TTL
-        timestamp = datetime.fromisoformat(entry["timestamp"])
+        timestamp = datetime.fromisoformat(entry["timestamp"].replace("Z", "+00:00"))
         ttl_minutes = entry.get("ttl_minutes", 30)
-        age_minutes = (datetime.utcnow() - timestamp).total_seconds() / 60
+        age_minutes = (_utcnow() - timestamp).total_seconds() / 60
 
         if age_minutes > ttl_minutes:
             # Expired
@@ -353,27 +346,24 @@ class VerificationFS:
             Dict with counts of facts, invariants, specs, explorations, tool calls
         """
         # Count facts
-        fact_count = 0
-        async for _ in self.afs.kv.list(prefix=self.PREFIX_FACT):
-            fact_count += 1
+        fact_items = await self.afs.kv.list(self.PREFIX_FACT)
+        fact_count = len(fact_items)
 
         # Count invariants
-        inv_count = 0
-        async for _ in self.afs.kv.list(prefix=self.PREFIX_INVARIANT):
-            inv_count += 1
+        inv_items = await self.afs.kv.list(self.PREFIX_INVARIANT)
+        inv_count = len(inv_items)
 
         # Count specs
-        spec_count = 0
-        async for _ in self.afs.kv.list(prefix=self.PREFIX_SPEC):
-            spec_count += 1
+        spec_items = await self.afs.kv.list(self.PREFIX_SPEC)
+        spec_count = len(spec_items)
 
         # Count explorations
-        expl_count = 0
-        async for _ in self.afs.kv.list(prefix=self.PREFIX_EXPLORATION):
-            expl_count += 1
+        expl_items = await self.afs.kv.list(self.PREFIX_EXPLORATION)
+        expl_count = len(expl_items)
 
         # Get tool call count from AgentFS
-        tool_calls = await self.afs.tools.list()
+        # get_recent(since=0) gets all tool calls
+        tool_calls = await self.afs.tools.get_recent(0)
         tool_count = len(tool_calls)
 
         return {
@@ -393,20 +383,27 @@ class VerificationFS:
         Returns:
             Dict with all session data
         """
+        tool_calls = await self.afs.tools.get_recent(0)
+        # Convert ToolCall objects to dicts if needed
+        tool_calls_data = [
+            tc if isinstance(tc, dict) else {"id": tc.id, "name": tc.name, "parameters": tc.parameters}
+            for tc in tool_calls
+        ]
+
         return {
             "session_id": self.session_id,
             "task": self.task,
             "facts": await self.list_facts(),
             "specs": await self.list_specs(),
             "explorations": await self.list_explorations(),
-            "tool_calls": await self.afs.tools.list(),
-            "export_time": datetime.utcnow().isoformat(),
+            "tool_calls": tool_calls_data,
+            "export_time": _utcnow().isoformat(),
         }
 
     # ==================== Tool Call Trajectory (AgentFS SDK) ====================
     # These are direct pass-throughs to AgentFS's built-in tool tracking
 
-    async def tool_start(self, name: str, args: dict[str, Any]) -> str:
+    async def tool_start(self, name: str, args: dict[str, Any]) -> int:
         """
         Start tracking a tool call.
 
@@ -415,26 +412,26 @@ class VerificationFS:
             args: Tool arguments
 
         Returns:
-            Call ID for later reference
+            Call ID (integer) for later reference
         """
         return await self.afs.tools.start(name, args)
 
-    async def tool_success(self, call_id: str, result: Any):
+    async def tool_success(self, call_id: int, result: Any):
         """
         Mark tool call as successful.
 
         Args:
-            call_id: Call ID from tool_start
+            call_id: Call ID from tool_start (integer)
             result: Tool result
         """
         await self.afs.tools.success(call_id, result)
 
-    async def tool_error(self, call_id: str, error: str):
+    async def tool_error(self, call_id: int, error: str):
         """
         Mark tool call as failed.
 
         Args:
-            call_id: Call ID from tool_start
+            call_id: Call ID from tool_start (integer)
             error: Error message
         """
         await self.afs.tools.error(call_id, error)
@@ -446,4 +443,9 @@ class VerificationFS:
         Returns:
             List of tool calls with timestamps and durations
         """
-        return await self.afs.tools.list()
+        tool_calls = await self.afs.tools.get_recent(0)
+        # Convert ToolCall objects to dicts
+        return [
+            tc if isinstance(tc, dict) else {"id": tc.id, "name": tc.name, "parameters": tc.parameters}
+            for tc in tool_calls
+        ]

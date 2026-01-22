@@ -18,6 +18,9 @@ dependencies = [
     # LLM for RLM sub-queries
     "anthropic>=0.34.0",
 
+    # RLM sandboxed execution
+    "RestrictedPython>=7.0",
+
     # Utilities
     "aiofiles>=24.0.0",
     "watchfiles>=0.24.0",
