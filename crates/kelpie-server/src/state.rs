@@ -806,11 +806,10 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             use bytes::Bytes;
             use kelpie_core::actor::ActorId;
 
-            let registry_id = ActorId::new("system", "agent_registry").map_err(|e| {
-                StateError::Internal {
+            let registry_id =
+                ActorId::new("system", "agent_registry").map_err(|e| StateError::Internal {
                     message: format!("Failed to create registry ActorId: {}", e),
-                }
-            })?;
+                })?;
 
             let request = ListRequest { filter: None };
             let payload = serde_json::to_vec(&request).map_err(|e| StateError::Internal {
@@ -864,8 +863,8 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 });
             }
 
-            // Sort by created_at
-            agents.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+            // Sort by created_at descending (newest first)
+            agents.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
             // Apply cursor (skip until we find the cursor ID)
             let start_idx = if let Some(cursor_id) = cursor {
@@ -932,8 +931,8 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 });
             }
 
-            // Sort by created_at
-            agents.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+            // Sort by created_at descending (newest first)
+            agents.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
             // Apply cursor (skip until we find the cursor ID)
             let start_idx = if let Some(cursor_id) = cursor {
