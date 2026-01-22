@@ -187,12 +187,21 @@ Refactor the agent registry from a storage abstraction to a proper Actor, enabli
 - Backward compatible (dispatcher optional)
 - All tests still passing (166/166)
 
+### Phase 4: API Layer Migration ✅
+**Works Now**:
+- AppState.list_agents_async() uses RegistryActor when dispatcher available
+- GET /agents endpoint uses message-based registry access
+- Backward compatible (falls back to storage if no dispatcher)
+- All tests still passing (166/166)
+- Pagination and cursor support maintained
+
 **Doesn't Work Yet**:
-- API layer integration (Phase 4)
+- DST coverage for registry operations (Phase 5)
 
 **Known Limitations**:
 - Single-node only (no distributed registry yet)
 - No caching (reads hit storage every time)
+- Still need storage for blocks (AgentMetadata doesn't include blocks)
 
 ## Architecture Design
 
@@ -332,7 +341,7 @@ let response = dispatcher.invoke(
 - [x] Phase 1: Core RegistryActor implementation
 - [x] Phase 2: AgentActor self-registration
 - [x] Phase 3: TeleportService migration
-- [ ] Phase 4: API layer migration
+- [x] Phase 4: API layer migration
 - [ ] Phase 5: DST coverage
 
 ## Notes
