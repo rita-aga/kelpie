@@ -15,11 +15,9 @@ members = [
     "crates/kelpie-vm",
     "crates/kelpie-server",
     "crates/kelpie-cli",
-    "tools/kelpie-indexer",
 ]
 exclude = [
     "images/guest-agent",  # Built inside Docker, not part of main workspace
-    "tools/kelpie-indexer/tests/fixtures/sample_crate",  # Test fixture, separate workspace
 ]
 
 [workspace.package]
