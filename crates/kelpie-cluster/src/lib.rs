@@ -37,6 +37,7 @@
 mod cluster;
 mod config;
 mod error;
+mod handler;
 mod migration;
 mod rpc;
 
@@ -46,6 +47,7 @@ pub use config::{
     MIGRATION_BATCH_SIZE_DEFAULT,
 };
 pub use error::{ClusterError, ClusterResult};
+pub use handler::{ActorInvoker, ClusterRpcHandler, MigrationReceiver};
 pub use migration::{plan_migrations, MigrationCoordinator, MigrationInfo, MigrationState};
 pub use rpc::{MemoryTransport, RequestId, RpcHandler, RpcMessage, RpcTransport, TcpTransport};
 

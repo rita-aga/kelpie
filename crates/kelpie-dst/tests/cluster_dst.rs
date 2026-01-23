@@ -921,3 +921,326 @@ fn test_dst_cluster_stress_migrations() {
 
     assert!(result.is_ok(), "Stress test failed: {:?}", result.err());
 }
+
+// =============================================================================
+// RPC Handler Tests (Phase 6)
+// =============================================================================
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use kelpie_cluster::{ActorInvoker, ClusterRpcHandler, MigrationReceiver, RpcHandler, RpcMessage};
+use std::collections::HashMap;
+use tokio::sync::Mutex;
+
+/// Mock invoker for DST testing
+struct DstMockInvoker {
+    responses: Mutex<HashMap<String, Result<Bytes, String>>>,
+}
+
+impl DstMockInvoker {
+    fn new() -> Self {
+        Self {
+            responses: Mutex::new(HashMap::new()),
+        }
+    }
+
+    async fn set_response(&self, actor_key: &str, result: Result<Bytes, String>) {
+        let mut responses = self.responses.lock().await;
+        responses.insert(actor_key.to_string(), result);
+    }
+}
+
+#[async_trait]
+impl ActorInvoker for DstMockInvoker {
+    async fn invoke(
+        &self,
+        actor_id: ActorId,
+        _operation: String,
+        _payload: Bytes,
+    ) -> Result<Bytes, String> {
+        let responses = self.responses.lock().await;
+        responses
+            .get(&actor_id.qualified_name())
+            .cloned()
+            .unwrap_or(Ok(Bytes::from("default-response")))
+    }
+}
+
+/// Mock migration receiver for DST testing
+struct DstMockMigrationReceiver {
+    can_accept: Mutex<bool>,
+    received_states: Mutex<HashMap<String, Bytes>>,
+    activated: Mutex<Vec<String>>,
+}
+
+impl DstMockMigrationReceiver {
+    fn new() -> Self {
+        Self {
+            can_accept: Mutex::new(true),
+            received_states: Mutex::new(HashMap::new()),
+            activated: Mutex::new(Vec::new()),
+        }
+    }
+
+    async fn set_can_accept(&self, can: bool) {
+        *self.can_accept.lock().await = can;
+    }
+
+    async fn get_activated(&self) -> Vec<String> {
+        self.activated.lock().await.clone()
+    }
+}
+
+#[async_trait]
+impl MigrationReceiver for DstMockMigrationReceiver {
+    async fn can_accept(&self, _actor_id: &ActorId) -> Result<bool, String> {
+        Ok(*self.can_accept.lock().await)
+    }
+
+    async fn receive_state(&self, actor_id: ActorId, state: Bytes) -> Result<(), String> {
+        let mut states = self.received_states.lock().await;
+        states.insert(actor_id.qualified_name(), state);
+        Ok(())
+    }
+
+    async fn activate_migrated(&self, actor_id: ActorId) -> Result<(), String> {
+        let mut activated = self.activated.lock().await;
+        activated.push(actor_id.qualified_name());
+        Ok(())
+    }
+}
+
+#[test]
+fn test_dst_rpc_handler_invoke() {
+    let config = SimConfig::from_env_or_random();
+
+    let result = Simulation::new(config).run(|env| async move {
+        let clock = Arc::new(TestClock::new(env.now_ms()));
+        let registry = Arc::new(MemoryRegistry::with_clock(clock.clone()));
+        let invoker = Arc::new(DstMockInvoker::new());
+        let migration_receiver = Arc::new(DstMockMigrationReceiver::new());
+        let local_node_id = test_node_id(1);
+
+        // Register local node
+        let mut node = NodeInfo::with_timestamp(local_node_id.clone(), test_addr(9001), clock.now_ms());
+        node.status = NodeStatus::Active;
+        registry.register_node(node).await.map_err(to_core_error)?;
+
+        // Create handler
+        let handler = ClusterRpcHandler::new(
+            local_node_id.clone(),
+            registry.clone(),
+            invoker.clone(),
+            migration_receiver,
+        );
+
+        // Register actor
+        let actor_id = test_actor_id(1);
+        registry
+            .try_claim_actor(actor_id.clone(), local_node_id.clone())
+            .await
+            .map_err(to_core_error)?;
+
+        // Set expected response
+        invoker.set_response(&actor_id.qualified_name(), Ok(Bytes::from("test-result"))).await;
+
+        // Handle invoke message
+        let msg = RpcMessage::ActorInvoke {
+            request_id: 1,
+            actor_id: actor_id.clone(),
+            operation: "test-op".to_string(),
+            payload: Bytes::new(),
+        };
+
+        let response = handler.handle(&test_node_id(2), msg).await;
+
+        match response {
+            Some(RpcMessage::ActorInvokeResponse { result, .. }) => {
+                assert_eq!(result.unwrap(), Bytes::from("test-result"));
+            }
+            _ => panic!("expected ActorInvokeResponse"),
+        }
+
+        Ok(())
+    });
+
+    assert!(result.is_ok(), "Test failed: {:?}", result.err());
+}
+
+#[test]
+fn test_dst_rpc_handler_migration_flow() {
+    let config = SimConfig::from_env_or_random();
+
+    let result = Simulation::new(config).run(|env| async move {
+        let clock = Arc::new(TestClock::new(env.now_ms()));
+        let registry = Arc::new(MemoryRegistry::with_clock(clock.clone()));
+        let invoker = Arc::new(DstMockInvoker::new());
+        let migration_receiver = Arc::new(DstMockMigrationReceiver::new());
+        let local_node_id = test_node_id(2); // We are receiving the migration
+
+        // Create handler
+        let handler = ClusterRpcHandler::new(
+            local_node_id.clone(),
+            registry.clone(),
+            invoker,
+            migration_receiver.clone(),
+        );
+
+        let actor_id = test_actor_id(1);
+        let from_node = test_node_id(1);
+
+        // Step 1: Prepare
+        let prepare_msg = RpcMessage::MigratePrepare {
+            request_id: 1,
+            actor_id: actor_id.clone(),
+            from_node: from_node.clone(),
+        };
+        let response = handler.handle(&from_node, prepare_msg).await;
+        match response {
+            Some(RpcMessage::MigratePrepareResponse { ready, .. }) => {
+                assert!(ready, "prepare should succeed");
+            }
+            _ => panic!("expected MigratePrepareResponse"),
+        }
+
+        // Step 2: Transfer
+        let state = Bytes::from("serialized-actor-state");
+        let transfer_msg = RpcMessage::MigrateTransfer {
+            request_id: 2,
+            actor_id: actor_id.clone(),
+            state,
+            from_node: from_node.clone(),
+        };
+        let response = handler.handle(&from_node, transfer_msg).await;
+        match response {
+            Some(RpcMessage::MigrateTransferResponse { success, .. }) => {
+                assert!(success, "transfer should succeed");
+            }
+            _ => panic!("expected MigrateTransferResponse"),
+        }
+
+        // Step 3: Complete
+        let complete_msg = RpcMessage::MigrateComplete {
+            request_id: 3,
+            actor_id: actor_id.clone(),
+        };
+        let response = handler.handle(&from_node, complete_msg).await;
+        match response {
+            Some(RpcMessage::MigrateCompleteResponse { success, .. }) => {
+                assert!(success, "complete should succeed");
+            }
+            _ => panic!("expected MigrateCompleteResponse"),
+        }
+
+        // Verify activation was called
+        let activated = migration_receiver.get_activated().await;
+        assert_eq!(activated.len(), 1);
+        assert_eq!(activated[0], actor_id.qualified_name());
+
+        Ok(())
+    });
+
+    assert!(result.is_ok(), "Test failed: {:?}", result.err());
+}
+
+#[test]
+fn test_dst_rpc_handler_migration_rejected() {
+    let config = SimConfig::from_env_or_random();
+
+    let result = Simulation::new(config).run(|_env| async move {
+        let registry = Arc::new(MemoryRegistry::new());
+        let invoker = Arc::new(DstMockInvoker::new());
+        let migration_receiver = Arc::new(DstMockMigrationReceiver::new());
+        migration_receiver.set_can_accept(false).await;
+
+        let handler = ClusterRpcHandler::new(
+            test_node_id(2),
+            registry,
+            invoker,
+            migration_receiver,
+        );
+
+        let msg = RpcMessage::MigratePrepare {
+            request_id: 1,
+            actor_id: test_actor_id(1),
+            from_node: test_node_id(1),
+        };
+
+        let response = handler.handle(&test_node_id(1), msg).await;
+        match response {
+            Some(RpcMessage::MigratePrepareResponse { ready, .. }) => {
+                assert!(!ready, "prepare should be rejected");
+            }
+            _ => panic!("expected MigratePrepareResponse"),
+        }
+
+        Ok(())
+    });
+
+    assert!(result.is_ok(), "Test failed: {:?}", result.err());
+}
+
+#[test]
+fn test_dst_rpc_handler_determinism() {
+    let seed = 54321;
+
+    let run_test = || {
+        let config = SimConfig::new(seed);
+
+        Simulation::new(config).run(|env| async move {
+            let clock = Arc::new(TestClock::new(env.now_ms()));
+            let registry = Arc::new(MemoryRegistry::with_clock(clock.clone()));
+            let invoker = Arc::new(DstMockInvoker::new());
+            let migration_receiver = Arc::new(DstMockMigrationReceiver::new());
+            let local_node_id = test_node_id(1);
+
+            // Register local node
+            let mut node = NodeInfo::with_timestamp(local_node_id.clone(), test_addr(9001), clock.now_ms());
+            node.status = NodeStatus::Active;
+            registry.register_node(node).await.map_err(to_core_error)?;
+
+            let handler = ClusterRpcHandler::new(
+                local_node_id.clone(),
+                registry.clone(),
+                invoker.clone(),
+                migration_receiver,
+            );
+
+            let mut results = Vec::new();
+
+            // Process multiple invocations
+            for i in 1..=10 {
+                let actor_id = test_actor_id(i);
+                registry
+                    .try_claim_actor(actor_id.clone(), local_node_id.clone())
+                    .await
+                    .map_err(to_core_error)?;
+
+                let expected = format!("result-{}", i);
+                invoker.set_response(&actor_id.qualified_name(), Ok(Bytes::from(expected.clone()))).await;
+
+                let msg = RpcMessage::ActorInvoke {
+                    request_id: i as u64,
+                    actor_id: actor_id.clone(),
+                    operation: "get".to_string(),
+                    payload: Bytes::new(),
+                };
+
+                let response = handler.handle(&test_node_id(2), msg).await;
+                if let Some(RpcMessage::ActorInvokeResponse { result, .. }) = response {
+                    results.push((actor_id.qualified_name(), result));
+                }
+            }
+
+            Ok(results)
+        })
+    };
+
+    let result1 = run_test().expect("First run failed");
+    let result2 = run_test().expect("Second run failed");
+
+    assert_eq!(
+        result1, result2,
+        "RPC handler should be deterministic with same seed"
+    );
+}
