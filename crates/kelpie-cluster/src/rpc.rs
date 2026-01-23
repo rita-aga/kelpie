@@ -220,8 +220,10 @@ pub struct MemoryTransport<RT: Runtime> {
     /// Runtime for task spawning
     runtime: RT,
     /// Sender channels to other nodes
-    senders: tokio::sync::RwLock<
-        std::collections::HashMap<NodeId, tokio::sync::mpsc::Sender<(NodeId, RpcMessage)>>,
+    senders: std::sync::Arc<
+        tokio::sync::RwLock<
+            std::collections::HashMap<NodeId, tokio::sync::mpsc::Sender<(NodeId, RpcMessage)>>,
+        >,
     >,
     /// Receiver for incoming messages
     receiver: tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<(NodeId, RpcMessage)>>>,
@@ -246,11 +248,11 @@ impl<RT: Runtime> MemoryTransport<RT> {
             node_id: node_id.clone(),
             addr,
             runtime,
-            senders: tokio::sync::RwLock::new({
+            senders: std::sync::Arc::new(tokio::sync::RwLock::new({
                 let mut map = std::collections::HashMap::new();
                 map.insert(node_id, tx);
                 map
-            }),
+            })),
             receiver: tokio::sync::Mutex::new(Some(rx)),
             handler: tokio::sync::RwLock::new(None),
             pending: tokio::sync::RwLock::new(std::collections::HashMap::new()),
@@ -292,6 +294,12 @@ impl<RT: Runtime> MemoryTransport<RT> {
                 std::collections::HashMap<RequestId, tokio::sync::oneshot::Sender<RpcMessage>>,
             >,
         >,
+        senders: std::sync::Arc<
+            tokio::sync::RwLock<
+                std::collections::HashMap<NodeId, tokio::sync::mpsc::Sender<(NodeId, RpcMessage)>>,
+            >,
+        >,
+        local_node_id: NodeId,
     ) {
         while let Some((from, message)) = receiver.recv().await {
             // Check if this is a response to a pending request
@@ -306,10 +314,14 @@ impl<RT: Runtime> MemoryTransport<RT> {
             }
 
             // Handle as incoming message
-            let handler = handler.read().await;
-            if let Some(ref h) = *handler {
-                if let Some(_response) = h.handle(&from, message).await {
-                    // In a full implementation, we'd send the response back
+            let handler_guard = handler.read().await;
+            if let Some(ref h) = *handler_guard {
+                if let Some(response) = h.handle(&from, message).await {
+                    // Send response back to the sender
+                    let senders = senders.read().await;
+                    if let Some(sender) = senders.get(&from) {
+                        let _ = sender.send((local_node_id.clone(), response)).await;
+                    }
                 }
             }
         }
@@ -414,10 +426,13 @@ impl<RT: Runtime + 'static> RpcTransport for MemoryTransport<RT> {
         let pending =
             std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
 
+        let senders = self.senders.clone();
+        let local_node_id = self.node_id.clone();
+
         // Fire-and-forget background task
         std::mem::drop(
             self.runtime
-                .spawn(Self::process_messages(receiver, handler, pending)),
+                .spawn(Self::process_messages(receiver, handler, pending, senders, local_node_id)),
         );
 
         Ok(())
@@ -549,10 +564,20 @@ impl<RT: Runtime + 'static> TcpTransport<RT> {
         let pending = self.pending.clone();
         let node_id = self.node_id.clone();
         let connections = self.connections.clone();
+        let handler = self.handler.clone();
+        let response_sender = tx.clone();
 
         // Fire-and-forget background task
         std::mem::drop(self.runtime.spawn(async move {
-            Self::reader_task(read_half, pending, target_clone.clone(), node_id).await;
+            Self::reader_task(
+                read_half,
+                pending,
+                target_clone.clone(),
+                node_id,
+                handler,
+                response_sender,
+            )
+            .await;
             // Remove connection on disconnect
             let mut conns = connections.write().await;
             conns.remove(&target_clone);
@@ -619,6 +644,8 @@ impl<RT: Runtime + 'static> TcpTransport<RT> {
         >,
         from_node: NodeId,
         _local_node: NodeId,
+        handler: std::sync::Arc<tokio::sync::RwLock<Option<Box<dyn RpcHandler>>>>,
+        response_sender: tokio::sync::mpsc::Sender<RpcMessage>,
     ) {
         use tokio::io::AsyncReadExt;
 
@@ -668,9 +695,18 @@ impl<RT: Runtime + 'static> TcpTransport<RT> {
                 }
             }
 
-            // Non-response messages would be handled by the handler
-            // For now, we just log them
-            tracing::debug!(node = %from_node, "Received non-response message (handler not implemented for incoming)");
+            // Handle incoming request via RpcHandler
+            let handler_guard = handler.read().await;
+            if let Some(ref h) = *handler_guard {
+                if let Some(response) = h.handle(&from_node, message).await {
+                    // Send response back to the sender
+                    if let Err(e) = response_sender.send(response).await {
+                        tracing::error!(node = %from_node, error = %e, "Failed to send response");
+                    }
+                }
+            } else {
+                tracing::debug!(node = %from_node, "No handler registered, ignoring request");
+            }
         }
 
         tracing::debug!(node = %from_node, "Reader task exiting");
@@ -687,6 +723,7 @@ impl<RT: Runtime + 'static> TcpTransport<RT> {
                 std::collections::HashMap<RequestId, tokio::sync::oneshot::Sender<RpcMessage>>,
             >,
         >,
+        handler: std::sync::Arc<tokio::sync::RwLock<Option<Box<dyn RpcHandler>>>>,
         local_node: NodeId,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) {
@@ -716,6 +753,8 @@ impl<RT: Runtime + 'static> TcpTransport<RT> {
                             let local_node_clone = local_node.clone();
                             let node_clone = temp_node_id.clone();
                             let connections_clone = connections.clone();
+                            let handler_clone = handler.clone();
+                            let response_sender = tx.clone();
 
                             // Fire-and-forget background task
                             std::mem::drop(kelpie_core::current_runtime().spawn(async move {
@@ -724,6 +763,8 @@ impl<RT: Runtime + 'static> TcpTransport<RT> {
                                     pending_clone,
                                     node_clone.clone(),
                                     local_node_clone,
+                                    handler_clone,
+                                    response_sender,
                                 ).await;
                                 // Remove connection on disconnect
                                 let mut conns = connections_clone.write().await;
@@ -845,6 +886,7 @@ impl<RT: Runtime + 'static> RpcTransport for TcpTransport<RT> {
         let connections =
             std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
         let pending = self.pending.clone();
+        let handler = self.handler.clone();
         let local_node = self.node_id.clone();
 
         // Fire-and-forget background task
@@ -852,6 +894,7 @@ impl<RT: Runtime + 'static> RpcTransport for TcpTransport<RT> {
             listener,
             connections,
             pending,
+            handler,
             local_node,
             shutdown_rx,
         )));

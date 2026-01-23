@@ -3,6 +3,7 @@
 //! TigerStyle: Single-threaded per-actor execution, explicit message routing.
 
 use crate::activation::ActiveActor;
+use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::actor::{Actor, ActorId};
 use kelpie_core::constants::{ACTOR_CONCURRENT_COUNT_MAX, INVOCATION_PENDING_COUNT_MAX};
@@ -17,6 +18,31 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, instrument, warn};
+
+// ============================================================================
+// Request Forwarding
+// ============================================================================
+
+/// Trait for forwarding requests to other nodes
+///
+/// Implementations should use RpcTransport to send ActorInvoke messages.
+#[async_trait]
+pub trait RequestForwarder: Send + Sync {
+    /// Forward an invocation to another node
+    ///
+    /// Returns the result from the remote node.
+    async fn forward(
+        &self,
+        target_node: &NodeId,
+        actor_id: &ActorId,
+        operation: &str,
+        payload: Bytes,
+    ) -> Result<Bytes>;
+}
+
+// ============================================================================
+// Dispatcher Config
+// ============================================================================
 
 /// Configuration for the dispatcher
 #[derive(Debug, Clone)]
@@ -217,6 +243,8 @@ where
     registry: Option<Arc<dyn Registry>>,
     /// Node ID for this dispatcher (required when registry is set)
     node_id: Option<NodeId>,
+    /// Optional request forwarder for distributed mode
+    forwarder: Option<Arc<dyn RequestForwarder>>,
 }
 
 impl<A, S, R> Dispatcher<A, S, R>
@@ -245,6 +273,7 @@ where
             pending_counts: Arc::new(Mutex::new(HashMap::new())),
             registry: None,
             node_id: None,
+            forwarder: None,
         }
     }
 
@@ -254,6 +283,7 @@ where
     /// - Claim actors in the registry before local activation
     /// - Release actors from the registry on deactivation
     /// - Respect single-activation guarantees
+    /// - Forward requests to other nodes when forwarder is provided
     pub fn with_registry(
         factory: Arc<dyn ActorFactory<A>>,
         kv: Arc<dyn ActorKV>,
@@ -275,7 +305,17 @@ where
             pending_counts: Arc::new(Mutex::new(HashMap::new())),
             registry: Some(registry),
             node_id: Some(node_id),
+            forwarder: None,
         }
+    }
+
+    /// Set a request forwarder for distributed mode
+    ///
+    /// When set, requests for actors on other nodes will be forwarded
+    /// instead of returning an error.
+    pub fn with_forwarder(mut self, forwarder: Arc<dyn RequestForwarder>) -> Self {
+        self.forwarder = Some(forwarder);
+        self
     }
 
     /// Get a handle to the dispatcher
@@ -321,6 +361,12 @@ where
     }
 
     /// Handle an invoke command
+    ///
+    /// In distributed mode, this will:
+    /// 1. Check if actor is locally active
+    /// 2. If not, check registry for placement
+    /// 3. If on another node, forward the request (if forwarder available)
+    /// 4. If on this node or new, activate locally and process
     #[instrument(skip(self, payload), fields(actor_id = %actor_id, operation), level = "debug")]
     async fn handle_invoke(
         &mut self,
@@ -331,8 +377,50 @@ where
         let start = Instant::now();
         let key = actor_id.qualified_name();
 
-        // Ensure actor is active
+        // Check if actor is locally active
         if !self.actors.contains_key(&key) {
+            // In distributed mode, check if actor is on another node
+            if let (Some(registry), Some(node_id)) = (&self.registry, &self.node_id) {
+                // Check existing placement without claiming
+                if let Ok(Some(placement)) = registry.get_placement(&actor_id).await {
+                    if &placement.node_id != node_id {
+                        // Actor is on another node - forward if we have a forwarder
+                        if let Some(forwarder) = &self.forwarder {
+                            debug!(
+                                actor_id = %actor_id,
+                                target_node = %placement.node_id,
+                                "Forwarding request to remote node"
+                            );
+                            let result = forwarder
+                                .forward(&placement.node_id, &actor_id, operation, payload)
+                                .await;
+
+                            // Record metrics for forwarded request
+                            let duration = start.elapsed().as_secs_f64();
+                            let status = if result.is_ok() { "forwarded" } else { "forward_error" };
+                            metrics::record_invocation(operation, status, duration);
+
+                            return result;
+                        } else {
+                            // No forwarder available - return error with owner info
+                            warn!(
+                                actor_id = %actor_id,
+                                owner_node = %placement.node_id,
+                                "Actor on another node, no forwarder configured"
+                            );
+                            return Err(Error::ActorNotFound {
+                                id: format!(
+                                    "{} (owned by {}, forwarding not configured)",
+                                    actor_id.qualified_name(),
+                                    placement.node_id
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Actor not on another node (or no registry) - activate locally
             self.activate_actor(actor_id.clone()).await?;
         }
 
@@ -387,11 +475,13 @@ where
                     // Actor is already placed somewhere
                     if &placement.node_id != node_id {
                         // Actor is on a different node - cannot activate here
-                        // TODO(Phase 6): Forward request to the owning node
+                        // Note: Forwarding is handled in handle_invoke before calling activate_actor
+                        // This branch handles the race condition where placement changed between
+                        // get_placement() and try_claim_actor()
                         warn!(
                             actor_id = %actor_id,
                             owner_node = %placement.node_id,
-                            "Actor already activated on another node"
+                            "Actor claimed by another node during activation"
                         );
                         return Err(Error::ActorNotFound {
                             id: format!(

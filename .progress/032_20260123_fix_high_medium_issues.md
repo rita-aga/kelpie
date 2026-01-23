@@ -117,6 +117,9 @@ Two examinations found significant issues blocking Kelpie's distributed guarante
 | 2026-01-23 | Trait callbacks for RPC handler | ActorInvoker and MigrationReceiver traits allow loose coupling | Requires implementing traits in runtime |
 | 2026-01-23 | RwLock for pending migrations | Allows concurrent reads during migration | Small overhead for synchronization |
 | 2026-01-23 | Defer TCP integration tests | Handler logic tested via DST mocks; TCP tested in unit tests | Full e2e test deferred |
+| 2026-01-23 | Wire handler to transport | TcpTransport/MemoryTransport now route incoming requests to handler | Handler must be set before start() |
+| 2026-01-23 | RequestForwarder trait | Loose coupling between Dispatcher and transport | Requires implementing trait |
+| 2026-01-23 | Check placement before claim | get_placement() read-only check before try_claim_actor() | Small race window (handled by claim error) |
 
 ---
 
@@ -344,6 +347,9 @@ Two examinations found significant issues blocking Kelpie's distributed guarante
   - Created `ClusterRpcHandler` in `kelpie-cluster/src/handler.rs`
   - Handles `ActorInvoke` messages via `ActorInvoker` trait callback
   - Returns `ActorInvokeResponse` with result
+  - **Wired to transport**: TcpTransport and MemoryTransport now call handler for incoming requests
+  - **Dispatcher forwarding**: Added `RequestForwarder` trait and `with_forwarder()` builder
+  - Dispatcher checks placement and forwards to remote node if forwarder is configured
 
 - [x] **6.4: Implement actor migration handling** ✅
   - `ClusterRpcHandler` handles full migration protocol:
