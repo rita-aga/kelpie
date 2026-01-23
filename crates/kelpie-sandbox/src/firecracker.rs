@@ -48,6 +48,7 @@ use crate::exec::{ExecOptions, ExecOutput, ExitStatus};
 use crate::snapshot::Snapshot;
 use crate::traits::{Sandbox, SandboxFactory, SandboxState, SandboxStats};
 use async_trait::async_trait;
+use kelpie_core::Runtime;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;

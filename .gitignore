@@ -37,3 +37,6 @@ build/
 
 # Test fixtures - generated indexes
 tools/kelpie-indexer/tests/fixtures/**/.kelpie-index/
+
+venv/
+.venv/

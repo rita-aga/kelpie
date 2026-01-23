@@ -382,10 +382,9 @@ impl StdioTransport {
             Arc::new(RwLock::new(HashMap::new()));
         let pending_clone = pending.clone();
 
-        // Spawn response router task in background
-        #[allow(clippy::let_underscore_future)]
+        // Spawn response router task in background (fire-and-forget)
         let runtime = kelpie_core::current_runtime();
-        let _ = kelpie_core::Runtime::spawn(&runtime, async move {
+        std::mem::drop(kelpie_core::Runtime::spawn(&runtime, async move {
             let mut response_rx = response_rx;
             while let Some(response) = response_rx.recv().await {
                 let id = response.id;
@@ -393,7 +392,7 @@ impl StdioTransport {
                     let _ = sender.send(Ok(response));
                 }
             }
-        });
+        }));
 
         // Store pending map in request channel handler
         // We need to modify the request_tx to register pending requests
@@ -401,10 +400,9 @@ impl StdioTransport {
             mpsc::channel::<(McpRequest, oneshot::Sender<ToolResult<McpResponse>>)>(32);
         let pending_clone = pending.clone();
 
-        // Spawn request handler task in background
-        #[allow(clippy::let_underscore_future)]
+        // Spawn request handler task in background (fire-and-forget)
         let runtime = kelpie_core::current_runtime();
-        let _ = kelpie_core::Runtime::spawn(&runtime, async move {
+        std::mem::drop(kelpie_core::Runtime::spawn(&runtime, async move {
             while let Some((request, response_sender)) = real_request_rx.recv().await {
                 let id = request.id;
                 pending_clone.write().await.insert(id, response_sender);
@@ -416,7 +414,7 @@ impl StdioTransport {
                     pending_clone.write().await.remove(&id);
                 }
             }
-        });
+        }));
 
         let transport = Self {
             request_tx: real_request_tx,
@@ -683,9 +681,9 @@ impl SseTransport {
         let pending_clone = pending.clone();
 
         // Spawn SSE listener task in background
-        #[allow(clippy::let_underscore_future)]
+        // Fire-and-forget background task
         let runtime = kelpie_core::current_runtime();
-        let _ = kelpie_core::Runtime::spawn(&runtime, async move {
+        std::mem::drop(kelpie_core::Runtime::spawn(&runtime, async move {
             use futures::StreamExt;
             use reqwest_eventsource::{Event, EventSource};
 
@@ -719,7 +717,7 @@ impl SseTransport {
                     }
                 }
             }
-        });
+        }));
 
         Ok(Self {
             client,

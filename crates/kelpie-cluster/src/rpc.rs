@@ -414,9 +414,11 @@ impl<RT: Runtime + 'static> RpcTransport for MemoryTransport<RT> {
         let pending =
             std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
 
-        let _ = self
-            .runtime
-            .spawn(Self::process_messages(receiver, handler, pending));
+        // Fire-and-forget background task
+        std::mem::drop(
+            self.runtime
+                .spawn(Self::process_messages(receiver, handler, pending)),
+        );
 
         Ok(())
     }
@@ -536,23 +538,25 @@ impl<RT: Runtime + 'static> TcpTransport<RT> {
         // Create channel for outgoing messages
         let (tx, rx) = tokio::sync::mpsc::channel::<RpcMessage>(100);
 
-        // Spawn writer task
+        // Spawn writer task (fire-and-forget)
         let target_clone = target.clone();
-        let _ = self
-            .runtime
-            .spawn(Self::writer_task(write_half, rx, target_clone.clone()));
+        std::mem::drop(
+            self.runtime
+                .spawn(Self::writer_task(write_half, rx, target_clone.clone())),
+        );
 
         // Spawn reader task
         let pending = self.pending.clone();
         let node_id = self.node_id.clone();
         let connections = self.connections.clone();
 
-        let _ = self.runtime.spawn(async move {
+        // Fire-and-forget background task
+        std::mem::drop(self.runtime.spawn(async move {
             Self::reader_task(read_half, pending, target_clone.clone(), node_id).await;
             // Remove connection on disconnect
             let mut conns = connections.write().await;
             conns.remove(&target_clone);
-        });
+        }));
 
         // Store connection
         {
@@ -702,10 +706,10 @@ impl<RT: Runtime + 'static> TcpTransport<RT> {
                             // Create channel for outgoing messages
                             let (tx, rx) = tokio::sync::mpsc::channel::<RpcMessage>(100);
 
-                            // Spawn writer task
+                            // Spawn writer task (fire-and-forget)
                             let node_clone = temp_node_id.clone();
-                            let _ = kelpie_core::current_runtime()
-                                .spawn(Self::writer_task(write_half, rx, node_clone));
+                            std::mem::drop(kelpie_core::current_runtime()
+                                .spawn(Self::writer_task(write_half, rx, node_clone)));
 
                             // Spawn reader task
                             let pending_clone = pending.clone();
@@ -713,7 +717,8 @@ impl<RT: Runtime + 'static> TcpTransport<RT> {
                             let node_clone = temp_node_id.clone();
                             let connections_clone = connections.clone();
 
-                            let _ = kelpie_core::current_runtime().spawn(async move {
+                            // Fire-and-forget background task
+                            std::mem::drop(kelpie_core::current_runtime().spawn(async move {
                                 Self::reader_task(
                                     read_half,
                                     pending_clone,
@@ -723,7 +728,7 @@ impl<RT: Runtime + 'static> TcpTransport<RT> {
                                 // Remove connection on disconnect
                                 let mut conns = connections_clone.write().await;
                                 conns.remove(&node_clone);
-                            });
+                            }));
 
                             // Store connection
                             let mut conns = connections.write().await;
@@ -842,13 +847,14 @@ impl<RT: Runtime + 'static> RpcTransport for TcpTransport<RT> {
         let pending = self.pending.clone();
         let local_node = self.node_id.clone();
 
-        let _ = self.runtime.spawn(Self::accept_task(
+        // Fire-and-forget background task
+        std::mem::drop(self.runtime.spawn(Self::accept_task(
             listener,
             connections,
             pending,
             local_node,
             shutdown_rx,
-        ));
+        )));
 
         Ok(())
     }

@@ -452,28 +452,28 @@ Kelpie has two types of tests with distinct purposes and characteristics:
 
 **When to use:** Integration testing with real external systems that can't be fully mocked
 
-**Note:** "Chaos" in test names like `integration_chaos_dst.rs` refers to **chaos engineering** (many simultaneous faults), not non-deterministic execution. These are still TRUE DST tests!
+**Note:** "Chaos" in test names like `integration_chaos_dst.rs` refers to **chaos engineering** (many simultaneous faults), not non-deterministic execution. These are still DST tests!
 
 **Rule of thumb:** If it uses `Simulation` or DST components (SimStorage, SimClock, etc.), it's a DST test. If it requires real Firecracker, real network, or real external binaries, it's a Chaos test.
 
-## Repo OS Infrastructure
+## Exploration & Verification Infrastructure (EVI)
 
-Kelpie includes a **Repo OS** infrastructure for AI agent-driven development. This provides structural indexes, MCP tools, and verification-first workflows.
+Kelpie includes an **Exploration & Verification Infrastructure (EVI)** for AI agent-driven development. This provides structural indexes, MCP tools, and verification-first workflows.
 
 ### Quick Reference
 
 ```bash
 # Build all indexes (Python indexer with tree-sitter)
-cd tools/mcp-kelpie-python && uv run --prerelease=allow python3 -c "
+cd kelpie-mcp && uv run --prerelease=allow python3 -c "
 from mcp_kelpie.indexer import build_indexes
 build_indexes('/path/to/kelpie', '.kelpie-index/structural')
 "
 
 # Run indexer tests
-cd tools/mcp-kelpie-python && uv run --prerelease=allow pytest tests/test_indexer.py -v
+cd kelpie-mcp && uv run --prerelease=allow pytest tests/test_indexer.py -v
 
-# Run MCP server tests (92 tests)
-cd tools/mcp-kelpie-python && uv run --prerelease=allow pytest tests/ -v
+# Run MCP server tests (102 tests)
+cd kelpie-mcp && uv run --prerelease=allow pytest tests/ -v
 ```
 
 ### Structural Indexes
@@ -489,25 +489,118 @@ Located in `.kelpie-index/structural/`:
 
 ### MCP Server (VDE-Aligned Python)
 
-The MCP server (`tools/mcp-kelpie-python/`) provides 33 tools for AI agent development, built with VDE (Verification-Driven Exploration) architecture.
+The MCP server (`kelpie-mcp/`) provides 37 tools for AI agent development, built with VDE (Verification-Driven Exploration) architecture.
 
 **Architecture:**
-- **Single Python server** - All tools in one MCP server (not separate TypeScript/Rust)
+- **Single Python server** - All tools in one MCP server
 - **tree-sitter indexing** - Fast, accurate Rust parsing for structural indexes
 - **AgentFS integration** - Persistent state via `agentfs-sdk`
 - **Sandboxed execution** - RLM REPL with RestrictedPython
 
-**Tool categories (33 tools):**
-- **REPL (5)** - `repl_load`, `repl_exec`, `repl_query`, `repl_state`, `repl_clear`
-- **VFS/AgentFS (11)** - `vfs_init`, `vfs_fact_*`, `vfs_invariant_*`, `vfs_tool_*`
+**Tool categories (37 tools):**
+- **REPL (7)** - `repl_load`, `repl_exec`, `repl_query`, `repl_state`, `repl_clear`, `repl_sub_llm`, `repl_map_reduce`
+- **VFS/AgentFS (18)** - `vfs_init`, `vfs_fact_*`, `vfs_invariant_*`, `vfs_tool_*`, `vfs_spec_*`, `vfs_cache_*`, `vfs_export`
 - **Index (6)** - `index_symbols`, `index_tests`, `index_modules`, `index_deps`, `index_status`, `index_refresh`
-- **Verification (4)** - `verify_claim`, `verify_all_tests`, `verify_clippy`, `verify_fmt`
-- **DST (3)** - `dst_coverage_check`, `dst_gaps_report`, `harness_check`
-- **Codebase (4)** - `codebase_grep`, `codebase_peek`, `codebase_read_section`, `codebase_list_files`
+- **Examination (6)** - `exam_start`, `exam_record`, `exam_status`, `exam_complete`, `exam_export`, `issue_list`
+
+### CRITICAL: Tool Selection Policy (MUST FOLLOW)
+
+**The entire point of EVI is to keep context on the server, not in your context window.**
+
+#### NEVER Do This (Anti-Patterns)
+
+```
+# BAD - Loading files into your context
+Read(file_path="crates/kelpie-dst/src/simulation.rs")
+Read(file_path="crates/kelpie-dst/src/faults.rs")
+Read(file_path="crates/kelpie-dst/src/network.rs")
+# Now you've consumed 3000+ tokens of context
+
+# BAD - Reading multiple files to answer a question
+for each file in crate:
+    Read(file_path=file)  # Fills your context window
+```
+
+#### ALWAYS Do This (RLM Pattern)
+
+**The key insight:** `sub_llm()` is available INSIDE `repl_exec()` code. This enables symbolic recursion - LLM calls embedded in code logic.
+
+```
+# Step 1: Load files as server-side variables
+repl_load(pattern="crates/kelpie-dst/**/*.rs", var_name="dst_code")
+# Files stay on server, your context is ~50 tokens
+
+# Step 2: RLM - Use sub_llm() INSIDE repl_exec code
+repl_exec(code="""
+results = {}
+for path, content in dst_code.items():
+    # sub_llm() is a function inside the REPL!
+    analysis = sub_llm(content, "What fault types are defined in this file?")
+    results[path] = analysis
+result = results
+""")
+# The for-loop runs on server, sub_llm called per file, you get aggregated results
+
+# For simple queries on entire variable, repl_sub_llm tool is also available:
+repl_sub_llm(var_name="dst_code", query="What fault types are defined?")
+```
+
+**Why this matters (vs Claude Code / Codex):**
+- Claude Code: Main model makes 1000 separate tool calls for 1000 files
+- RLM: Main model makes 1 repl_exec call with a for-loop that calls sub_llm() 1000 times
+
+The sub_llm call is **inside the code**, not a separate tool. This enables conditional logic:
+```
+repl_exec(code="""
+results = {}
+for path, content in files.items():
+    if 'test' in path and len(content) > 1000:  # Conditional!
+        results[path] = sub_llm(content, "What does this test?")
+result = results
+""")
+```
+
+#### Task-to-Tool Routing (MANDATORY)
+
+| Task | DO NOT Use | MUST Use |
+|------|------------|----------|
+| **Read multiple files for analysis** | `Read` tool | `repl_load` + `repl_sub_llm` |
+| **Answer "how does X work?"** | `Read` multiple files | `exam_start` + `repl_load` + examination workflow |
+| **Find patterns across codebase** | `Grep` + `Read` | `repl_load` + `repl_sub_llm` or `repl_map_reduce` |
+| **Build codebase map** | `Read` every file | `exam_start(scope=["all"])` + examination workflow |
+| **Analyze test coverage** | `Read` test files | `repl_load(pattern="**/*_test.rs")` + `repl_sub_llm` |
+| **Track verification progress** | Notes in response | `vfs_init` + `vfs_fact_add` |
+
+#### When Native Tools ARE Appropriate
+
+- **Single file, specific location** - `Read` is fine for reading ONE file you know you need
+- **Running commands** - `Bash` for `cargo test`, `cargo clippy`, etc.
+- **Quick search** - `Grep` for finding WHERE something is (then use RLM to analyze)
+
+#### The RLM Principle (Symbolic Recursion)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  WRONG (Claude Code pattern):                                   │
+│  Main Model → Tool Call (sub-agent) → Result                    │
+│  Main Model → Tool Call (sub-agent) → Result                    │
+│  ... repeat N times for N files (N tool calls from main model)  │
+├─────────────────────────────────────────────────────────────────┤
+│  RIGHT (RLM pattern):                                      │
+│  Main Model → repl_exec(code with sub_llm() calls) → Results    │
+│  The for-loop and sub_llm() calls happen INSIDE the REPL        │
+│  Main model makes 1 call, REPL executes N sub_llm() calls       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**The key difference:** Sub-LLM calls are a FUNCTION inside the REPL language, not a separate tool.
+This enables symbolic recursion - LLM calls embedded in programmatic logic (for-loops, conditionals).
+
+**If you find yourself using `Read` more than 2-3 times for analysis, STOP and use RLM instead.**
 
 **Running the server:**
 ```bash
-cd tools/mcp-kelpie-python
+cd kelpie-mcp
 KELPIE_CODEBASE_PATH=/path/to/kelpie uv run --prerelease=allow mcp-kelpie
 ```
 
@@ -539,7 +632,7 @@ tool:{id}        # Tool call tracking
 
 The `agentfs-sdk` Python package handles all persistence. State survives across MCP restarts.
 
-### RLM Skills (Verification-First Development)
+### Verification-First Development Principles
 
 **Core Principle**: Trust execution, not documentation. Verify before claiming complete.
 
@@ -561,7 +654,7 @@ The `agentfs-sdk` Python package handles all persistence. State survives across 
 └─────────────────────────────────────┘
 ```
 
-#### Task Workflow (`/rlm-task`)
+#### Task Workflow
 For any non-trivial task:
 1. **Load constraints** - Read `.vision/CONSTRAINTS.md` (non-negotiable rules)
 2. **Query indexes** - Use `index_symbols`, `index_modules` to understand scope
@@ -569,7 +662,7 @@ For any non-trivial task:
 4. **Execute phases** - Verify each by running tests, not reading docs
 5. **Final verification** - `cargo test`, `cargo clippy`, `cargo fmt`
 
-#### Verification Workflow (`/rlm-verify`)
+#### Verification Workflow
 When asked "Is X implemented?" or "Does Y work?":
 1. **Find tests** - Search for relevant test files
 2. **Run tests** - Execute and capture output
@@ -581,7 +674,7 @@ cargo test snapshot  # Run relevant tests
 # Report: "Ran 5 snapshot tests, 4 passed, 1 failed (restore_concurrent)"
 ```
 
-#### Exploration Workflow (`/rlm-explore`)
+#### Exploration Workflow
 Start broad, narrow down:
 1. **Modules** - `cargo metadata` to see crate structure
 2. **Dependencies** - `index_deps` to understand relationships
@@ -589,14 +682,14 @@ Start broad, narrow down:
 4. **Code reading** - Read the actual implementation
 5. **Test verification** - Run tests to confirm understanding
 
-#### Handoff Protocol (`/rlm-handoff`)
+#### Handoff Protocol
 When taking over from another agent:
 1. **NEVER trust checkboxes** - Re-verify completed phases
 2. **Run the tests** - See if claimed work actually passes
 3. **Check for regressions** - Code may have changed since completion
 4. **Document findings** - Update plan with actual verification status
 
-#### Slop Hunt (`/rlm-slop-hunt`)
+#### Slop Hunt
 Periodic cleanup for:
 - **Dead code** - Unused functions, dependencies
 - **Orphaned code** - Old implementations not deleted
@@ -615,10 +708,56 @@ cargo clippy --workspace -- -W dead_code
 
 | Component | Tests | Command |
 |-----------|-------|---------|
-| Indexer (Python) | 21 | `cd tools/mcp-kelpie-python && uv run pytest tests/test_indexer.py -v` |
-| RLM Environment | 49 | `cd tools/mcp-kelpie-python && uv run pytest tests/test_rlm.py -v` |
-| MCP Tools | 22 | `cd tools/mcp-kelpie-python && uv run pytest tests/test_tools.py -v` |
-| **Total** | **92** | `cd tools/mcp-kelpie-python && uv run pytest tests/ -v` |
+| AgentFS | 13 | `cd kelpie-mcp && uv run --prerelease=allow pytest tests/test_agentfs.py -v` |
+| Indexer (Python) | 21 | `cd kelpie-mcp && uv run --prerelease=allow pytest tests/test_indexer.py -v` |
+| RLM Environment | 36 | `cd kelpie-mcp && uv run --prerelease=allow pytest tests/test_rlm.py -v` |
+| MCP Tools | 32 | `cd kelpie-mcp && uv run --prerelease=allow pytest tests/test_tools.py -v` |
+| **Total** | **102** | `cd kelpie-mcp && uv run --prerelease=allow pytest tests/ -v` |
+
+### Thorough Examination System
+
+The examination tools enforce thoroughness before answering questions about the codebase. Use them for:
+- **Full codebase mapping** - Build complete understanding of all components
+- **Scoped thorough answers** - Examine all relevant components before answering
+
+**Workflow:**
+```
+1. exam_start(task, scope)     # Define what to examine (["all"] or specific components)
+2. exam_record(component, ...) # Record findings for EACH component
+3. exam_status()               # Check progress (examined vs remaining)
+4. exam_complete()             # GATE: returns can_answer=true only if ALL examined
+5. exam_export()               # Generate MAP.md and ISSUES.md
+6. issue_list(filter)          # Query issues by component or severity
+```
+
+**The Key Rule:** Do NOT answer questions until `exam_complete()` returns `can_answer: true`.
+
+**Output Files (after exam_export):**
+- `.kelpie-index/understanding/MAP.md` - Codebase map with all components
+- `.kelpie-index/understanding/ISSUES.md` - All issues found by severity
+- `.kelpie-index/understanding/components/*.md` - Per-component details
+
+### Skills (`.claude/skills/`)
+
+Project-specific skills that extend Claude's capabilities:
+
+| Skill | Trigger | Purpose |
+|-------|---------|---------|
+| `codebase-map` | "map the codebase", "understand the project" | Full codebase examination workflow |
+| `thorough-answer` | "how does X work?", complex questions | Scoped examination before answering |
+
+**To use a skill:** Reference it by name or trigger phrase. The skill provides step-by-step guidance.
+
+**Example - Using codebase-map:**
+```
+User: "I need to understand this codebase"
+Claude: [Uses codebase-map skill]
+1. exam_start(task="Build codebase map", scope=["all"])
+2. For each component: read code, exam_record(...)
+3. exam_complete() -> can_answer: true
+4. exam_export() -> generates MAP.md, ISSUES.md
+5. Present summary to user
+```
 
 ## Vision-Aligned Planning (MANDATORY)
 

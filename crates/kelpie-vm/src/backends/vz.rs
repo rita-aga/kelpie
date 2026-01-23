@@ -22,6 +22,7 @@ use crate::traits::{
     ExecOptions as VmExecOptions, ExecOutput as VmExecOutput, VmFactory, VmInstance, VmState,
 };
 use crate::{VmConfig, VM_EXEC_TIMEOUT_MS_DEFAULT};
+use kelpie_core::Runtime;
 
 #[repr(C)]
 struct KelpieVzVmHandle {

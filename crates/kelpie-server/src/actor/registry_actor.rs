@@ -252,21 +252,12 @@ impl Actor for RegistryActor {
 /// State for RegistryActor
 ///
 /// TigerStyle: Serializable state, explicit fields, no complex nested structures.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RegistryActorState {
     /// Number of registered agents (for metrics)
     pub agent_count: u64,
     /// Last updated timestamp (ms since epoch)
     pub last_updated_ms: u64,
-}
-
-impl Default for RegistryActorState {
-    fn default() -> Self {
-        Self {
-            agent_count: 0,
-            last_updated_ms: 0,
-        }
-    }
 }
 
 // =============================================================================
