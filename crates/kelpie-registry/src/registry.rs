@@ -137,6 +137,8 @@ pub struct MemoryRegistry {
     heartbeat_tracker: RwLock<HeartbeatTracker>,
     /// Current timestamp source (for testing)
     clock: Arc<dyn Clock>,
+    /// Round-robin index for placement strategy
+    round_robin_index: std::sync::atomic::AtomicUsize,
 }
 
 /// Clock abstraction for testing
@@ -205,6 +207,7 @@ impl MemoryRegistry {
             placements: RwLock::new(HashMap::new()),
             heartbeat_tracker: RwLock::new(HeartbeatTracker::new(heartbeat_config)),
             clock: Arc::new(SystemClock),
+            round_robin_index: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -215,6 +218,7 @@ impl MemoryRegistry {
             placements: RwLock::new(HashMap::new()),
             heartbeat_tracker: RwLock::new(HeartbeatTracker::new(HeartbeatConfig::default())),
             clock,
+            round_robin_index: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -278,6 +282,30 @@ impl MemoryRegistry {
             let idx = rand::random::<usize>() % available.len();
             Some(available[idx].id.clone())
         }
+    }
+
+    /// Select node using round-robin strategy
+    async fn select_round_robin(&self) -> Option<NodeId> {
+        let nodes = self.nodes.read().await;
+        let mut available: Vec<_> = nodes
+            .values()
+            .filter(|n| n.status.can_accept_actors() && n.has_capacity())
+            .collect();
+
+        if available.is_empty() {
+            return None;
+        }
+
+        // Sort by node_id to ensure stable ordering
+        available.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
+
+        // Get and increment the round-robin index atomically
+        let current_idx = self
+            .round_robin_index
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let selected_idx = current_idx % available.len();
+
+        Some(available[selected_idx].id.clone())
     }
 }
 
@@ -538,11 +566,7 @@ impl Registry for MemoryRegistry {
                 // Fall back to least loaded
                 self.select_least_loaded().await
             }
-            PlacementStrategy::RoundRobin => {
-                // For simplicity, just use least loaded
-                // A true round-robin would need to track the last selected index
-                self.select_least_loaded().await
-            }
+            PlacementStrategy::RoundRobin => self.select_round_robin().await,
         };
 
         match node_id {
@@ -793,5 +817,118 @@ mod tests {
         // Verify node status changed
         let node = registry.get_node(&test_node_id(1)).await.unwrap().unwrap();
         assert_eq!(node.status, NodeStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn test_select_node_round_robin() {
+        let registry = MemoryRegistry::new();
+
+        // Register 3 nodes
+        registry.register_node(test_node_info(1)).await.unwrap();
+        registry.register_node(test_node_info(2)).await.unwrap();
+        registry.register_node(test_node_info(3)).await.unwrap();
+
+        // Request round-robin placements - should cycle through nodes
+        let mut selected_nodes = Vec::new();
+        for i in 1..=6 {
+            let context = PlacementContext::new(test_actor_id(i))
+                .with_strategy(PlacementStrategy::RoundRobin);
+            let decision = registry.select_node_for_placement(context).await.unwrap();
+
+            match decision {
+                PlacementDecision::New(node_id) => selected_nodes.push(node_id),
+                _ => panic!("expected New decision"),
+            }
+        }
+
+        // Nodes are sorted by id: node-1, node-2, node-3
+        // First cycle
+        assert_eq!(selected_nodes[0], test_node_id(1));
+        assert_eq!(selected_nodes[1], test_node_id(2));
+        assert_eq!(selected_nodes[2], test_node_id(3));
+        // Second cycle (wraps around)
+        assert_eq!(selected_nodes[3], test_node_id(1));
+        assert_eq!(selected_nodes[4], test_node_id(2));
+        assert_eq!(selected_nodes[5], test_node_id(3));
+    }
+
+    #[tokio::test]
+    async fn test_select_node_affinity() {
+        let registry = MemoryRegistry::new();
+
+        // Register 2 nodes
+        registry.register_node(test_node_info(1)).await.unwrap();
+        registry.register_node(test_node_info(2)).await.unwrap();
+
+        // Request placement with affinity to node-2
+        let context = PlacementContext::new(test_actor_id(1)).with_preferred_node(test_node_id(2));
+        let decision = registry.select_node_for_placement(context).await.unwrap();
+
+        match decision {
+            PlacementDecision::New(node_id) => assert_eq!(node_id, test_node_id(2)),
+            _ => panic!("expected New decision"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_select_node_affinity_fallback() {
+        let registry = MemoryRegistry::new();
+
+        // Register node-1 only (node-2 doesn't exist)
+        registry.register_node(test_node_info(1)).await.unwrap();
+
+        // Request placement with affinity to non-existent node-2
+        let context = PlacementContext::new(test_actor_id(1)).with_preferred_node(test_node_id(2));
+        let decision = registry.select_node_for_placement(context).await.unwrap();
+
+        // Should fall back to node-1 (least loaded)
+        match decision {
+            PlacementDecision::New(node_id) => assert_eq!(node_id, test_node_id(1)),
+            _ => panic!("expected New decision"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_select_node_random() {
+        let registry = MemoryRegistry::new();
+
+        // Register 3 nodes
+        registry.register_node(test_node_info(1)).await.unwrap();
+        registry.register_node(test_node_info(2)).await.unwrap();
+        registry.register_node(test_node_info(3)).await.unwrap();
+
+        // Request random placement - should select one of the available nodes
+        let context =
+            PlacementContext::new(test_actor_id(1)).with_strategy(PlacementStrategy::Random);
+        let decision = registry.select_node_for_placement(context).await.unwrap();
+
+        match decision {
+            PlacementDecision::New(node_id) => {
+                // Should be one of our nodes
+                assert!(
+                    node_id == test_node_id(1)
+                        || node_id == test_node_id(2)
+                        || node_id == test_node_id(3)
+                );
+            }
+            _ => panic!("expected New decision"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_select_node_no_capacity() {
+        let registry = MemoryRegistry::new();
+
+        // Register a node at capacity
+        let mut info = test_node_info(1);
+        info.actor_capacity = 100;
+        info.actor_count = 100; // At capacity
+        registry.register_node(info).await.unwrap();
+
+        // Request placement - should return NoCapacity
+        let context = PlacementContext::new(test_actor_id(1));
+        let decision = registry.select_node_for_placement(context).await.unwrap();
+
+        assert!(matches!(decision, PlacementDecision::NoCapacity));
     }
 }

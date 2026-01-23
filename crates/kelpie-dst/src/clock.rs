@@ -187,6 +187,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // tokio::spawn is fine in tests
     async fn test_clock_sleep() {
         let clock = SimClock::from_millis(0);
         let clock_clone = clock.clone();
