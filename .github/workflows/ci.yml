@@ -32,6 +32,18 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
 
+  determinism-check:
+    name: DST Pattern Enforcement
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make script executable
+        run: chmod +x scripts/check-determinism.sh
+      - name: Check for non-deterministic patterns
+        run: ./scripts/check-determinism.sh --warn-only
+        # Note: Using --warn-only until existing violations are fixed.
+        # Change to --strict to block PRs with new violations.
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

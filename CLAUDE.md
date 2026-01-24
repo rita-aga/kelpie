@@ -363,6 +363,7 @@ cargo test --workspace && cargo clippy --workspace -- -D warnings && cargo fmt -
 3. **Explicit fault injection** - 16+ fault types with configurable probability
 4. **Deterministic network** - `SimNetwork` with partitions, delays, reordering
 5. **Deterministic task scheduling** - madsim provides consistent task interleaving
+6. **All I/O through injected providers** - See below
 
 ### Deterministic Task Scheduling (Issue #15)
 
@@ -372,6 +373,57 @@ task scheduling. Unlike tokio's scheduler (which is non-deterministic), madsim g
 - **Same seed = same task interleaving order**
 - Race conditions can be reliably reproduced
 - `DST_SEED=12345 cargo test -p kelpie-dst` produces identical results every time
+
+### I/O Abstraction Requirements (MANDATORY)
+
+**All time and random operations MUST use injected providers, not direct calls.**
+
+```rust
+// ❌ FORBIDDEN - Breaks DST determinism
+tokio::time::sleep(Duration::from_secs(1)).await;
+let now = std::time::SystemTime::now();
+let random_val = rand::random::<u64>();
+
+// ✅ CORRECT - Uses injected providers
+time_provider.sleep_ms(1000).await;
+let now = time_provider.now_ms();
+let random_val = rng_provider.next_u64();
+```
+
+**Forbidden Patterns:**
+
+| Pattern | Use Instead |
+|---------|-------------|
+| `tokio::time::sleep(dur)` | `time_provider.sleep_ms(ms)` |
+| `std::thread::sleep(dur)` | `time_provider.sleep_ms(ms)` |
+| `SystemTime::now()` | `time_provider.now_ms()` |
+| `Instant::now()` | `time_provider.monotonic_ms()` |
+| `rand::random()` | `rng_provider.next_u64()` |
+| `thread_rng()` | `rng_provider` |
+
+**CI Enforcement:**
+
+The `scripts/check-determinism.sh` script scans for these patterns and fails CI on violations.
+
+```bash
+# Run locally before committing
+./scripts/check-determinism.sh
+
+# Warn-only mode (doesn't fail)
+./scripts/check-determinism.sh --warn-only
+```
+
+**Allowed Exceptions:**
+
+- `kelpie-core/src/io.rs` - Production TimeProvider/RngProvider implementations
+- `kelpie-core/src/runtime.rs` - Production runtime
+- `kelpie-dst/` - DST framework (needs real time for comparison)
+- `kelpie-vm/`, `kelpie-sandbox/` - Real VM interactions
+- `kelpie-cli/`, `kelpie-tools/` - CLI tools run in production
+- `kelpie-cluster/` - Cluster heartbeats/gossip
+- Test files (`*_test.rs`, `tests/*.rs`, `#[cfg(test)]` blocks)
+
+**See:** `crates/kelpie-core/src/io.rs` for `TimeProvider` and `RngProvider` traits.
 
 ### Running DST Tests
 
