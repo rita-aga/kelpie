@@ -670,7 +670,6 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
-    use kelpie_core::Runtime;
     use kelpie_server::state::AppState;
     use tower::ServiceExt;
 
