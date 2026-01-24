@@ -152,11 +152,21 @@ async fn test_dst_teleport_roundtrip_under_faults() {
                                                 )
                                                 .await;
 
-                                            if let Ok(output) = verify_result {
-                                                assert!(
-                                                    output.status.is_success(),
-                                                    "File should exist after teleport"
-                                                );
+                                            // Since we don't inject SandboxExecFail faults in this test,
+                                            // exec failures after successful restore indicate a real bug
+                                            match verify_result {
+                                                Ok(output) => {
+                                                    assert!(
+                                                        output.status.is_success(),
+                                                        "File should exist after teleport"
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    panic!(
+                                                        "Verification exec failed unexpectedly after successful restore: {}",
+                                                        e
+                                                    );
+                                                }
                                             }
                                         }
                                     }
@@ -583,20 +593,18 @@ async fn test_dst_teleport_interrupted_midway() {
                     // Upload failed (crash or fault) - verify no orphaned package
                     let packages = env.teleport_storage.list().await;
 
-                    let found_package =
-                        packages
-                            .iter()
-                            .find(|id| id.contains(&agent_id))
-                            .and_then(|id| {
-                                futures::executor::block_on(env.teleport_storage.download(id)).ok()
-                            });
+                    // Find and verify any package that might exist
+                    // Use async/await instead of block_on to avoid deadlocks and maintain determinism
+                    let matching_id = packages.iter().find(|id| id.contains(&agent_id)).cloned();
 
-                    if let Some(pkg) = found_package {
-                        // Package exists - it should be complete
-                        assert!(
-                            pkg.is_full_teleport(),
-                            "Partial packages should not be left behind"
-                        );
+                    if let Some(id) = matching_id {
+                        if let Ok(pkg) = env.teleport_storage.download(&id).await {
+                            // Package exists - it should be complete
+                            assert!(
+                                pkg.is_full_teleport(),
+                                "Partial packages should not be left behind"
+                            );
+                        }
                     }
                 }
             }

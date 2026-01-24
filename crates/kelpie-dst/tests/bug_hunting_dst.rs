@@ -19,6 +19,8 @@ async fn test_rapid_state_transitions() {
     let faults = Arc::new(fault_builder.build());
     let clock = Arc::new(SimClock::default());
 
+    // Keep a reference to faults for verification
+    let faults_ref = faults.clone();
     let factory = SimSandboxIOFactory::new(rng.clone(), faults, clock);
 
     for iteration in 0..50 {
@@ -58,7 +60,18 @@ async fn test_rapid_state_transitions() {
         }
     }
 
-    println!("✅ Rapid state transitions: No bugs found in 50 iterations");
+    // Verify faults actually fired - with 50 iterations and 20%/30% fault rates,
+    // we should see at least some faults triggered
+    let stats = faults_ref.stats();
+    let total_triggered: u64 = stats.iter().map(|s| s.trigger_count).sum();
+    assert!(
+        total_triggered > 0,
+        "Expected some faults to trigger with 50 iterations and 20%/30% fault rates, got 0"
+    );
+    println!(
+        "✅ Rapid state transitions: No bugs found in 50 iterations ({} faults triggered)",
+        total_triggered
+    );
 }
 
 /// Test double-start prevention
@@ -174,6 +187,8 @@ async fn test_stress_many_sandboxes_high_faults() {
     let faults = Arc::new(fault_builder.build());
     let clock = Arc::new(SimClock::default());
 
+    // Keep a reference to faults for verification
+    let faults_ref = faults.clone();
     let factory = SimSandboxIOFactory::new(rng.clone(), faults, clock);
 
     let mut boot_success = 0;
@@ -220,7 +235,18 @@ async fn test_stress_many_sandboxes_high_faults() {
     assert!(exec_fail > 0, "Should have some exec failures");
     assert!(exec_success > 0, "Should have some exec successes");
 
-    println!("✅ Stress test passed - no panics or state corruption");
+    // Verify faults actually triggered in the fault injector
+    let stats = faults_ref.stats();
+    let total_triggered: u64 = stats.iter().map(|s| s.trigger_count).sum();
+    assert!(
+        total_triggered > 0,
+        "Expected some faults to trigger with high fault rates, got 0"
+    );
+
+    println!(
+        "✅ Stress test passed - no panics or state corruption ({} faults triggered)",
+        total_triggered
+    );
 }
 
 /// Test file operations consistency
