@@ -46,18 +46,25 @@ async fn test_dst_storage_misdirected_write_simulation() {
                 }
             }
 
-            // With 50% misdirection, expect roughly half to be correct
-            // (Exact count depends on RNG)
-            println!(
-                "Misdirected write test: {} of 10 writes ended up at correct location",
+            // With 50% misdirection, expect some to be misdirected
+            // CRITICAL: Assert faults actually occurred
+            assert!(
+                correct_count < 10,
+                "Some writes should be misdirected with 50% fault rate, but all {} were correct",
                 correct_count
             );
 
             // Check that misdirected data ended up somewhere
             let misdirected = env.storage.read(b"__corrupted__").await?;
-            if misdirected.is_some() {
-                println!("Found misdirected data at __corrupted__ key");
-            }
+            assert!(
+                misdirected.is_some(),
+                "Misdirected data should exist at __corrupted__ key"
+            );
+
+            println!(
+                "✅ Misdirected write test: {} of 10 correct, misdirected data found",
+                correct_count
+            );
 
             Ok(())
         })
@@ -99,8 +106,15 @@ async fn test_dst_storage_partial_write_simulation() {
                 }
             }
 
+            // CRITICAL: Assert faults actually occurred
+            assert!(
+                truncated > 0,
+                "Some writes should be truncated with 50% fault rate, but got {} truncated",
+                truncated
+            );
+
             println!(
-                "Partial write test: {} truncated, {} full out of 10",
+                "✅ Partial write test: {} truncated, {} full out of 10",
                 truncated, full
             );
 
@@ -136,9 +150,17 @@ async fn test_dst_storage_unflushed_loss_simulation() {
                 }
             }
 
-            println!(
-                "Unflushed loss test: {} of 10 writes actually persisted",
+            // CRITICAL: Assert faults actually occurred - some data should be lost
+            assert!(
+                persisted < 10,
+                "Some writes should be lost with 50% fault rate, but all {} persisted",
                 persisted
+            );
+
+            println!(
+                "✅ Unflushed loss test: {} of 10 writes actually persisted ({} lost)",
+                persisted,
+                10 - persisted
             );
 
             Ok(())
@@ -185,8 +207,15 @@ async fn test_dst_network_packet_corruption_simulation() {
                 }
             }
 
+            // CRITICAL: Assert faults actually occurred
+            assert!(
+                corrupted_count > 0,
+                "Some packets should be corrupted with 50% fault rate, but got {} corrupted",
+                corrupted_count
+            );
+
             println!(
-                "Packet corruption test: {} of 20 messages were corrupted",
+                "✅ Packet corruption test: {} of 20 messages were corrupted",
                 corrupted_count
             );
 
@@ -268,8 +297,15 @@ async fn test_dst_network_connection_exhaustion_simulation() {
                 }
             }
 
+            // CRITICAL: Assert faults actually occurred
+            assert!(
+                dropped > 0,
+                "Some connections should be exhausted with 30% fault rate, but got {} dropped",
+                dropped
+            );
+
             println!(
-                "Connection exhaustion test: {} sent, {} dropped out of 20",
+                "✅ Connection exhaustion test: {} sent, {} dropped out of 20",
                 sent, dropped
             );
 
@@ -346,9 +382,17 @@ async fn test_dst_fdb_faults_chaos() {
                 }
             }
 
+            // CRITICAL: With 50 operations and various fault rates, SOMETHING should fail
+            // This verifies fault injection is actually working
+            let total_faults = storage_errors + network_failures;
+            assert!(
+                total_faults > 0,
+                "With multiple faults configured, at least one should trigger in 100 operations"
+            );
+
             println!(
-                "Chaos test results: {} storage errors, {} network failures out of 50 operations each",
-                storage_errors, network_failures
+                "✅ Chaos test: {} storage errors, {} network failures out of 50 ops each (total faults: {})",
+                storage_errors, network_failures, total_faults
             );
 
             // The key invariant: no panics, no hangs, graceful handling of all faults
