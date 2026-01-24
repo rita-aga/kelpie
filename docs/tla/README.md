@@ -19,9 +19,7 @@ Requires Java 11+.
 
 ### KelpieLease.tla
 
-Models the lease-based actor ownership protocol from ADR-004, verifying:
-- **G2.2 (Atomic Lease Operations)**: Lease acquisition/renewal via atomic CAS
-- **G4.2 (Single Activation)**: At most one node holds a valid lease per actor
+Models the lease-based actor ownership protocol from ADR-004.
 
 #### Safety Invariants
 | Invariant | Description | ADR Reference |
@@ -31,16 +29,14 @@ Models the lease-based actor ownership protocol from ADR-004, verifying:
 | `RenewalRequiresOwnership` | Only lease holder can renew | ADR-002 G2.2 |
 
 #### TLC Results
-- **Safe version**: PASS (679 distinct states, 3171 generated, depth 9)
-- **Buggy version**: FAIL - LeaseUniqueness violated in 5 states
+- **Safe version**: PASS (679 distinct states)
+- **Buggy version**: FAIL - LeaseUniqueness violated
 
 ---
 
 ### KelpieActorLifecycle.tla
 
-Models the lifecycle of a Kelpie virtual actor, verifying:
-- **G1.3 (Lifecycle Ordering)**: No invoke without activate, no deactivate during invoke
-- **G1.5 (Idle Timeout)**: Actors deactivate after idle timeout
+Models the lifecycle of a Kelpie virtual actor.
 
 #### Safety Invariants
 | Invariant | Description | ADR Reference |
@@ -48,30 +44,23 @@ Models the lifecycle of a Kelpie virtual actor, verifying:
 | `TypeOK` | Type constraints on all variables | - |
 | `LifecycleOrdering` | Invocations only when Active | ADR-001 G1.3 |
 | `GracefulDeactivation` | No pending invocations when deactivating | ADR-001 G1.3 |
-| `IdleTimeoutRespected` | Deactivation only after timeout | ADR-001 G1.5 |
 
 #### TLC Results
-- **Safe version**: PASS (19 states generated, 11 distinct states, depth 8)
+- **Safe version**: PASS (11 distinct states)
 - **Buggy version**: FAIL - LifecycleOrdering violated
 
 ---
 
 ### KelpieMigration.tla
 
-Models Kelpie's 3-phase actor migration protocol:
-
-```
-PREPARE → TRANSFER → COMPLETE
-```
+Models Kelpie's 3-phase actor migration protocol.
 
 #### Safety Invariants
-
 | Invariant | Description |
 |-----------|-------------|
 | `MigrationAtomicity` | Complete migration transfers full state |
 | `NoStateLoss` | Actor state is never lost during migration |
 | `SingleActivationDuringMigration` | At most one active instance during migration |
-| `MigrationRollback` | Failed migration leaves actor recoverable |
 
 #### TLC Results
 - **Safe version**: PASS (59 distinct states)
@@ -81,105 +70,117 @@ PREPARE → TRANSFER → COMPLETE
 
 ### KelpieActorState.tla
 
-Models the actor state management and transaction semantics from ADR-008.
+Models the actor state management and transaction semantics.
 
 #### Safety Invariants
-
 | Invariant | Description | ADR Reference |
 |-----------|-------------|---------------|
 | `TypeOK` | Type invariant for all variables | - |
 | `RollbackCorrectness` | After rollback, memory equals pre-invocation snapshot | ADR-008 G8.2 |
-| `BufferEmptyWhenIdle` | Transaction buffer empty when not running | - |
 
 #### TLC Results
-- **Safe version**: PASS (136 generated, 60 distinct states)
+- **Safe version**: PASS (60 distinct states)
 - **Buggy version**: FAIL - RollbackCorrectness violated
 
 ---
 
 ### KelpieFDBTransaction.tla
 
-Models FoundationDB transaction semantics that Kelpie relies on for correctness:
-- **G2.4 (Conflict Detection)**: Read-write conflicts are detected and cause transaction abort
-- **G4.1 (Atomic Operations)**: Transaction writes are all-or-nothing
+Models FoundationDB transaction semantics.
 
 #### Safety Invariants
 | Invariant | Description | ADR Reference |
 |-----------|-------------|---------------|
-| `TypeOK` | Type correctness of all state variables | - |
 | `SerializableIsolation` | Committed transactions respect serial order | ADR-004 G4.1 |
 | `ConflictDetection` | Read-write conflicts properly detected | ADR-002 G2.4 |
 | `AtomicCommit` | Writes are all-or-nothing | ADR-002 G2.4 |
 
 #### TLC Results
-- **Safe version**: PASS (56,193 distinct states, 308,867 generated, depth 13)
-- **Buggy version**: FAIL - SerializableIsolation violated at depth 7
+- **Safe version**: PASS (56,193 distinct states, 308,867 generated)
+- **Buggy version**: FAIL - SerializableIsolation violated
 
 ---
 
 ### KelpieTeleport.tla
 
-Models teleport state consistency for VM snapshot operations from ADR-020:
-- **G20.1 (Snapshot Consistency)**: Restored state equals pre-snapshot state
-- **G20.2 (Architecture Validation)**: Teleport requires same architecture
+Models teleport state consistency for VM snapshot operations.
 
 #### Safety Invariants
 | Invariant | Description | ADR Reference |
 |-----------|-------------|---------------|
-| `TypeInvariant` | All variables have correct types | - |
 | `SnapshotConsistency` | Restored state equals pre-snapshot state | ADR-020 G20.1 |
 | `ArchitectureValidation` | Teleport/Suspend require same architecture | ADR-020 G20.2 |
 
 #### TLC Results
-- **Safe version**: PASS (1,508 distinct states, 4,840 generated)
-- **Buggy version**: FAIL - ArchitectureValidation violated at depth 4
+- **Safe version**: PASS (1,508 distinct states)
+- **Buggy version**: FAIL - ArchitectureValidation violated
 
 ---
 
 ### KelpieSingleActivation.tla
 
-Models the single-activation guarantee with explicit FDB transaction semantics:
-- **G4.2 (Single Activation)**: At most one node can have an actor active at any time
+Models the single-activation guarantee with FDB transaction semantics.
 
 #### Safety Invariants
 | Invariant | Description | ADR Reference |
 |-----------|-------------|---------------|
-| `TypeOK` | All variables have valid types | - |
 | `SingleActivation` | At most one node active at any time | ADR-004 G4.2 |
 | `ConsistentHolder` | FDB holder matches node state | - |
 
 #### Liveness Properties
 | Property | Description |
 |----------|-------------|
-| `EventualActivation` | Every claim eventually resolves (active or rejected) |
+| `EventualActivation` | Every claim eventually resolves |
 
 #### TLC Results
-- **Safe version**: PASS (714 distinct states, 1429 generated, depth 27)
+- **Safe version**: PASS (714 distinct states, depth 27)
 
 ---
 
 ### KelpieRegistry.tla
 
-Models the actor registry with node lifecycle and cache coherence:
-- Node states: Active → Suspect → Failed
-- Actor placement and discovery
-- Cache invalidation
+Models the actor registry with node lifecycle and cache coherence.
 
 #### Safety Invariants
 | Invariant | Description |
 |-----------|-------------|
-| `TypeOK` | All variables have correct types |
-| `SingleActivation` | An actor is placed on at most one node at any time |
-| `PlacementConsistency` | Authoritative placements never point to Failed nodes |
+| `SingleActivation` | An actor is placed on at most one node |
+| `PlacementConsistency` | Placements never point to Failed nodes |
 
 #### Liveness Properties
 | Property | Description |
 |----------|-------------|
-| `EventualFailureDetection` | Dead nodes are eventually detected and marked Failed |
-| `EventualCacheInvalidation` | Stale cache entries on alive nodes are eventually corrected |
+| `EventualFailureDetection` | Dead nodes eventually detected |
+| `EventualCacheInvalidation` | Stale cache entries eventually corrected |
 
 #### TLC Results
-- **Safe version**: PASS (6,174 distinct states, 22,845 generated, depth 19)
+- **Safe version**: PASS (6,174 distinct states, 22,845 generated)
+
+---
+
+### KelpieWAL.tla
+
+Models the Write-Ahead Log for operation durability and atomicity.
+
+#### Safety Invariants
+| Invariant | Description |
+|-----------|-------------|
+| `TypeOK` | Type invariant |
+| `Durability` | Completed entries remain completed |
+| `Idempotency` | No duplicate entries for same client+key |
+| `AtomicVisibility` | Operations fully visible or not at all |
+
+#### Liveness Properties
+| Property | Description |
+|----------|-------------|
+| `EventualRecovery` | After crash, system eventually recovers |
+| `EventualCompletion` | Pending entries eventually complete or fail |
+| `NoStarvation` | No client's operations indefinitely blocked |
+| `ProgressUnderCrash` | System can always recover from crashes |
+
+#### TLC Results
+- **Safe version**: PASS (70,713 states, 1 client)
+- **Concurrent version**: PASS (2,548,321 states, 2 clients)
 
 ---
 
@@ -196,6 +197,7 @@ java -XX:+UseParallelGC -Xmx4g -jar ~/tla2tools.jar -deadlock -config KelpieFDBT
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieTeleport.cfg KelpieTeleport.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieSingleActivation.cfg KelpieSingleActivation.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieRegistry.cfg KelpieRegistry.tla
+java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieWAL.cfg KelpieWAL.tla
 ```
 
 ### Buggy Configurations (should fail)
