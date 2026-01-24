@@ -17,6 +17,12 @@
 (* 3. Commit phase: atomic commit iff version unchanged, else abort        *)
 (*                                                                          *)
 (* TigerStyle: All constants have explicit units and bounds.               *)
+(*                                                                          *)
+(* DST Tests: crates/kelpie-dst/tests/single_activation_dst.rs             *)
+(* - test_concurrent_activation_single_winner: N nodes race, exactly 1 wins*)
+(* - test_concurrent_activation_with_*_faults: Invariant holds under faults*)
+(* - test_release_and_reactivation: Release followed by new claim          *)
+(* - test_consistent_holder_invariant: Storage state matches node belief   *)
 (***************************************************************************)
 
 EXTENDS Integers, FiniteSets
