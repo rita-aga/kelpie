@@ -40,3 +40,4 @@ tools/kelpie-indexer/tests/fixtures/**/.kelpie-index/
 
 venv/
 .venv/
+states/
