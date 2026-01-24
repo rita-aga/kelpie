@@ -38,6 +38,7 @@ pub mod agent;
 pub mod clock;
 pub mod fault;
 pub mod invariants;
+pub mod liveness;
 pub mod llm;
 pub mod network;
 pub mod rng;
@@ -70,3 +71,10 @@ pub use storage::SimStorage;
 pub use teleport::SimTeleportStorage;
 pub use time::{RealTime, SimTime};
 pub use vm::{SimVm, SimVmFactory};
+
+// Liveness property verification
+pub use liveness::{
+    verify_eventually, verify_leads_to, BoundedLiveness, LivenessResult, LivenessViolation,
+    SystemStateSnapshot, LIVENESS_CHECK_INTERVAL_MS_DEFAULT, LIVENESS_STEPS_MAX,
+    LIVENESS_TIMEOUT_MS_DEFAULT,
+};
