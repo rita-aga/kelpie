@@ -64,8 +64,6 @@ Models Kelpie's 3-phase actor migration protocol:
 PREPARE → TRANSFER → COMPLETE
 ```
 
-**Reference Implementation:** `crates/kelpie-cluster/src/handler.rs`
-
 #### Safety Invariants
 
 | Invariant | Description |
@@ -112,7 +110,6 @@ Models FoundationDB transaction semantics that Kelpie relies on for correctness:
 | `SerializableIsolation` | Committed transactions respect serial order | ADR-004 G4.1 |
 | `ConflictDetection` | Read-write conflicts properly detected | ADR-002 G2.4 |
 | `AtomicCommit` | Writes are all-or-nothing | ADR-002 G2.4 |
-| `ReadYourWrites` | Transactions see their own uncommitted writes | - |
 
 #### TLC Results
 - **Safe version**: PASS (56,193 distinct states, 308,867 generated, depth 13)
@@ -132,8 +129,6 @@ Models teleport state consistency for VM snapshot operations from ADR-020:
 | `TypeInvariant` | All variables have correct types | - |
 | `SnapshotConsistency` | Restored state equals pre-snapshot state | ADR-020 G20.1 |
 | `ArchitectureValidation` | Teleport/Suspend require same architecture | ADR-020 G20.2 |
-| `VersionCompatibility` | Base image MAJOR.MINOR must match | - |
-| `NoPartialRestore` | Restore operations are atomic | - |
 
 #### TLC Results
 - **Safe version**: PASS (1,508 distinct states, 4,840 generated)
@@ -163,6 +158,31 @@ Models the single-activation guarantee with explicit FDB transaction semantics:
 
 ---
 
+### KelpieRegistry.tla
+
+Models the actor registry with node lifecycle and cache coherence:
+- Node states: Active → Suspect → Failed
+- Actor placement and discovery
+- Cache invalidation
+
+#### Safety Invariants
+| Invariant | Description |
+|-----------|-------------|
+| `TypeOK` | All variables have correct types |
+| `SingleActivation` | An actor is placed on at most one node at any time |
+| `PlacementConsistency` | Authoritative placements never point to Failed nodes |
+
+#### Liveness Properties
+| Property | Description |
+|----------|-------------|
+| `EventualFailureDetection` | Dead nodes are eventually detected and marked Failed |
+| `EventualCacheInvalidation` | Stale cache entries on alive nodes are eventually corrected |
+
+#### TLC Results
+- **Safe version**: PASS (6,174 distinct states, 22,845 generated, depth 19)
+
+---
+
 ## Running TLC Model Checker
 
 ### Safe Configurations (should pass)
@@ -175,6 +195,7 @@ java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieActorState.
 java -XX:+UseParallelGC -Xmx4g -jar ~/tla2tools.jar -deadlock -config KelpieFDBTransaction.cfg KelpieFDBTransaction.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieTeleport.cfg KelpieTeleport.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieSingleActivation.cfg KelpieSingleActivation.tla
+java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieRegistry.cfg KelpieRegistry.tla
 ```
 
 ### Buggy Configurations (should fail)
