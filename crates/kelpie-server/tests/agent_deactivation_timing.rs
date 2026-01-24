@@ -81,9 +81,6 @@ async fn test_deactivate_during_create_crash() {
                         let retrieved = match get_result {
                             Ok(r) => r,
                             Err(_) => {
-                                // Simulate server restart - recover pending WAL entries
-                                let _ = service.recover().await;
-
                                 // Retry get_agent multiple times (crash can still happen on read)
                                 // This simulates production retry behavior
                                 let mut result = None;
@@ -491,5 +488,5 @@ fn create_service(sim_env: &SimEnvironment) -> Result<AgentService<kelpie_core::
     let _dispatcher_handle = kelpie_core::current_runtime().spawn(async move {
         dispatcher.run().await;
     });
-    Ok(AgentService::new_without_wal(handle))
+    Ok(AgentService::new(handle))
 }

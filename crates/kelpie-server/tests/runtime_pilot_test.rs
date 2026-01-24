@@ -74,7 +74,7 @@ async fn create_agent_service<R: Runtime + 'static>(runtime: R) -> Result<AgentS
         dispatcher.run().await;
     });
 
-    Ok(AgentService::new_without_wal(handle))
+    Ok(AgentService::new(handle))
 }
 
 /// Test AgentService with CurrentRuntime (production)

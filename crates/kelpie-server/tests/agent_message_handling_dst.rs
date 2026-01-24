@@ -147,7 +147,7 @@ fn create_service<R: Runtime + 'static>(
         dispatcher.run().await;
     });
 
-    Ok(AgentService::new_without_wal(handle))
+    Ok(AgentService::new(handle))
 }
 
 /// Test basic message handling: send message, get LLM response

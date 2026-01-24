@@ -520,5 +520,5 @@ fn create_service<R: Runtime + 'static>(
     });
 
     // Create service
-    Ok(AgentService::new_without_wal(handle))
+    Ok(AgentService::new(handle))
 }

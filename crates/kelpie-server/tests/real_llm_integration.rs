@@ -82,7 +82,7 @@ async fn test_app_with_real_llm() -> Router {
         dispatcher.run().await;
     }));
 
-    let service = service::AgentService::new_without_wal(handle.clone());
+    let service = service::AgentService::new(handle.clone());
     let state = AppState::with_agent_service(runtime, service, handle);
 
     api::router(state)

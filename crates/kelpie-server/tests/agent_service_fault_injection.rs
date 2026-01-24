@@ -678,5 +678,5 @@ fn create_service(sim_env: &SimEnvironment) -> Result<AgentService<kelpie_core::
     let _dispatcher_handle = kelpie_core::current_runtime().spawn(async move {
         dispatcher.run().await;
     });
-    Ok(AgentService::new_without_wal(handle))
+    Ok(AgentService::new(handle))
 }

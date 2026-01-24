@@ -78,12 +78,11 @@ async fn test_appstate_init_crash() {
                             }
                         }
 
-                        // If initial verification failed, try WAL recovery
+                        // If initial verification failed, retry with more attempts
                         if !operational {
-                            println!("Iteration {}: Attempting WAL recovery...", i);
-                            let _ = app_state.agent_service_required().recover().await;
+                            println!("Iteration {}: Retrying verification...", i);
 
-                            // Retry with more attempts after recovery
+                            // Retry with more attempts
                             for _retry in 0..10 {
                                 match test_service_operational(&app_state).await {
                                     Ok(_) => {
@@ -568,12 +567,11 @@ async fn test_first_invoke_after_creation() {
                             }
                         }
 
-                        // If get failed, try WAL recovery (simulates server restart)
+                        // If get failed, retry (crash can still happen on read)
                         if !retrieved_ok {
-                            println!("Iteration {}: Attempting WAL recovery...", i);
-                            let _ = app_state.agent_service_required().recover().await;
+                            println!("Iteration {}: Retrying get_agent...", i);
 
-                            // Retry get_agent after recovery (with more retries due to fault rate)
+                            // Retry get_agent (with more retries due to fault rate)
                             for _retry in 0..10 {
                                 match app_state
                                     .agent_service_required()
@@ -720,7 +718,7 @@ async fn create_appstate_with_service<R: Runtime + 'static>(
     });
 
     // Create AgentService (but don't create AppState yet)
-    let service = AgentService::new_without_wal(handle.clone());
+    let service = AgentService::new(handle.clone());
 
     // CRITICAL: Verify service is operational BEFORE creating AppState
     // This ensures atomicity - either full success or full failure
