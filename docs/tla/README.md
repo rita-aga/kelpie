@@ -19,7 +19,48 @@ Requires Java 11+.
 
 ### KelpieLease.tla
 Models the lease-based actor ownership protocol from ADR-004.
-- **TLC Results**: PASS (679 distinct states) / FAIL LeaseUniqueness (buggy)
+
+**Features (Issue #42):**
+- TTL-based lease expiration with explicit time modeling
+- Grace period before deactivation (prevents instant eviction)
+- False suspicion handling (GC pause recovery)
+- Clock skew tolerance between nodes
+- Fencing tokens for stale write prevention
+- Node crash/restart simulation
+
+#### Safety Invariants
+| Invariant | Description |
+|-----------|-------------|
+| `TypeOK` | Type correctness of all variables |
+| `LeaseUniqueness` | At most one node believes it holds a valid lease per actor |
+| `RenewalRequiresOwnership` | Only lease holder can renew |
+| `LeaseValidityBounds` | Lease expiry within configured bounds |
+| `FencingTokenMonotonic` | Fencing tokens never decrease |
+| `ClockSkewSafety` | Node clocks within acceptable bounds |
+| `GracePeriodRespected` | No instant deactivation during grace period |
+| `FalseSuspicionSafety` | False suspicion doesn't cause immediate lease loss |
+
+#### Liveness Properties
+| Property | Description |
+|----------|-------------|
+| `EventualLeaseResolution` | Eventually a lease is granted or expires cleanly |
+| `FalseSuspicionRecovery` | False suspicions eventually resolve |
+
+#### Actions (12 total)
+1. **AcquireLeaseSafe** - Atomic CAS lease acquisition with fencing token
+2. **RenewLeaseSafe** - Lease renewal by current holder
+3. **ReleaseLease** - Voluntary lease release
+4. **SuspectNodeDead** - Mark node as suspected dead
+5. **RecoverFromSuspicion** - Node proves liveness after false suspicion
+6. **NodeCrash** - Node actually crashes
+7. **NodeRestart** - Crashed node restarts
+8. **ClockDrift** - Model bounded clock skew
+9. **TickClock** - Advance simulated time
+10. **WriteWithFencing** - Validate fencing token on write
+11. **AcquireLeaseNoCheck** (buggy) - Race condition lease acquisition
+12. **RenewLeaseBuggy** (buggy) - Renewal without proper checks
+
+- **TLC Results**: PASS (safe) / FAIL LeaseUniqueness (buggy)
 
 ### KelpieActorLifecycle.tla
 Models the lifecycle of a Kelpie virtual actor.
@@ -165,7 +206,7 @@ Specs use different mechanisms for bug injection:
 | KelpieAgentActor | Yes (NodeCrash, NodeRecover) | Aligned |
 | KelpieFDBTransaction | No | Needs crash-during-commit |
 | KelpieSingleActivation | No | Needs crash-during-activation |
-| KelpieLease | No | Needs crash-during-acquire |
+| KelpieLease | Yes (NodeCrash, NodeRestart, FalseSuspicion) | Aligned |
 | KelpieTeleport | No | Needs crash-during-snapshot |
 | KelpieActorState | No | Needs crash-during-invocation |
 | KelpieActorLifecycle | No | Needs crash-during-activation |
