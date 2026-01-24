@@ -1,7 +1,7 @@
 # Task: DST FoundationDB-Critical Fault Types (Issue #36)
 
 **Created:** 2026-01-24 14:00:00
-**State:** VERIFYING
+**State:** COMPLETE
 
 ---
 
@@ -139,11 +139,11 @@ GitHub Issue: #36
 - [x] Tests passing (`cargo test`) - 113 library tests + 9 integration tests pass
 - [x] Clippy clean (`cargo clippy`)
 - [x] Code formatted (`cargo fmt`)
-- [ ] /no-cap passed
+- [x] /no-cap passed (pre-commit hook verified)
 - [x] Vision aligned
 - [x] **DST coverage added**
 - [x] **What to Try section updated**
-- [ ] Committed
+- [x] Committed (d46c3935)
 
 ---
 
