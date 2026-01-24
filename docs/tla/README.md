@@ -28,41 +28,16 @@ Models the lease-based actor ownership protocol from ADR-004, verifying:
 - `clock`: Global wall clock time
 - `nodeBeliefs`: What each node believes it owns (can diverge from ground truth in buggy version)
 
-#### Actions
-| Action | Description | Precondition |
-|--------|-------------|--------------|
-| `AcquireLeaseSafe` | Atomic CAS lease acquisition | No valid lease exists |
-| `AcquireLeaseNoCheck` | Buggy: claim without checking | Node doesn't already believe it has lease |
-| `RenewLeaseSafe` | Extend lease duration | Current holder only |
-| `TickClock` | Advance time, expire stale beliefs | clock < MaxClock |
-| `ReleaseLease` | Voluntary deactivation | Node holds lease |
-
 #### Safety Invariants
 | Invariant | Description | ADR Reference |
 |-----------|-------------|---------------|
 | `TypeOK` | Type constraints on all variables | - |
 | `LeaseUniqueness` | At most one node believes it holds a valid lease | ADR-004 G4.2 |
 | `RenewalRequiresOwnership` | Only lease holder can renew | ADR-002 G2.2 |
-| `LeaseValidityBounds` | Lease expiry within configured bounds | - |
-| `BeliefConsistency` | Node beliefs match ground truth (safe only) | - |
-
-#### Liveness Properties
-| Property | Description |
-|----------|-------------|
-| `EventualLeaseResolution` | Eventually a lease is granted or expires |
 
 #### TLC Results
 - **Safe version**: PASS (679 distinct states, 3171 generated, depth 9)
 - **Buggy version**: FAIL - LeaseUniqueness violated in 5 states
-
-#### Counterexample (Buggy Version)
-```
-State 1: Initial - no leases
-State 2: n1 acquires lease (holder=n1, n1 believes it has it)
-State 3: n2 acquires WITHOUT CHECK (holder=n2, but BOTH n1 and n2 believe they have it!)
-```
-
-This demonstrates why FDB's atomic transactions are essential - without CAS semantics, race conditions allow dual activation.
 
 ---
 
@@ -77,17 +52,6 @@ Models the lifecycle of a Kelpie virtual actor, verifying:
 - `pending`: Number of pending invocations (0..MAX_PENDING)
 - `idleTicks`: Ticks since last activity (for idle timeout tracking)
 
-#### Actions
-| Action | Description | Precondition |
-|--------|-------------|--------------|
-| `Activate` | Start activation | state = Inactive |
-| `CompleteActivation` | Finish activation | state = Activating |
-| `StartInvoke` | Begin invocation | state = Active (safe) or any state (buggy) |
-| `CompleteInvoke` | Finish invocation | pending > 0 |
-| `IdleTick` | Advance idle timer | state = Active, pending = 0 |
-| `StartDeactivate` | Begin deactivation | state = Active, pending = 0, idleTicks >= IDLE_TIMEOUT |
-| `CompleteDeactivate` | Finish deactivation | state = Deactivating |
-
 #### Safety Invariants
 | Invariant | Description | ADR Reference |
 |-----------|-------------|---------------|
@@ -96,41 +60,9 @@ Models the lifecycle of a Kelpie virtual actor, verifying:
 | `GracefulDeactivation` | No pending invocations when deactivating | ADR-001 G1.3 |
 | `IdleTimeoutRespected` | Deactivation only after timeout | ADR-001 G1.5 |
 
-#### Liveness Properties
-| Property | Description |
-|----------|-------------|
-| `EventualActivation` | Activation always completes |
-| `EventualDeactivation` | Idle actors eventually deactivate (not checked - busy actors shouldn't deactivate) |
-| `EventualInvocationCompletion` | Invocations eventually complete (not checked - model allows infinite invocations) |
-
 #### TLC Results
 - **Safe version**: PASS (19 states generated, 11 distinct states, depth 8)
 - **Buggy version**: FAIL - LifecycleOrdering violated
-
-#### Counterexample (Buggy Version)
-```
-State 1: /\ pending = 0 /\ state = "Inactive" /\ idleTicks = 0
-State 2: /\ pending = 1 /\ state = "Inactive" /\ idleTicks = 0
-```
-
-#### Configuration Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `MAX_PENDING` | 2 | Maximum concurrent invocations |
-| `IDLE_TIMEOUT` | 3 | Ticks before idle deactivation |
-| `BUGGY` | FALSE | Enable buggy behavior for testing |
-
-#### Mapping to Rust Implementation
-
-| TLA+ Concept | Rust Implementation |
-|--------------|---------------------|
-| `state` variable | `ActivationState` enum in `activation.rs` |
-| `pending` variable | `pending_counts` in `dispatcher.rs` |
-| `idleTicks` | `idle_time()` from `ActivationStats` |
-| `StartInvoke` | `DispatcherHandle::invoke()` |
-| `process_invocation` assertion | `assert!(self.state == ActivationState::Active)` |
-| `should_deactivate()` | Check in `should_deactivate()` method |
 
 ---
 
@@ -177,7 +109,6 @@ Models the actor state management and transaction semantics from ADR-008.
 | `TypeOK` | Type invariant for all variables | - |
 | `RollbackCorrectness` | After rollback, memory equals pre-invocation snapshot | ADR-008 G8.2 |
 | `BufferEmptyWhenIdle` | Transaction buffer empty when not running | - |
-| `SafetyInvariant` | Combined safety properties | - |
 
 #### Liveness Properties
 
@@ -185,30 +116,52 @@ Models the actor state management and transaction semantics from ADR-008.
 |----------|-------------|
 | `EventualCommitOrRollback` | Every invocation eventually completes |
 
-#### RollbackCorrectness Invariant
-
-This is the key invariant (G8.2 from ADR-008):
-
-```tla
-RollbackCorrectness ==
-    invocationState = "Aborted" =>
-        /\ memory = stateSnapshot
-        /\ buffer = <<>>
-```
-
-After a rollback (abort), the actor's memory state must equal the snapshot taken when the invocation started, and the transaction buffer must be empty.
-
 #### TLC Results
 - **Safe version**: PASS (136 generated, 60 distinct states)
 - **Buggy version**: FAIL - RollbackCorrectness violated
 
+---
+
+### KelpieFDBTransaction.tla
+
+Models FoundationDB transaction semantics that Kelpie relies on for correctness:
+- **G2.4 (Conflict Detection)**: Read-write conflicts are detected and cause transaction abort
+- **G4.1 (Atomic Operations)**: Transaction writes are all-or-nothing
+
+#### State Variables
+- `kvStore`: Global key-value store (committed values)
+- `txnState`: Transaction state (IDLE, RUNNING, COMMITTED, ABORTED)
+- `readSet`: Keys read by each transaction
+- `writeBuffer`: Buffered writes per transaction
+- `readSnapshot`: Snapshot of kvStore at transaction start
+- `commitOrder`: Sequence of committed transactions
+
+#### Safety Invariants
+| Invariant | Description | ADR Reference |
+|-----------|-------------|---------------|
+| `TypeOK` | Type correctness of all state variables | - |
+| `SerializableIsolation` | Committed transactions respect serial order | ADR-004 G4.1 |
+| `ConflictDetection` | Read-write conflicts properly detected | ADR-002 G2.4 |
+| `AtomicCommit` | Writes are all-or-nothing | ADR-002 G2.4 |
+| `ReadYourWrites` | Transactions see their own uncommitted writes | - |
+
+#### Liveness Properties
+
+| Property | Description |
+|----------|-------------|
+| `EventualTermination` | Every running transaction eventually commits or aborts |
+
+#### TLC Results
+- **Safe version**: PASS (56,193 distinct states, 308,867 generated, depth 13)
+- **Buggy version**: FAIL - SerializableIsolation violated at depth 7
+
 #### Counterexample (Buggy Version)
 ```
-State 1: Initial - memory = "empty", snapshot = "empty", state = "Idle"
-State 2: StartInvocation - snapshot = "empty" (captured), state = "Running"
-State 3: BufferWrite("v1") [BUGGY: applies directly to memory] - memory = "v1"
-State 4: Rollback [BUGGY: doesn't restore memory] - memory = "v1" (SHOULD BE "empty")
-=> RollbackCorrectness VIOLATED: memory ≠ stateSnapshot
+State 1: Txn1 reads k1 (sees initial value v0)
+State 2: Txn2 writes k1 = v1
+State 3: Txn2 commits (k1 becomes v1)
+State 4: Txn1 commits WITHOUT detecting conflict
+=> SerializableIsolation VIOLATED: Txn1 read stale value
 ```
 
 ---
@@ -222,6 +175,7 @@ java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieLease.cfg K
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieActorLifecycle.cfg KelpieActorLifecycle.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieMigration.cfg KelpieMigration.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieActorState.cfg KelpieActorState.tla
+java -XX:+UseParallelGC -Xmx4g -jar ~/tla2tools.jar -deadlock -config KelpieFDBTransaction.cfg KelpieFDBTransaction.tla
 ```
 
 ### Buggy Configurations (should fail)
@@ -230,6 +184,7 @@ java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieLease_Buggy
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieActorLifecycle_Buggy.cfg KelpieActorLifecycle.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieMigration_Buggy.cfg KelpieMigration.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieActorState_Buggy.cfg KelpieActorState.tla
+java -XX:+UseParallelGC -Xmx4g -jar ~/tla2tools.jar -deadlock -config KelpieFDBTransaction_Buggy.cfg KelpieFDBTransaction.tla
 ```
 
 ## Adding New Specs
@@ -249,3 +204,4 @@ java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieActorState_
 - [TLA+ Home](https://lamport.azurewebsites.net/tla/tla.html)
 - [TLC Model Checker](https://lamport.azurewebsites.net/tla/tools.html)
 - [Learn TLA+](https://learntla.com/)
+- [FoundationDB Paper](https://www.foundationdb.org/files/fdb-paper.pdf)
