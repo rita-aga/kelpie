@@ -975,6 +975,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "croner"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c344b0690c1ad1c7176fe18eb173e0c927008fdaaa256e40dfd43ddd149c0843"
+dependencies = [
+ "chrono",
+]
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2381,23 +2390,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kelpie-agent"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "kelpie-core",
- "kelpie-dst",
- "kelpie-runtime",
- "proptest",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "kelpie-cli"
 version = "0.1.0"
 dependencies = [
@@ -2529,6 +2521,7 @@ dependencies = [
  "futures",
  "kelpie-core",
  "kelpie-dst",
+ "kelpie-registry",
  "kelpie-storage",
  "proptest",
  "serde",
@@ -2566,6 +2559,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "croner",
  "foundationdb",
  "futures",
  "kelpie-core",
@@ -5024,6 +5018,7 @@ checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 [[package]]
 name = "umi-memory"
 version = "0.2.0"
+source = "git+https://github.com/rita-aga/umi#64aa92f606e2556def3baa508f3cac55ebe48bb5"
 dependencies = [
  "anyhow",
  "async-trait",
