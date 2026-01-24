@@ -126,14 +126,6 @@ Models teleport state consistency for VM snapshot operations from ADR-020:
 - **G20.1 (Snapshot Consistency)**: Restored state equals pre-snapshot state
 - **G20.2 (Architecture Validation)**: Teleport requires same architecture
 
-#### Snapshot Types
-
-| Type | Architecture Constraint | Use Case |
-|------|------------------------|----------|
-| **Suspend** | Same architecture required | Memory-only, same-host pause/resume |
-| **Teleport** | Same architecture required | Full VM snapshot for migration |
-| **Checkpoint** | Cross-architecture allowed | Application-level checkpoint |
-
 #### Safety Invariants
 | Invariant | Description | ADR Reference |
 |-----------|-------------|---------------|
@@ -143,22 +135,31 @@ Models teleport state consistency for VM snapshot operations from ADR-020:
 | `VersionCompatibility` | Base image MAJOR.MINOR must match | - |
 | `NoPartialRestore` | Restore operations are atomic | - |
 
-#### Liveness Properties
-| Property | Description |
-|----------|-------------|
-| `EventualRestore` | Valid snapshots are eventually restorable |
-
 #### TLC Results
 - **Safe version**: PASS (1,508 distinct states, 4,840 generated)
 - **Buggy version**: FAIL - ArchitectureValidation violated at depth 4
 
-#### Counterexample (Buggy Version)
-```
-State 1: Initial - Arm64 architecture, no snapshots
-State 2: CreateSnapshot - Suspend snapshot created on Arm64
-State 3: SwitchArch - System switches to X86_64
-State 4: BeginRestore - Cross-arch restore attempted (VIOLATION)
-```
+---
+
+### KelpieSingleActivation.tla
+
+Models the single-activation guarantee with explicit FDB transaction semantics:
+- **G4.2 (Single Activation)**: At most one node can have an actor active at any time
+
+#### Safety Invariants
+| Invariant | Description | ADR Reference |
+|-----------|-------------|---------------|
+| `TypeOK` | All variables have valid types | - |
+| `SingleActivation` | At most one node active at any time | ADR-004 G4.2 |
+| `ConsistentHolder` | FDB holder matches node state | - |
+
+#### Liveness Properties
+| Property | Description |
+|----------|-------------|
+| `EventualActivation` | Every claim eventually resolves (active or rejected) |
+
+#### TLC Results
+- **Safe version**: PASS (714 distinct states, 1429 generated, depth 27)
 
 ---
 
@@ -173,6 +174,7 @@ java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieMigration.c
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieActorState.cfg KelpieActorState.tla
 java -XX:+UseParallelGC -Xmx4g -jar ~/tla2tools.jar -deadlock -config KelpieFDBTransaction.cfg KelpieFDBTransaction.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieTeleport.cfg KelpieTeleport.tla
+java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieSingleActivation.cfg KelpieSingleActivation.tla
 ```
 
 ### Buggy Configurations (should fail)
