@@ -166,6 +166,53 @@ PREPARE → TRANSFER → COMPLETE
 
 ---
 
+### KelpieActorState.tla
+
+Models the actor state management and transaction semantics from ADR-008.
+
+#### Safety Invariants
+
+| Invariant | Description | ADR Reference |
+|-----------|-------------|---------------|
+| `TypeOK` | Type invariant for all variables | - |
+| `RollbackCorrectness` | After rollback, memory equals pre-invocation snapshot | ADR-008 G8.2 |
+| `BufferEmptyWhenIdle` | Transaction buffer empty when not running | - |
+| `SafetyInvariant` | Combined safety properties | - |
+
+#### Liveness Properties
+
+| Property | Description |
+|----------|-------------|
+| `EventualCommitOrRollback` | Every invocation eventually completes |
+
+#### RollbackCorrectness Invariant
+
+This is the key invariant (G8.2 from ADR-008):
+
+```tla
+RollbackCorrectness ==
+    invocationState = "Aborted" =>
+        /\ memory = stateSnapshot
+        /\ buffer = <<>>
+```
+
+After a rollback (abort), the actor's memory state must equal the snapshot taken when the invocation started, and the transaction buffer must be empty.
+
+#### TLC Results
+- **Safe version**: PASS (136 generated, 60 distinct states)
+- **Buggy version**: FAIL - RollbackCorrectness violated
+
+#### Counterexample (Buggy Version)
+```
+State 1: Initial - memory = "empty", snapshot = "empty", state = "Idle"
+State 2: StartInvocation - snapshot = "empty" (captured), state = "Running"
+State 3: BufferWrite("v1") [BUGGY: applies directly to memory] - memory = "v1"
+State 4: Rollback [BUGGY: doesn't restore memory] - memory = "v1" (SHOULD BE "empty")
+=> RollbackCorrectness VIOLATED: memory ≠ stateSnapshot
+```
+
+---
+
 ## Running TLC Model Checker
 
 ### Safe Configurations (should pass)
@@ -174,6 +221,7 @@ cd docs/tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieLease.cfg KelpieLease.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieActorLifecycle.cfg KelpieActorLifecycle.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieMigration.cfg KelpieMigration.tla
+java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieActorState.cfg KelpieActorState.tla
 ```
 
 ### Buggy Configurations (should fail)
@@ -181,6 +229,7 @@ java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieMigration.c
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieLease_Buggy.cfg KelpieLease.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieActorLifecycle_Buggy.cfg KelpieActorLifecycle.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieMigration_Buggy.cfg KelpieMigration.tla
+java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieActorState_Buggy.cfg KelpieActorState.tla
 ```
 
 ## Adding New Specs
@@ -196,6 +245,7 @@ java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieMigration_B
 - [ADR-001: Virtual Actor Model](../adr/001-virtual-actor-model.md)
 - [ADR-002: FoundationDB Integration](../adr/002-foundationdb-integration.md)
 - [ADR-004: Linearizability Guarantees](../adr/004-linearizability-guarantees.md)
+- [ADR-008: Transaction API](../adr/008-transaction-api.md)
 - [TLA+ Home](https://lamport.azurewebsites.net/tla/tla.html)
 - [TLC Model Checker](https://lamport.azurewebsites.net/tla/tools.html)
 - [Learn TLA+](https://learntla.com/)
