@@ -4,3 +4,4 @@ states/
 *.fp
 *.bin
 *_TTrace_*.tla
+*.toolbox/
