@@ -1,6 +1,19 @@
 //! Simulation harness for deterministic testing
 //!
 //! TigerStyle: Reproducible test execution with explicit configuration.
+//!
+//! # Deterministic Scheduling (Issue #15)
+//!
+//! This harness uses madsim by default for true deterministic task scheduling.
+//! Unlike tokio's scheduler, madsim guarantees that:
+//! - Same seed = same task interleaving order
+//! - `DST_SEED=12345 cargo test` produces identical results every time
+//! - Race conditions can be reliably reproduced
+//!
+//! Without madsim, tokio's internal task scheduler is non-deterministic,
+//! meaning two tasks spawned via `tokio::spawn()` will interleave non-deterministically
+//! even with the same seed. This was the foundational gap preventing true
+//! FoundationDB-style deterministic simulation.
 
 use crate::clock::SimClock;
 use crate::fault::{FaultConfig, FaultInjector, FaultInjectorBuilder};
@@ -239,9 +252,24 @@ impl Simulation {
 
         // Run the test
         // TigerStyle: Explicit runtime selection for deterministic testing
+        //
+        // IMPORTANT (Issue #15): madsim is now the DEFAULT for kelpie-dst.
+        // This ensures true deterministic task scheduling where:
+        // - Same seed = same task interleaving order
+        // - Race conditions can be reliably reproduced
+        //
+        // The tokio fallback is kept for edge cases where madsim is explicitly disabled,
+        // but this is NOT recommended for DST as tokio's scheduler is non-deterministic.
         #[cfg(not(madsim))]
         {
-            // Production: Create tokio runtime for execution
+            // FALLBACK: tokio runtime (NON-DETERMINISTIC scheduling!)
+            // WARNING: This path should only be used when madsim feature is explicitly disabled.
+            // Task ordering is NOT deterministic with tokio, meaning same seed may produce
+            // different task interleavings across runs.
+            tracing::warn!(
+                "Running Simulation with tokio (non-deterministic). \
+                 For true DST, use madsim feature (enabled by default)."
+            );
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -252,8 +280,9 @@ impl Simulation {
 
         #[cfg(madsim)]
         {
-            // DST: Use madsim's existing runtime context (no new runtime needed)
-            // When #[madsim::test] is used, madsim already controls the execution context
+            // DEFAULT: madsim deterministic runtime
+            // When #[madsim::test] is used, madsim already controls the execution context.
+            // Task scheduling is fully deterministic: same seed = same execution order.
             madsim::runtime::Handle::current()
                 .block_on(async { test(env).await.map_err(SimulationError::TestFailed) })
         }

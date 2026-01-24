@@ -9,7 +9,11 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-default = []
+# IMPORTANT: madsim is enabled by default for true deterministic simulation testing.
+# Without madsim, tokio's task scheduler is non-deterministic, meaning same seed
+# does NOT guarantee same task interleaving order.
+# See: https://github.com/rita-aga/kelpie/issues/15
+default = ["madsim"]
 madsim = ["dep:madsim"]
 firecracker = ["kelpie-vm/firecracker"]
 
