@@ -23,11 +23,6 @@ Models the lease-based actor ownership protocol from ADR-004, verifying:
 - **G2.2 (Atomic Lease Operations)**: Lease acquisition/renewal via atomic CAS
 - **G4.2 (Single Activation)**: At most one node holds a valid lease per actor
 
-#### State Variables
-- `leases`: Ground truth - actual lease holder and expiry per actor
-- `clock`: Global wall clock time
-- `nodeBeliefs`: What each node believes it owns (can diverge from ground truth in buggy version)
-
 #### Safety Invariants
 | Invariant | Description | ADR Reference |
 |-----------|-------------|---------------|
@@ -46,11 +41,6 @@ Models the lease-based actor ownership protocol from ADR-004, verifying:
 Models the lifecycle of a Kelpie virtual actor, verifying:
 - **G1.3 (Lifecycle Ordering)**: No invoke without activate, no deactivate during invoke
 - **G1.5 (Idle Timeout)**: Actors deactivate after idle timeout
-
-#### State Variables
-- `state`: Actor lifecycle state (`Inactive`, `Activating`, `Active`, `Deactivating`)
-- `pending`: Number of pending invocations (0..MAX_PENDING)
-- `idleTicks`: Ticks since last activity (for idle timeout tracking)
 
 #### Safety Invariants
 | Invariant | Description | ADR Reference |
@@ -85,13 +75,6 @@ PREPARE → TRANSFER → COMPLETE
 | `SingleActivationDuringMigration` | At most one active instance during migration |
 | `MigrationRollback` | Failed migration leaves actor recoverable |
 
-#### Liveness Properties
-
-| Property | Description |
-|----------|-------------|
-| `EventualMigrationCompletion` | Started migrations eventually complete or fail |
-| `EventualRecovery` | Actors with pending recovery eventually recover |
-
 #### TLC Results
 - **Safe version**: PASS (59 distinct states)
 - **Buggy version**: FAIL - MigrationAtomicity violated
@@ -110,12 +93,6 @@ Models the actor state management and transaction semantics from ADR-008.
 | `RollbackCorrectness` | After rollback, memory equals pre-invocation snapshot | ADR-008 G8.2 |
 | `BufferEmptyWhenIdle` | Transaction buffer empty when not running | - |
 
-#### Liveness Properties
-
-| Property | Description |
-|----------|-------------|
-| `EventualCommitOrRollback` | Every invocation eventually completes |
-
 #### TLC Results
 - **Safe version**: PASS (136 generated, 60 distinct states)
 - **Buggy version**: FAIL - RollbackCorrectness violated
@@ -128,14 +105,6 @@ Models FoundationDB transaction semantics that Kelpie relies on for correctness:
 - **G2.4 (Conflict Detection)**: Read-write conflicts are detected and cause transaction abort
 - **G4.1 (Atomic Operations)**: Transaction writes are all-or-nothing
 
-#### State Variables
-- `kvStore`: Global key-value store (committed values)
-- `txnState`: Transaction state (IDLE, RUNNING, COMMITTED, ABORTED)
-- `readSet`: Keys read by each transaction
-- `writeBuffer`: Buffered writes per transaction
-- `readSnapshot`: Snapshot of kvStore at transaction start
-- `commitOrder`: Sequence of committed transactions
-
 #### Safety Invariants
 | Invariant | Description | ADR Reference |
 |-----------|-------------|---------------|
@@ -145,23 +114,50 @@ Models FoundationDB transaction semantics that Kelpie relies on for correctness:
 | `AtomicCommit` | Writes are all-or-nothing | ADR-002 G2.4 |
 | `ReadYourWrites` | Transactions see their own uncommitted writes | - |
 
-#### Liveness Properties
-
-| Property | Description |
-|----------|-------------|
-| `EventualTermination` | Every running transaction eventually commits or aborts |
-
 #### TLC Results
 - **Safe version**: PASS (56,193 distinct states, 308,867 generated, depth 13)
 - **Buggy version**: FAIL - SerializableIsolation violated at depth 7
 
+---
+
+### KelpieTeleport.tla
+
+Models teleport state consistency for VM snapshot operations from ADR-020:
+- **G20.1 (Snapshot Consistency)**: Restored state equals pre-snapshot state
+- **G20.2 (Architecture Validation)**: Teleport requires same architecture
+
+#### Snapshot Types
+
+| Type | Architecture Constraint | Use Case |
+|------|------------------------|----------|
+| **Suspend** | Same architecture required | Memory-only, same-host pause/resume |
+| **Teleport** | Same architecture required | Full VM snapshot for migration |
+| **Checkpoint** | Cross-architecture allowed | Application-level checkpoint |
+
+#### Safety Invariants
+| Invariant | Description | ADR Reference |
+|-----------|-------------|---------------|
+| `TypeInvariant` | All variables have correct types | - |
+| `SnapshotConsistency` | Restored state equals pre-snapshot state | ADR-020 G20.1 |
+| `ArchitectureValidation` | Teleport/Suspend require same architecture | ADR-020 G20.2 |
+| `VersionCompatibility` | Base image MAJOR.MINOR must match | - |
+| `NoPartialRestore` | Restore operations are atomic | - |
+
+#### Liveness Properties
+| Property | Description |
+|----------|-------------|
+| `EventualRestore` | Valid snapshots are eventually restorable |
+
+#### TLC Results
+- **Safe version**: PASS (1,508 distinct states, 4,840 generated)
+- **Buggy version**: FAIL - ArchitectureValidation violated at depth 4
+
 #### Counterexample (Buggy Version)
 ```
-State 1: Txn1 reads k1 (sees initial value v0)
-State 2: Txn2 writes k1 = v1
-State 3: Txn2 commits (k1 becomes v1)
-State 4: Txn1 commits WITHOUT detecting conflict
-=> SerializableIsolation VIOLATED: Txn1 read stale value
+State 1: Initial - Arm64 architecture, no snapshots
+State 2: CreateSnapshot - Suspend snapshot created on Arm64
+State 3: SwitchArch - System switches to X86_64
+State 4: BeginRestore - Cross-arch restore attempted (VIOLATION)
 ```
 
 ---
@@ -176,6 +172,7 @@ java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieActorLifecy
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieMigration.cfg KelpieMigration.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieActorState.cfg KelpieActorState.tla
 java -XX:+UseParallelGC -Xmx4g -jar ~/tla2tools.jar -deadlock -config KelpieFDBTransaction.cfg KelpieFDBTransaction.tla
+java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieTeleport.cfg KelpieTeleport.tla
 ```
 
 ### Buggy Configurations (should fail)
@@ -185,6 +182,7 @@ java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieActorLifecy
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieMigration_Buggy.cfg KelpieMigration.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieActorState_Buggy.cfg KelpieActorState.tla
 java -XX:+UseParallelGC -Xmx4g -jar ~/tla2tools.jar -deadlock -config KelpieFDBTransaction_Buggy.cfg KelpieFDBTransaction.tla
+java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieTeleport_Buggy.cfg KelpieTeleport.tla
 ```
 
 ## Adding New Specs
@@ -201,6 +199,7 @@ java -XX:+UseParallelGC -Xmx4g -jar ~/tla2tools.jar -deadlock -config KelpieFDBT
 - [ADR-002: FoundationDB Integration](../adr/002-foundationdb-integration.md)
 - [ADR-004: Linearizability Guarantees](../adr/004-linearizability-guarantees.md)
 - [ADR-008: Transaction API](../adr/008-transaction-api.md)
+- [ADR-020: Consolidated VM Crate](../adr/020-consolidated-vm-crate.md)
 - [TLA+ Home](https://lamport.azurewebsites.net/tla/tla.html)
 - [TLC Model Checker](https://lamport.azurewebsites.net/tla/tools.html)
 - [Learn TLA+](https://learntla.com/)
