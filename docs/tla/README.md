@@ -170,6 +170,7 @@ Specs use different mechanisms for bug injection:
 | KelpieActorState | No | Needs crash-during-invocation |
 | KelpieActorLifecycle | No | Needs crash-during-activation |
 
+
 ## Spec-to-ADR Cross-References
 
 | TLA+ Specification | Related ADR |
