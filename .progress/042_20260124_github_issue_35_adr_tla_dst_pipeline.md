@@ -1,6 +1,6 @@
 # Plan: Strengthen ADR→TLA+→DST Pipeline (GitHub Issue #35)
 
-**Status**: IN_PROGRESS
+**Status**: COMPLETE
 **GitHub Issue**: https://github.com/rita-aga/kelpie/issues/35
 **Created**: 2026-01-24
 **Branch**: issue-35-pipeline
@@ -84,7 +84,7 @@ Complete the remaining items from issue #35 to strengthen the ADR→TLA+→DST v
 ### Phase 5: Verification [COMPLETE]
 - [x] Run `cargo test -p kelpie-dst` - All relevant tests pass
 - [x] Run `cargo clippy` - No warnings
-- [ ] Commit and push
+- [x] Commit and push (commit 80140b6b)
 
 ## What to Try
 
