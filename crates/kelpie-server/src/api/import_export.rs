@@ -118,6 +118,8 @@ pub async fn import_agent<R: Runtime + 'static>(
         tags: agent_data.tags,
         metadata: agent_data.metadata,
         project_id: agent_data.project_id,
+        user_id: None,
+        org_id: None,
     };
 
     // Create agent
@@ -172,7 +174,7 @@ fn import_messages<R: Runtime + 'static>(
             role: msg_data.role,
             content: msg_data.content,
             tool_call_id: msg_data.tool_call_id,
-            tool_call: msg_data.tool_call,
+            tool_calls: msg_data.tool_calls,
             created_at: Utc::now(),
         };
 
