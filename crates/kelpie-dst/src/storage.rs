@@ -72,8 +72,27 @@ impl SimStorage {
                 | FaultType::CrashAfterWrite
                 | FaultType::CrashDuringTransaction
                 | FaultType::StorageWriteFail
-                | FaultType::DiskFull => {
-                    // Fall through to actual read - these faults don't affect reads
+                | FaultType::DiskFull
+                // FoundationDB-critical storage faults (Issue #36) - write-only
+                | FaultType::StorageMisdirectedWrite { .. }
+                | FaultType::StoragePartialWrite { .. }
+                | FaultType::StorageFsyncFail
+                | FaultType::StorageUnflushedLoss
+                // Network faults - not applicable to storage reads (from shared injector)
+                | FaultType::NetworkPartition
+                | FaultType::NetworkDelay { .. }
+                | FaultType::NetworkPacketLoss
+                | FaultType::NetworkMessageReorder
+                | FaultType::NetworkPacketCorruption { .. }
+                | FaultType::NetworkJitter { .. }
+                | FaultType::NetworkConnectionExhaustion
+                // Cluster coordination faults - not applicable to storage reads
+                | FaultType::ClusterSplitBrain { .. }
+                | FaultType::ReplicationLag { .. }
+                | FaultType::QuorumLoss { .. }
+                // Resource faults
+                | FaultType::ResourceFdExhaustion => {
+                    // Fall through to actual read - these faults don't affect storage reads
                 }
                 _ => {
                     return self.handle_read_fault(fault, key);
@@ -109,6 +128,64 @@ impl SimStorage {
                         key: String::from_utf8_lossy(key).to_string(),
                         reason: "disk full (injected)".into(),
                     });
+                }
+                // FoundationDB-critical storage semantics faults (Issue #36)
+                FaultType::StorageMisdirectedWrite { target_key } => {
+                    // Write goes to wrong location - data written to target_key instead
+                    tracing::debug!(
+                        intended_key = ?String::from_utf8_lossy(key),
+                        actual_key = ?String::from_utf8_lossy(target_key),
+                        "Misdirected write fault: data written to wrong location"
+                    );
+                    let mut data = self.data.write().await;
+                    data.insert(target_key.clone(), value.to_vec());
+                    // Return success - the caller thinks write succeeded
+                    // but data went to wrong place (silent corruption)
+                    return Ok(());
+                }
+                FaultType::StoragePartialWrite { bytes_written } => {
+                    // Only partial data written
+                    let actual_bytes = (*bytes_written).min(value.len());
+                    if actual_bytes == 0 {
+                        // No bytes written at all
+                        return Err(Error::StorageWriteFailed {
+                            key: String::from_utf8_lossy(key).to_string(),
+                            reason: "partial write failed - 0 bytes written (injected)".into(),
+                        });
+                    }
+                    // Write truncated data
+                    let mut data = self.data.write().await;
+                    data.insert(key.to_vec(), value[..actual_bytes].to_vec());
+                    tracing::debug!(
+                        key = ?String::from_utf8_lossy(key),
+                        requested = value.len(),
+                        written = actual_bytes,
+                        "Partial write fault: only some bytes written"
+                    );
+                    // Return success - caller thinks full write happened
+                    return Ok(());
+                }
+                FaultType::StorageFsyncFail => {
+                    // Write to buffer succeeds but fsync fails
+                    // Data is in page cache but not guaranteed durable
+                    let mut data = self.data.write().await;
+                    data.insert(key.to_vec(), value.to_vec());
+                    // Return error to indicate durability not guaranteed
+                    return Err(Error::StorageWriteFailed {
+                        key: String::from_utf8_lossy(key).to_string(),
+                        reason: "fsync failed - data may not be durable (injected)".into(),
+                    });
+                }
+                FaultType::StorageUnflushedLoss => {
+                    // Simulate crash before OS buffers flushed
+                    // The write appears to succeed but data is lost on "crash"
+                    // We don't actually write the data - simulating loss
+                    tracing::debug!(
+                        key = ?String::from_utf8_lossy(key),
+                        "Unflushed loss fault: write appeared successful but data lost"
+                    );
+                    // Return success but don't persist (simulates crash losing buffered data)
+                    return Ok(());
                 }
                 // CrashAfterWrite and other faults are handled after the write
                 _ => {}
@@ -820,6 +897,209 @@ mod tests {
             results.push(txn.commit().await.is_ok());
         }
 
+        results
+    }
+
+    // ============================================================================
+    // FoundationDB-Critical Storage Fault Tests (Issue #36)
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_storage_misdirected_write() {
+        let rng = DeterministicRng::new(42);
+        let target_key = b"__wrong_location__".to_vec();
+        let fault_injector = Arc::new(
+            FaultInjectorBuilder::new(rng.fork())
+                .with_fault(FaultConfig::new(
+                    FaultType::StorageMisdirectedWrite {
+                        target_key: target_key.clone(),
+                    },
+                    1.0,
+                ))
+                .build(),
+        );
+        let storage = SimStorage::new(rng, fault_injector);
+
+        // Write to key1 - but due to misdirected fault, data goes to target_key
+        let result = storage.write(b"key1", b"value1").await;
+        assert!(result.is_ok(), "Misdirected write should appear successful");
+
+        // Key1 should NOT have the data (it went to wrong location)
+        let value = storage.read(b"key1").await.unwrap();
+        assert!(
+            value.is_none(),
+            "Original key should be empty due to misdirected write"
+        );
+
+        // Data should be at the misdirected target location
+        let misdirected = storage.read(&target_key).await.unwrap();
+        assert_eq!(
+            misdirected,
+            Some(Bytes::from("value1")),
+            "Data should be at misdirected target key"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_storage_partial_write_truncated() {
+        let rng = DeterministicRng::new(42);
+        let fault_injector = Arc::new(
+            FaultInjectorBuilder::new(rng.fork())
+                .with_fault(FaultConfig::new(
+                    FaultType::StoragePartialWrite { bytes_written: 3 },
+                    1.0,
+                ))
+                .build(),
+        );
+        let storage = SimStorage::new(rng, fault_injector);
+
+        // Write "hello_world" but only 3 bytes get written
+        let result = storage.write(b"key1", b"hello_world").await;
+        assert!(result.is_ok(), "Partial write should appear successful");
+
+        // Should only have first 3 bytes
+        let value = storage.read(b"key1").await.unwrap();
+        assert_eq!(
+            value,
+            Some(Bytes::from("hel")),
+            "Only partial data should be written"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_storage_partial_write_zero_bytes() {
+        let rng = DeterministicRng::new(42);
+        let fault_injector = Arc::new(
+            FaultInjectorBuilder::new(rng.fork())
+                .with_fault(FaultConfig::new(
+                    FaultType::StoragePartialWrite { bytes_written: 0 },
+                    1.0,
+                ))
+                .build(),
+        );
+        let storage = SimStorage::new(rng, fault_injector);
+
+        // Write should fail when 0 bytes written
+        let result = storage.write(b"key1", b"hello").await;
+        assert!(result.is_err(), "Zero byte partial write should fail");
+
+        // Key should not exist
+        let value = storage.read(b"key1").await.unwrap();
+        assert!(value.is_none(), "No data should be written");
+    }
+
+    #[tokio::test]
+    async fn test_storage_fsync_fail() {
+        let rng = DeterministicRng::new(42);
+        let fault_injector = Arc::new(
+            FaultInjectorBuilder::new(rng.fork())
+                .with_fault(FaultConfig::new(FaultType::StorageFsyncFail, 1.0))
+                .build(),
+        );
+        let storage = SimStorage::new(rng, fault_injector);
+
+        // Write should fail due to fsync failure
+        let result = storage.write(b"key1", b"value1").await;
+        assert!(result.is_err(), "Fsync failure should be reported");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("fsync failed - data may not be durable"),
+            "Error should indicate fsync failure"
+        );
+
+        // Data IS written (to buffer) even though fsync failed
+        let value = storage.read(b"key1").await.unwrap();
+        assert_eq!(
+            value,
+            Some(Bytes::from("value1")),
+            "Data should be in buffer despite fsync failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_storage_unflushed_loss() {
+        let rng = DeterministicRng::new(42);
+        let fault_injector = Arc::new(
+            FaultInjectorBuilder::new(rng.fork())
+                .with_fault(FaultConfig::new(FaultType::StorageUnflushedLoss, 1.0))
+                .build(),
+        );
+        let storage = SimStorage::new(rng, fault_injector);
+
+        // Write appears successful but data is lost
+        let result = storage.write(b"key1", b"value1").await;
+        assert!(
+            result.is_ok(),
+            "Unflushed loss appears successful to caller"
+        );
+
+        // But data is NOT actually persisted (simulates crash losing buffered data)
+        let value = storage.read(b"key1").await.unwrap();
+        assert!(value.is_none(), "Data should be lost due to unflushed loss");
+    }
+
+    #[tokio::test]
+    async fn test_storage_semantics_faults_determinism() {
+        // Same seed should produce same misdirected write behavior
+        for seed in [42u64, 123, 456] {
+            let rng1 = DeterministicRng::new(seed);
+            let rng2 = DeterministicRng::new(seed);
+            let target_key = b"__misdirected__".to_vec();
+
+            let fi1 = Arc::new(
+                FaultInjectorBuilder::new(rng1.fork())
+                    .with_fault(FaultConfig::new(
+                        FaultType::StorageMisdirectedWrite {
+                            target_key: target_key.clone(),
+                        },
+                        0.5, // 50% chance
+                    ))
+                    .build(),
+            );
+            let fi2 = Arc::new(
+                FaultInjectorBuilder::new(rng2.fork())
+                    .with_fault(FaultConfig::new(
+                        FaultType::StorageMisdirectedWrite {
+                            target_key: target_key.clone(),
+                        },
+                        0.5,
+                    ))
+                    .build(),
+            );
+
+            let storage1 = SimStorage::new(rng1, fi1);
+            let storage2 = SimStorage::new(rng2, fi2);
+
+            // Run same sequence of writes
+            let results1 = run_storage_sequence(&storage1).await;
+            let results2 = run_storage_sequence(&storage2).await;
+
+            assert_eq!(
+                results1, results2,
+                "seed {} should produce identical misdirected write patterns",
+                seed
+            );
+        }
+    }
+
+    async fn run_storage_sequence(storage: &SimStorage) -> Vec<bool> {
+        let mut results = Vec::new();
+        for i in 0..10 {
+            storage
+                .write(format!("key{}", i).as_bytes(), b"value")
+                .await
+                .ok();
+            // Check if data ended up at intended location
+            results.push(
+                storage
+                    .read(format!("key{}", i).as_bytes())
+                    .await
+                    .unwrap()
+                    .is_some(),
+            );
+        }
         results
     }
 }

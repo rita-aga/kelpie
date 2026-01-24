@@ -30,6 +30,9 @@ pub struct NetworkMessage {
 /// - Packet loss
 /// - Network partitions
 /// - Message reordering
+/// - Packet corruption (Issue #36)
+/// - Network jitter with normal distribution (Issue #36)
+/// - Connection exhaustion (Issue #36)
 #[derive(Debug)]
 pub struct SimNetwork {
     /// Pending messages per destination
@@ -50,6 +53,10 @@ pub struct SimNetwork {
     base_latency_ms: u64,
     /// Latency jitter in milliseconds
     latency_jitter_ms: u64,
+    /// Active connection count (for connection exhaustion simulation)
+    active_connections: Arc<std::sync::atomic::AtomicUsize>,
+    /// Maximum connections allowed (0 = unlimited)
+    max_connections: usize,
 }
 
 impl SimNetwork {
@@ -64,6 +71,8 @@ impl SimNetwork {
             rng,
             base_latency_ms: 1,
             latency_jitter_ms: 5,
+            active_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            max_connections: 0, // 0 = unlimited
         }
     }
 
@@ -71,6 +80,12 @@ impl SimNetwork {
     pub fn with_latency(mut self, base_ms: u64, jitter_ms: u64) -> Self {
         self.base_latency_ms = base_ms;
         self.latency_jitter_ms = jitter_ms;
+        self
+    }
+
+    /// Set maximum connections for connection exhaustion testing
+    pub fn with_max_connections(mut self, max: usize) -> Self {
+        self.max_connections = max;
         self
     }
 
@@ -104,7 +119,27 @@ impl SimNetwork {
             }
         }
 
-        // Check for packet loss fault
+        // Check connection exhaustion limit
+        if self.max_connections > 0 {
+            let current = self
+                .active_connections
+                .load(std::sync::atomic::Ordering::SeqCst);
+            if current >= self.max_connections {
+                tracing::debug!(
+                    from = from,
+                    to = to,
+                    current = current,
+                    max = self.max_connections,
+                    "Message dropped: connection exhaustion"
+                );
+                return false;
+            }
+        }
+
+        // Check for network faults
+        let mut actual_payload = payload;
+        let mut extra_latency_ms: u64 = 0;
+
         if let Some(fault) = self.fault_injector.should_inject("network_send") {
             match fault {
                 FaultType::NetworkPacketLoss => {
@@ -115,18 +150,47 @@ impl SimNetwork {
                     tracing::debug!(from = from, to = to, "Message dropped: partition fault");
                     return false;
                 }
+                // FoundationDB-critical network faults (Issue #36)
+                FaultType::NetworkPacketCorruption { corruption_rate } => {
+                    // Corrupt the payload bytes
+                    actual_payload = self.corrupt_payload(actual_payload, corruption_rate);
+                    tracing::debug!(
+                        from = from,
+                        to = to,
+                        corruption_rate = corruption_rate,
+                        "Packet corrupted in transit"
+                    );
+                }
+                FaultType::NetworkJitter { mean_ms, stddev_ms } => {
+                    // Add jitter using approximate normal distribution
+                    extra_latency_ms = self.calculate_jitter(mean_ms, stddev_ms);
+                    tracing::debug!(
+                        from = from,
+                        to = to,
+                        jitter_ms = extra_latency_ms,
+                        "Network jitter added"
+                    );
+                }
+                FaultType::NetworkConnectionExhaustion => {
+                    tracing::debug!(
+                        from = from,
+                        to = to,
+                        "Message dropped: connection exhaustion fault"
+                    );
+                    return false;
+                }
                 _ => {}
             }
         }
 
-        // Calculate delivery time with latency
-        let latency = self.calculate_latency();
+        // Calculate delivery time with latency (including any jitter)
+        let latency = self.calculate_latency() + extra_latency_ms;
         let deliver_at_ms = self.clock.now_ms() + latency;
 
         let message = NetworkMessage {
             from: from.to_string(),
             to: to.to_string(),
-            payload,
+            payload: actual_payload,
             deliver_at_ms,
         };
 
@@ -137,7 +201,47 @@ impl SimNetwork {
             .or_default()
             .push_back(message);
 
+        // Track connection (for exhaustion simulation)
+        if self.max_connections > 0 {
+            self.active_connections
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+
         true
+    }
+
+    /// Corrupt payload bytes based on corruption rate
+    fn corrupt_payload(&self, payload: Bytes, corruption_rate: f64) -> Bytes {
+        if payload.is_empty() {
+            return payload;
+        }
+
+        let mut corrupted = payload.to_vec();
+        for byte in corrupted.iter_mut() {
+            if self.rng.next_f64() < corruption_rate {
+                // XOR with random byte to corrupt
+                *byte ^= (self.rng.next_u64() & 0xFF) as u8;
+            }
+        }
+        Bytes::from(corrupted)
+    }
+
+    /// Calculate jitter using Box-Muller transform for approximate normal distribution
+    fn calculate_jitter(&self, mean_ms: u64, stddev_ms: u64) -> u64 {
+        if stddev_ms == 0 {
+            return mean_ms;
+        }
+
+        // Box-Muller transform for normal distribution
+        let u1 = self.rng.next_f64().max(1e-10); // Avoid log(0)
+        let u2 = self.rng.next_f64();
+        let z = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
+
+        // Scale to desired mean and stddev
+        let jitter = mean_ms as f64 + z * stddev_ms as f64;
+
+        // Clamp to non-negative
+        jitter.max(0.0) as u64
     }
 
     /// Receive messages for a node
@@ -660,5 +764,246 @@ mod tests {
         // Heal one-way partition
         network.heal_one_way("node-1", "node-2").await;
         assert!(!network.is_one_way_partitioned("node-1", "node-2").await);
+    }
+
+    // ============================================================================
+    // FoundationDB-Critical Network Fault Tests (Issue #36)
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_sim_network_packet_corruption() {
+        use crate::fault::FaultConfig;
+
+        let clock = SimClock::from_millis(0);
+        let rng = DeterministicRng::new(42);
+        let fault_injector = Arc::new(
+            FaultInjectorBuilder::new(rng.fork())
+                .with_fault(FaultConfig::new(
+                    FaultType::NetworkPacketCorruption {
+                        corruption_rate: 1.0, // 100% of bytes corrupted
+                    },
+                    1.0, // Always trigger
+                ))
+                .build(),
+        );
+        let network = SimNetwork::new(clock, rng, fault_injector).with_latency(0, 0);
+
+        // Send a message
+        let original = Bytes::from("hello_world");
+        let sent = network.send("node-1", "node-2", original.clone()).await;
+        assert!(sent, "Message should be sent (with corruption)");
+
+        // Receive message
+        let messages = network.receive("node-2").await;
+        assert_eq!(messages.len(), 1);
+
+        // Message should be corrupted (different from original)
+        assert_ne!(messages[0].payload, original, "Payload should be corrupted");
+        assert_eq!(
+            messages[0].payload.len(),
+            original.len(),
+            "Payload length should be unchanged"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sim_network_packet_corruption_partial() {
+        use crate::fault::FaultConfig;
+
+        let clock = SimClock::from_millis(0);
+        let rng = DeterministicRng::new(42);
+        let fault_injector = Arc::new(
+            FaultInjectorBuilder::new(rng.fork())
+                .with_fault(FaultConfig::new(
+                    FaultType::NetworkPacketCorruption {
+                        corruption_rate: 0.0, // 0% corruption
+                    },
+                    1.0, // Always trigger fault check but no bytes corrupted
+                ))
+                .build(),
+        );
+        let network = SimNetwork::new(clock, rng, fault_injector).with_latency(0, 0);
+
+        // Send a message
+        let original = Bytes::from("hello_world");
+        let sent = network.send("node-1", "node-2", original.clone()).await;
+        assert!(sent);
+
+        // Receive message
+        let messages = network.receive("node-2").await;
+        assert_eq!(messages.len(), 1);
+
+        // With 0% corruption rate, message should be unchanged
+        assert_eq!(
+            messages[0].payload, original,
+            "Payload should be unchanged with 0% corruption"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sim_network_jitter() {
+        use crate::fault::FaultConfig;
+
+        let clock = SimClock::from_millis(0);
+        let rng = DeterministicRng::new(42);
+        let fault_injector = Arc::new(
+            FaultInjectorBuilder::new(rng.fork())
+                .with_fault(FaultConfig::new(
+                    FaultType::NetworkJitter {
+                        mean_ms: 100,
+                        stddev_ms: 50,
+                    },
+                    1.0, // Always trigger
+                ))
+                .build(),
+        );
+        let network = SimNetwork::new(clock.clone(), rng, fault_injector).with_latency(10, 0);
+
+        // Send multiple messages and check they have varying delivery times
+        let mut delivery_times = Vec::new();
+        for i in 0..10 {
+            network
+                .send(
+                    "node-1",
+                    &format!("node-{}", i),
+                    Bytes::from(format!("msg-{}", i)),
+                )
+                .await;
+        }
+
+        // Check pending messages for different delivery times
+        let messages = network.messages.read().await;
+        for (_, queue) in messages.iter() {
+            for msg in queue.iter() {
+                delivery_times.push(msg.deliver_at_ms);
+            }
+        }
+
+        // With jitter, we should see some variance in delivery times
+        // (not all the same as base latency would produce)
+        if delivery_times.len() > 1 {
+            let min = delivery_times.iter().min().unwrap();
+            let max = delivery_times.iter().max().unwrap();
+            // With mean=100, stddev=50, we expect significant variance
+            // This test just verifies jitter is being applied
+            assert!(
+                max > min || delivery_times.len() == 1,
+                "Jitter should produce varying delivery times"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sim_network_connection_exhaustion_limit() {
+        let clock = SimClock::from_millis(0);
+        let rng = DeterministicRng::new(42);
+        let fault_injector = Arc::new(FaultInjectorBuilder::new(rng.fork()).build());
+
+        // Set max connections to 3
+        let network = SimNetwork::new(clock, rng, fault_injector)
+            .with_latency(0, 0)
+            .with_max_connections(3);
+
+        // First 3 connections should succeed
+        assert!(network.send("a", "b", Bytes::from("1")).await);
+        assert!(network.send("a", "c", Bytes::from("2")).await);
+        assert!(network.send("a", "d", Bytes::from("3")).await);
+
+        // 4th connection should fail due to exhaustion
+        assert!(
+            !network.send("a", "e", Bytes::from("4")).await,
+            "Should fail due to connection exhaustion"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sim_network_connection_exhaustion_fault() {
+        use crate::fault::FaultConfig;
+
+        let clock = SimClock::from_millis(0);
+        let rng = DeterministicRng::new(42);
+        let fault_injector = Arc::new(
+            FaultInjectorBuilder::new(rng.fork())
+                .with_fault(FaultConfig::new(
+                    FaultType::NetworkConnectionExhaustion,
+                    1.0, // Always trigger
+                ))
+                .build(),
+        );
+        let network = SimNetwork::new(clock, rng, fault_injector).with_latency(0, 0);
+
+        // All sends should fail due to connection exhaustion fault
+        assert!(
+            !network.send("a", "b", Bytes::from("1")).await,
+            "Should fail due to connection exhaustion fault"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sim_network_jitter_determinism() {
+        use crate::fault::FaultConfig;
+
+        // Same seed should produce same jitter values
+        for seed in [42u64, 123, 456] {
+            let clock1 = SimClock::from_millis(0);
+            let clock2 = SimClock::from_millis(0);
+            let rng1 = DeterministicRng::new(seed);
+            let rng2 = DeterministicRng::new(seed);
+
+            let fi1 = Arc::new(
+                FaultInjectorBuilder::new(rng1.fork())
+                    .with_fault(FaultConfig::new(
+                        FaultType::NetworkJitter {
+                            mean_ms: 100,
+                            stddev_ms: 50,
+                        },
+                        1.0,
+                    ))
+                    .build(),
+            );
+            let fi2 = Arc::new(
+                FaultInjectorBuilder::new(rng2.fork())
+                    .with_fault(FaultConfig::new(
+                        FaultType::NetworkJitter {
+                            mean_ms: 100,
+                            stddev_ms: 50,
+                        },
+                        1.0,
+                    ))
+                    .build(),
+            );
+
+            let network1 = SimNetwork::new(clock1, rng1, fi1).with_latency(10, 0);
+            let network2 = SimNetwork::new(clock2, rng2, fi2).with_latency(10, 0);
+
+            // Send same sequence
+            for i in 0..5 {
+                network1
+                    .send("a", "b", Bytes::from(format!("msg{}", i)))
+                    .await;
+                network2
+                    .send("a", "b", Bytes::from(format!("msg{}", i)))
+                    .await;
+            }
+
+            // Get delivery times
+            let msgs1 = network1.messages.read().await;
+            let msgs2 = network2.messages.read().await;
+
+            let times1: Vec<_> = msgs1
+                .get("b")
+                .map(|q| q.iter().map(|m| m.deliver_at_ms).collect())
+                .unwrap_or_default();
+            let times2: Vec<_> = msgs2
+                .get("b")
+                .map(|q| q.iter().map(|m| m.deliver_at_ms).collect())
+                .unwrap_or_default();
+
+            assert_eq!(
+                times1, times2,
+                "seed {} should produce identical jitter patterns",
+                seed
+            );
+        }
     }
 }
