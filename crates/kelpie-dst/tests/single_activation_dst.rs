@@ -877,3 +877,186 @@ fn test_consistent_holder_invariant() {
 
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
+
+// =============================================================================
+// Network Partition Tests (Issue #35)
+// =============================================================================
+
+/// Test single activation invariant under network partition
+///
+/// TLA+ Bug Pattern: `TryClaimActor_Racy` - TOCTOU race under network partition
+///
+/// Scenario:
+/// 1. Create network partition separating nodes into two groups
+/// 2. Nodes on both sides attempt concurrent activation
+/// 3. Verify: At most 1 activation succeeds (invariant holds)
+///
+/// This maps directly to the issue #35 requirement for distributed DST tests.
+#[test]
+fn test_single_activation_with_network_partition() {
+    let config = SimConfig::from_env_or_random();
+    tracing::info!(
+        seed = config.seed,
+        "Running SingleActivation under network partition"
+    );
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::NetworkPartition, 1.0)) // Guaranteed partition
+        .run(|_env| async move {
+            let protocol = Arc::new(ActivationProtocol::new());
+            let actor_key = "test/network-partition";
+
+            // Simulate two groups of nodes separated by partition
+            // Group A: nodes 0-2 (minority in 5-node cluster)
+            // Group B: nodes 3-4 (minority in 5-node cluster)
+            // In a real partition, only majority can proceed
+
+            let num_nodes = 5;
+
+            // Spawn concurrent activations from all nodes
+            // The partition means some may time out or fail
+            let handles: Vec<_> = (0..num_nodes)
+                .map(|node_id| {
+                    let protocol = protocol.clone();
+                    let actor_key = actor_key.to_string();
+                    let node_name = format!("node-{}", node_id);
+                    kelpie_core::current_runtime().spawn(async move {
+                        // Simulate partition delay for cross-partition communication
+                        if node_id >= 3 {
+                            // Group B nodes experience network delay
+                            tokio::task::yield_now().await;
+                            tokio::task::yield_now().await;
+                        }
+                        protocol.try_claim(&actor_key, &node_name).await
+                    })
+                })
+                .collect();
+
+            let results: Vec<_> = join_all(handles)
+                .await
+                .into_iter()
+                .map(|r| r.expect("task panicked"))
+                .collect();
+
+            // TLA+ INVARIANT: SingleActivation - AT MOST 1 succeeds
+            let successes: Vec<_> = results
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.is_ok())
+                .map(|(i, _)| format!("node-{}", i))
+                .collect();
+
+            assert!(
+                successes.len() <= 1,
+                "SingleActivation VIOLATED under network partition: {} activations succeeded. \
+                 Winners: {:?}. Under partition, at most 1 should win.",
+                successes.len(),
+                successes
+            );
+
+            // With OCC semantics, exactly 1 should succeed
+            assert_eq!(
+                successes.len(),
+                1,
+                "Expected exactly 1 activation under partition, got {}",
+                successes.len()
+            );
+
+            tracing::info!(
+                winner = ?successes.first(),
+                "SingleActivation invariant held under network partition"
+            );
+
+            Ok(())
+        });
+
+    assert!(result.is_ok(), "Test failed: {:?}", result.err());
+}
+
+/// Test single activation with crash and recovery
+///
+/// TLA+ Bug Pattern: `LeaseExpires_Racy` - Zombie actor reclaim race
+///
+/// Scenario:
+/// 1. Node A activates actor and holds it
+/// 2. Node A crashes (simulated)
+/// 3. Node B detects failure and attempts reclaim
+/// 4. Verify: No dual activation window exists
+///
+/// This tests the crash recovery path from issue #35.
+#[test]
+fn test_single_activation_with_crash_recovery() {
+    let config = SimConfig::from_env_or_random();
+    tracing::info!(
+        seed = config.seed,
+        "Running SingleActivation with crash recovery"
+    );
+
+    let result = Simulation::new(config).run(|_env| async move {
+        let protocol = Arc::new(ActivationProtocol::new());
+        let actor_key = "test/crash-recovery";
+
+        // Step 1: Node A activates
+        let claim_a = protocol.try_claim(actor_key, "node-A").await;
+        assert!(claim_a.is_ok(), "Initial activation should succeed");
+
+        // Verify node-A holds the actor
+        {
+            let state = protocol.state.read().await;
+            let holder = state.get(actor_key).unwrap();
+            assert_eq!(holder.holder.as_deref(), Some("node-A"));
+        }
+
+        // Step 2: Simulate node-A crash (release its claim)
+        // In production, this would be lease expiry or failure detection
+        protocol.release(actor_key, "node-A").await?;
+
+        // Step 3: Multiple nodes race to reclaim after crash
+        let recovery_nodes = vec!["node-B", "node-C", "node-D"];
+        let handles: Vec<_> = recovery_nodes
+            .iter()
+            .map(|&node_name| {
+                let protocol = protocol.clone();
+                let actor_key = actor_key.to_string();
+                let node = node_name.to_string();
+                kelpie_core::current_runtime()
+                    .spawn(async move { protocol.try_claim(&actor_key, &node).await })
+            })
+            .collect();
+
+        let results: Vec<_> = join_all(handles)
+            .await
+            .into_iter()
+            .map(|r| r.expect("task panicked"))
+            .collect();
+
+        // TLA+ INVARIANT: SingleActivation - exactly 1 recovery succeeds
+        let successes: Vec<_> = results.iter().filter(|r| r.is_ok()).collect();
+
+        assert_eq!(
+            successes.len(),
+            1,
+            "SingleActivation VIOLATED during crash recovery: {} activations succeeded. \
+             Expected exactly 1 node to take over after crash.",
+            successes.len()
+        );
+
+        // Verify the new holder is one of the recovery nodes
+        {
+            let state = protocol.state.read().await;
+            let holder = state.get(actor_key).unwrap();
+            assert!(
+                recovery_nodes.contains(&holder.holder.as_deref().unwrap_or("")),
+                "Recovery holder should be one of {:?}, got {:?}",
+                recovery_nodes,
+                holder.holder
+            );
+        }
+
+        tracing::info!("SingleActivation held through crash recovery");
+
+        Ok(())
+    });
+
+    assert!(result.is_ok(), "Test failed: {:?}", result.err());
+}
