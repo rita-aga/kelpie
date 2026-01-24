@@ -16,9 +16,12 @@
 (* atomically at some point between invocation and response.               *)
 (*                                                                          *)
 (* Related Specs:                                                           *)
-(* - KelpieSingleActivation.tla: Models OCC for single activation          *)
+(* - KelpieSingleActivation.tla: Models FDB transaction conflict detection *)
 (* - KelpieLease.tla: Models lease-based ownership                          *)
 (* - KelpieFDBTransaction.tla: Models FDB transaction semantics            *)
+(*                                                                          *)
+(* Note: This spec focuses on linearization points and client-visible       *)
+(* ordering. OCC conflict detection is modeled in KelpieSingleActivation.   *)
 (*                                                                          *)
 (* TigerStyle: All constants have explicit units and bounds.               *)
 (***************************************************************************)
@@ -53,7 +56,10 @@ VARIABLES
     \* Actor ownership: actor_id -> node | NONE
     ownership,
 
-    \* FDB version counter (for OCC)
+    \* Actor owner client: actor_id -> client | NONE (who claimed it)
+    owner_client,
+
+    \* FDB version counter (tracks writes for debugging, not OCC)
     fdb_version,
 
     \* Pending client operations: client -> (op | NONE)
@@ -62,7 +68,7 @@ VARIABLES
     \* Operation counter for unique IDs
     op_counter
 
-vars == <<history, ownership, fdb_version, pending, op_counter>>
+vars == <<history, ownership, owner_client, fdb_version, pending, op_counter>>
 
 (***************************************************************************)
 (* OPERATION TYPES                                                          *)
@@ -101,6 +107,7 @@ LinearizedOp == [
 TypeOK ==
     /\ history \in Seq(LinearizedOp)
     /\ ownership \in [Actors -> Nodes \cup {NONE}]
+    /\ owner_client \in [Actors -> Clients \cup {NONE}]
     /\ fdb_version \in Nat
     /\ pending \in [Clients -> (PendingOp \cup {NONE})]
     /\ op_counter \in Nat
@@ -112,6 +119,7 @@ TypeOK ==
 Init ==
     /\ history = <<>>
     /\ ownership = [a \in Actors |-> NONE]
+    /\ owner_client = [a \in Actors |-> NONE]
     /\ fdb_version = 0
     /\ pending = [c \in Clients |-> NONE]
     /\ op_counter = 0
@@ -150,7 +158,7 @@ InvokeClaim(c, a) ==
            id |-> op_counter
        ]]
     /\ op_counter' = op_counter + 1
-    /\ UNCHANGED <<history, ownership, fdb_version>>
+    /\ UNCHANGED <<history, ownership, owner_client, fdb_version>>
 
 \* Client invokes a Release operation (release ownership of actor)
 InvokeRelease(c, a) ==
@@ -162,7 +170,7 @@ InvokeRelease(c, a) ==
            id |-> op_counter
        ]]
     /\ op_counter' = op_counter + 1
-    /\ UNCHANGED <<history, ownership, fdb_version>>
+    /\ UNCHANGED <<history, ownership, owner_client, fdb_version>>
 
 \* Client invokes a Read operation (read current owner of actor)
 InvokeRead(c, a) ==
@@ -174,7 +182,7 @@ InvokeRead(c, a) ==
            id |-> op_counter
        ]]
     /\ op_counter' = op_counter + 1
-    /\ UNCHANGED <<history, ownership, fdb_version>>
+    /\ UNCHANGED <<history, ownership, owner_client, fdb_version>>
 
 \* Client invokes a Dispatch operation (send message to actor)
 InvokeDispatch(c, a) ==
@@ -186,7 +194,7 @@ InvokeDispatch(c, a) ==
            id |-> op_counter
        ]]
     /\ op_counter' = op_counter + 1
-    /\ UNCHANGED <<history, ownership, fdb_version>>
+    /\ UNCHANGED <<history, ownership, owner_client, fdb_version>>
 
 (***************************************************************************)
 (* LINEARIZATION POINTS                                                     *)
@@ -212,6 +220,7 @@ LinearizeClaim(c, node) ==
        \* Can only claim if actor is not owned
        \/ /\ ActorFree(actor)
           /\ ownership' = [ownership EXCEPT ![actor] = node]
+          /\ owner_client' = [owner_client EXCEPT ![actor] = c]
           /\ fdb_version' = fdb_version + 1
           /\ history' = Append(history, [
                  type |-> "Claim",
@@ -231,28 +240,42 @@ LinearizeClaim(c, node) ==
                  response |-> "fail"
              ])
           /\ pending' = [pending EXCEPT ![c] = NONE]
-          /\ UNCHANGED <<ownership, fdb_version>>
+          /\ UNCHANGED <<ownership, owner_client, fdb_version>>
     /\ UNCHANGED <<op_counter>>
 
 \* Linearize a Release operation
 \* Linearization point: FDB commit (ADR-004)
+\* Authorization: Only the client who claimed the actor can release it
 LinearizeRelease(c) ==
     /\ ClientBusy(c)
     /\ pending[c].type = "Release"
     /\ LET op == pending[c]
            actor == op.actor
        IN
-       \* Can only release if actor exists (owned or not)
-       /\ ownership' = [ownership EXCEPT ![actor] = NONE]
-       /\ fdb_version' = fdb_version + 1
-       /\ history' = Append(history, [
-              type |-> "Release",
-              client |-> c,
-              actor |-> actor,
-              id |-> op.id,
-              response |-> "ok"
-          ])
-       /\ pending' = [pending EXCEPT ![c] = NONE]
+       \* Success: Client is the owner (authorization check)
+       \/ /\ owner_client[actor] = c
+          /\ ownership' = [ownership EXCEPT ![actor] = NONE]
+          /\ owner_client' = [owner_client EXCEPT ![actor] = NONE]
+          /\ fdb_version' = fdb_version + 1
+          /\ history' = Append(history, [
+                 type |-> "Release",
+                 client |-> c,
+                 actor |-> actor,
+                 id |-> op.id,
+                 response |-> "ok"
+             ])
+          /\ pending' = [pending EXCEPT ![c] = NONE]
+       \* Fail: Client is not the owner (no auth) or actor not owned
+       \/ /\ owner_client[actor] # c
+          /\ history' = Append(history, [
+                 type |-> "Release",
+                 client |-> c,
+                 actor |-> actor,
+                 id |-> op.id,
+                 response |-> "fail"
+             ])
+          /\ pending' = [pending EXCEPT ![c] = NONE]
+          /\ UNCHANGED <<ownership, owner_client, fdb_version>>
     /\ UNCHANGED <<op_counter>>
 
 \* Linearize a Read operation
@@ -274,7 +297,7 @@ LinearizeRead(c) ==
                            ELSE current_owner
           ])
        /\ pending' = [pending EXCEPT ![c] = NONE]
-    /\ UNCHANGED <<ownership, fdb_version, op_counter>>
+    /\ UNCHANGED <<ownership, owner_client, fdb_version, op_counter>>
 
 \* Linearize a Dispatch operation
 \* Linearization point: After activation check, before processing (ADR-004)
@@ -294,7 +317,7 @@ LinearizeDispatch(c) ==
                  response |-> "ok"
              ])
           /\ pending' = [pending EXCEPT ![c] = NONE]
-          /\ UNCHANGED <<ownership, fdb_version>>
+          /\ UNCHANGED <<ownership, owner_client, fdb_version>>
        \* Dispatch fails if actor not active
        \/ /\ ActorFree(actor)
           /\ history' = Append(history, [
@@ -305,7 +328,7 @@ LinearizeDispatch(c) ==
                  response |-> "fail"
              ])
           /\ pending' = [pending EXCEPT ![c] = NONE]
-          /\ UNCHANGED <<ownership, fdb_version>>
+          /\ UNCHANGED <<ownership, owner_client, fdb_version>>
     /\ UNCHANGED <<op_counter>>
 
 (***************************************************************************)
@@ -352,49 +375,56 @@ SequentialPerActor ==
             \* Operation i happens before j in the linearization
             TRUE  \* This is enforced by sequence ordering
 
-\* Read-your-writes: A read after a successful claim sees that claim
-\* (within same client)
+\* Read-your-writes: If client C successfully claims actor A, then a subsequent
+\* read by the SAME client C on actor A (with no intervening release) must see
+\* an owner (not "no_owner"). This ensures clients see the effects of their own writes.
 ReadYourWrites ==
     \A i, j \in 1..Len(history):
         /\ i < j
-        /\ history[i].client = history[j].client
+        /\ history[i].client = history[j].client  \* Same client
         /\ history[i].type = "Claim"
         /\ history[i].response = "ok"
         /\ history[j].type = "Read"
-        /\ history[j].actor = history[i].actor
-        \* No intervening release on this actor
+        /\ history[j].actor = history[i].actor    \* Same actor
+        \* No intervening release on this actor by this client
         /\ ~\E k \in (i+1)..(j-1):
             /\ history[k].actor = history[i].actor
             /\ history[k].type = "Release"
+            /\ history[k].response = "ok"
         => history[j].response # "no_owner"
 
-\* Monotonic reads: Once a read sees an owner, subsequent reads don't see "no_owner"
-\* unless there's an intervening release
+\* Monotonic reads (per-client): For a single client, once they read an owner,
+\* their subsequent reads on the same actor don't regress to "no_owner" unless
+\* there's an intervening successful release.
 MonotonicReads ==
     \A i, j \in 1..Len(history):
         /\ i < j
+        /\ history[i].client = history[j].client  \* Same client
         /\ history[i].type = "Read"
-        /\ history[i].actor = history[j].actor
+        /\ history[i].actor = history[j].actor    \* Same actor
         /\ history[j].type = "Read"
         /\ history[i].response # "no_owner"
-        \* No intervening release
+        \* No intervening successful release on this actor
         /\ ~\E k \in (i+1)..(j-1):
             /\ history[k].actor = history[i].actor
             /\ history[k].type = "Release"
+            /\ history[k].response = "ok"
         => history[j].response # "no_owner"
 
 \* Dispatch consistency: Dispatch succeeds iff actor is owned
+\* Only considers successful releases (failed releases don't change ownership)
 DispatchConsistency ==
     \A i \in 1..Len(history):
         history[i].type = "Dispatch" =>
-        \* Find most recent claim/release for this actor before this dispatch
+        \* Find most recent successful claim/release for this actor before this dispatch
         LET prior_claims == {j \in 1..(i-1):
                 history[j].actor = history[i].actor /\
                 history[j].type = "Claim" /\
                 history[j].response = "ok"}
             prior_releases == {j \in 1..(i-1):
                 history[j].actor = history[i].actor /\
-                history[j].type = "Release"}
+                history[j].type = "Release" /\
+                history[j].response = "ok"}  \* Only successful releases
             last_claim == IF prior_claims = {} THEN 0
                           ELSE CHOOSE j \in prior_claims:
                               \A k \in prior_claims: k <= j
@@ -405,12 +435,19 @@ DispatchConsistency ==
         \* Dispatch succeeds iff last claim > last release (actor is owned)
         (history[i].response = "ok") <=> (last_claim > last_release)
 
+\* Ownership consistency: owner_client and ownership are always in sync
+\* If an actor has an owner_client, it must have an ownership node, and vice versa
+OwnershipConsistency ==
+    \A a \in Actors:
+        (ownership[a] = NONE) <=> (owner_client[a] = NONE)
+
 \* Combined linearizability invariant
 LinearizabilityInvariant ==
     /\ SequentialPerActor
     /\ ReadYourWrites
     /\ MonotonicReads
     /\ DispatchConsistency
+    /\ OwnershipConsistency
 
 (***************************************************************************)
 (* LIVENESS PROPERTIES                                                      *)

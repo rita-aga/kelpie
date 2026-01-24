@@ -116,9 +116,14 @@ Models linearization points for client-visible operations as defined in ADR-004.
 |-----------|-------------|
 | `TypeOK` | Type correctness of all variables |
 | `SequentialPerActor` | Operations on same actor are totally ordered |
-| `ReadYourWrites` | Client sees own successful claims |
-| `MonotonicReads` | Reads don't regress without intervening release |
+| `ReadYourWrites` | Same client sees own successful claims (per-client) |
+| `MonotonicReads` | Same client's reads don't regress (per-client) |
 | `DispatchConsistency` | Dispatch succeeds iff actor is owned |
+| `OwnershipConsistency` | owner_client and ownership are always in sync |
+
+#### Authorization
+- Only the client who claimed an actor can release it
+- Release by unauthorized client fails with "fail" response
 
 #### Liveness Properties
 | Property | Description |
