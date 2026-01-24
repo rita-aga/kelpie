@@ -198,4 +198,4 @@ java -XX:+UseParallelGC -jar tla2tools.jar -deadlock -config KelpieMigration_Bug
 | Buggy model check | `java -jar tla2tools.jar -deadlock -config KelpieMigration_Buggy.cfg KelpieMigration.tla` | MigrationAtomicity violated |
 
 **Commit:** 665ee206bf61db7fe710ea2662507e1e4ff4d7a4
-**PR:** https://github.com/nerdsane/kelpie/pull/16
+**PR:** https://github.com/rita-aga/kelpie/pull/3
