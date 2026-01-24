@@ -43,15 +43,43 @@ Models teleport state consistency for VM snapshot operations.
 
 ### KelpieSingleActivation.tla
 Models the single-activation guarantee with FDB transaction semantics.
-- **TLC Results**: PASS (714 distinct states, depth 27)
+- **TLC Results**: PASS (714 distinct states, depth 27) / FAIL SingleActivation (buggy*)
 
 ### KelpieRegistry.tla
 Models the actor registry with node lifecycle and cache coherence.
-- **TLC Results**: PASS (6,174 distinct states, 22,845 generated)
+- **TLC Results**: PASS (6,174 distinct states, 22,845 generated) / FAIL PlacementConsistency (buggy*)
 
 ### KelpieWAL.tla
 Models the Write-Ahead Log for operation durability and atomicity.
-- **TLC Results**: PASS (70,713 states single client / 2,548,321 states concurrent)
+- **TLC Results**: PASS (70,713 states single client / 2,548,321 states concurrent) / FAIL Idempotency (buggy*)
+
+*Note: Buggy configs created but require BUGGY constant to be added to .tla files for full testing.
+
+### KelpieAgentActor.tla
+Models the AgentActor state machine from ADR-013/014.
+- **Invariants**: SingleActivation, CheckpointIntegrity, MessageProcessingOrder, TypeOK
+- **Liveness**: EventualCompletion, EventualCrashRecovery
+- **TLC Results**: PASS (860 distinct states) / FAIL CheckpointIntegrity (buggy)
+
+#### Safety Invariants
+| Invariant | Description | BUGGY Mode Violation |
+|-----------|-------------|----------------------|
+| `TypeOK` | Type correctness of all variables | N/A |
+| `SingleActivation` | At most one node running agent | N/A |
+| `CheckpointIntegrity` | FDB checkpoint ≤ current iteration | Skip FDB write |
+| `MessageProcessingOrder` | Messages processed in order | N/A |
+
+#### Actions (10 total)
+1. **EnqueueMessage** - Add message to queue
+2. **StartAgent(n)** - Node starts agent, reads FDB checkpoint
+3. **CompleteStartup(n)** - Agent transitions to Running
+4. **ExecuteIteration(n)** - Process message, write checkpoint (BUGGY: skip write)
+5. **StopAgent(n)** - Initiate graceful shutdown
+6. **CompleteStop(n)** - Finish shutdown
+7. **NodeCrash(n)** - Node crashes, loses local state
+8. **NodeRecover(n)** - Node recovers, ready to restart
+9. **PauseAgent(n)** - Agent pauses (heartbeat pause)
+10. **ResumeAgent(n)** - Agent resumes after pause
 
 ### KelpieClusterMembership.tla
 Models cluster membership protocol with:
@@ -88,6 +116,7 @@ java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieSingleActiv
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieRegistry.cfg KelpieRegistry.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieWAL.cfg KelpieWAL.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieClusterMembership.cfg KelpieClusterMembership.tla
+java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieAgentActor.cfg KelpieAgentActor.tla
 ```
 
 ### Buggy Configurations (should fail)
@@ -99,7 +128,59 @@ java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieActorState_
 java -XX:+UseParallelGC -Xmx4g -jar ~/tla2tools.jar -deadlock -config KelpieFDBTransaction_Buggy.cfg KelpieFDBTransaction.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieTeleport_Buggy.cfg KelpieTeleport.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieClusterMembership_Buggy.cfg KelpieClusterMembership.tla
+java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieAgentActor_Buggy.cfg KelpieAgentActor.tla
+# New buggy configs (require BUGGY constant added to specs):
+java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieRegistry_Buggy.cfg KelpieRegistry.tla
+java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieSingleActivation_Buggy.cfg KelpieSingleActivation.tla
+java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieWAL_Buggy.cfg KelpieWAL.tla
 ```
+
+## Consistency Notes (DST Alignment)
+
+### NULL Sentinel Styles
+Different specs use different sentinel values for "no value":
+- `KelpieRegistry`: `NULL`
+- `KelpieSingleActivation`: `NONE`
+- `KelpieLease`: `NoHolder`, `NONE`
+
+**Recommendation**: Standardize on `NONE` (TLA+ convention).
+
+### BUGGY Mode Patterns
+Specs use different mechanisms for bug injection:
+| Pattern | Specs Using It |
+|---------|---------------|
+| `CONSTANT BUGGY` | KelpieClusterMembership, KelpieAgentActor |
+| `SafeMode = FALSE` | KelpieActorState |
+| `SkipTransfer = TRUE` | KelpieMigration |
+| Config-level override | KelpieTeleport, KelpieFDBTransaction |
+| **Needs BUGGY added** | KelpieRegistry, KelpieSingleActivation, KelpieWAL |
+
+### DST Fault Alignment
+| TLA+ Spec | Crash Modeling | DST Alignment |
+|-----------|---------------|---------------|
+| KelpieWAL | Yes (Crash, Recovery) | Aligned |
+| KelpieRegistry | Yes (NodeCrash) | Aligned |
+| KelpieMigration | Yes (phase crashes) | Aligned |
+| KelpieClusterMembership | Yes (partition, crash) | Aligned |
+| KelpieAgentActor | Yes (NodeCrash, NodeRecover) | Aligned |
+| KelpieFDBTransaction | No | Needs crash-during-commit |
+| KelpieSingleActivation | No | Needs crash-during-activation |
+| KelpieLease | No | Needs crash-during-acquire |
+| KelpieTeleport | No | Needs crash-during-snapshot |
+| KelpieActorState | No | Needs crash-during-invocation |
+| KelpieActorLifecycle | No | Needs crash-during-activation |
+
+## Spec-to-ADR Cross-References
+
+| TLA+ Specification | Related ADR |
+|--------------------|-------------|
+| KelpieWAL.tla | [ADR-022: WAL Design](../adr/022-wal-design.md) |
+| KelpieRegistry.tla | [ADR-023: Actor Registry Design](../adr/023-actor-registry-design.md) |
+| KelpieMigration.tla | [ADR-024: Actor Migration Protocol](../adr/024-actor-migration-protocol.md) |
+| KelpieClusterMembership.tla | [ADR-025: Cluster Membership Protocol](../adr/025-cluster-membership-protocol.md) |
+| KelpieLease.tla | [ADR-004: Linearizability Guarantees](../adr/004-linearizability-guarantees.md) |
+| KelpieSingleActivation.tla | [ADR-004: Linearizability Guarantees](../adr/004-linearizability-guarantees.md) |
+| KelpieAgentActor.tla | [ADR-013: Actor-Based Agent Server](../adr/013-actor-based-agent-server.md) |
 
 ## References
 
@@ -108,5 +189,11 @@ java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieClusterMemb
 - [ADR-004: Linearizability Guarantees](../adr/004-linearizability-guarantees.md)
 - [ADR-008: Transaction API](../adr/008-transaction-api.md)
 - [ADR-020: Consolidated VM Crate](../adr/020-consolidated-vm-crate.md)
+- [ADR-022: WAL Design](../adr/022-wal-design.md)
+- [ADR-023: Actor Registry Design](../adr/023-actor-registry-design.md)
+- [ADR-024: Actor Migration Protocol](../adr/024-actor-migration-protocol.md)
+- [ADR-025: Cluster Membership Protocol](../adr/025-cluster-membership-protocol.md)
+- [ADR-026: MCP Tool Integration](../adr/026-mcp-tool-integration.md)
+- [ADR-027: Sandbox Execution Design](../adr/027-sandbox-execution-design.md)
 - [TLA+ Home](https://lamport.azurewebsites.net/tla/tla.html)
 - [TLC Model Checker](https://lamport.azurewebsites.net/tla/tools.html)
