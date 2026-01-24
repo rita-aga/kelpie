@@ -1,7 +1,7 @@
 # Task: Letta Compatibility - Honest Implementation
 
 **Created:** 2026-01-23 03:05:00
-**State:** IN_PROGRESS
+**State:** COMPLETE
 
 ---
 
@@ -86,6 +86,69 @@
 - Full compatibility is visible (no hiding failures)
 - Progress tracked over time via artifacts
 - Clear distinction between "must work" and "working towards"
+
+---
+
+### 2026-01-23 - Phase 7.1 (Hardcoded Defaults) COMPLETE
+
+**Made Configurable via Environment Variables:**
+
+1. **Embedding Model** (`KELPIE_DEFAULT_EMBEDDING_MODEL`):
+   - `models.rs:default_embedding_model()` - Reads from env var
+   - Default: `openai/text-embedding-3-small`
+
+2. **Blocks Count Limit** (`KELPIE_BLOCKS_COUNT_MAX`):
+   - `state.rs:blocks_count_max()` - Reads from env var
+   - Default: 100,000
+
+3. **Core Memory Block Size** (`KELPIE_CORE_MEMORY_BLOCK_SIZE_BYTES_MAX`):
+   - `umi_backend.rs:core_memory_block_size_bytes_max()` - Reads from env var
+   - Default: 8KB (8192 bytes)
+
+**Implementation Notes:**
+- Used `std::sync::OnceLock` for efficient caching (read env var once at startup)
+- All three constants converted from `const` to getter functions
+- All 181 tests pass
+
+---
+
+### 2026-01-23 - Phase 7.2 (Document Memory Structure) COMPLETE
+
+**Updated `docs/LETTA_MIGRATION_GUIDE.md`:**
+
+Added new section explaining memory structure difference:
+- Letta's hierarchical `MemoryBank` with explicit `CoreMemory`, `ArchivalMemory`, `RecallMemory`
+- Kelpie's flat block structure that maps to same API
+- Compatibility table showing which operations work identically
+- Workaround for code that directly accesses `agent.memory.core_memory.blocks`
+
+**Key message:** For most use cases, the flat structure is transparent. API response formats match Letta's expected formats.
+
+---
+
+### 2026-01-23 - Phase 7.3 (Real LLM Integration Tests) COMPLETE
+
+**Created `tests/real_llm_integration.rs`:**
+
+Two new integration tests that use actual LLM APIs:
+
+1. `test_real_llm_agent_message_roundtrip`:
+   - Creates agent with persona/human blocks
+   - Sends message and verifies real LLM response
+   - Validates response is not empty/stub/mock
+
+2. `test_real_llm_memory_persistence`:
+   - Creates agent
+   - Tells agent something specific ("My favorite color is purple")
+   - Asks about it in second message
+   - Verifies LLM remembers context
+
+**Features:**
+- Tests marked `#[ignore]` by default
+- Run with: `cargo test -p kelpie-server --test real_llm_integration -- --ignored`
+- Requires `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`
+- Uses `LlmConfig::from_env()` for API config
+- 30-second timeout per LLM request
 
 ---
 
@@ -488,7 +551,10 @@ Examination of Letta compatibility revealed the implementation is **~60-65% genu
 - [x] Phase 4: Features work (cron scheduling, tool registry wired) ✅
 - [x] Phase 5: Tests verify behavior (7 new persistence tests) ✅
 - [x] Phase 6: CI is honest (full suite with reporting) ✅
-- [ ] Phase 7: Medium issues resolved
+- [x] Phase 7: Medium issues resolved ✅
+  - [x] 7.1: Hardcoded defaults now configurable via env vars
+  - [x] 7.2: Memory structure difference documented in migration guide
+  - [x] 7.3: Real LLM integration tests added (2 tests, require API key)
 - [x] All tests passing (181 lib tests, 10/11 DST tests) ✅
 - [x] Clippy clean ✅
 

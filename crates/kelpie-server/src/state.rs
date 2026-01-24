@@ -35,8 +35,17 @@ pub const MESSAGES_PER_AGENT_MAX: usize = 10_000;
 /// Maximum archival entries per agent
 pub const ARCHIVAL_ENTRIES_PER_AGENT_MAX: usize = 100_000;
 
-/// Maximum standalone blocks
-pub const BLOCKS_COUNT_MAX: usize = 100_000;
+/// Maximum standalone blocks (configurable via KELPIE_BLOCKS_COUNT_MAX env var)
+pub fn blocks_count_max() -> usize {
+    use std::sync::OnceLock;
+    static VALUE: OnceLock<usize> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        std::env::var("KELPIE_BLOCKS_COUNT_MAX")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100_000)
+    })
+}
 
 /// Tool information for API responses
 #[derive(Debug, Clone)]
@@ -1461,10 +1470,10 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             .write()
             .map_err(|_| StateError::LockPoisoned)?;
 
-        if blocks.len() >= BLOCKS_COUNT_MAX {
+        if blocks.len() >= blocks_count_max() {
             return Err(StateError::LimitExceeded {
                 resource: "blocks",
-                limit: BLOCKS_COUNT_MAX,
+                limit: blocks_count_max(),
             });
         }
 
@@ -3481,7 +3490,7 @@ mod tests {
                 role: crate::models::MessageRole::User,
                 content: format!("Message {}", i),
                 tool_call_id: None,
-                tool_call: None,
+                tool_calls: vec![],
                 created_at: chrono::Utc::now(),
             };
             state.add_message(&agent_id, msg).unwrap();

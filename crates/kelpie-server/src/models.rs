@@ -135,7 +135,10 @@ fn default_agent_name() -> String {
 }
 
 fn default_embedding_model() -> Option<String> {
-    Some("openai/text-embedding-3-small".to_string())
+    // Allow configuration via environment variable, fall back to sensible default
+    std::env::var("KELPIE_DEFAULT_EMBEDDING_MODEL")
+        .ok()
+        .or_else(|| Some("openai/text-embedding-3-small".to_string()))
 }
 
 /// Request to update an agent

@@ -243,7 +243,7 @@ mod tests {
 
         // Each task sees clock at or after its sleep duration
         // (order is non-deterministic, so we can't assert exact values)
-        assert!(result1 >= 50 && result1 <= 150);
-        assert!(result2 >= 50 && result2 <= 150);
+        assert!((50..=150).contains(&result1));
+        assert!((50..=150).contains(&result2));
     }
 }
