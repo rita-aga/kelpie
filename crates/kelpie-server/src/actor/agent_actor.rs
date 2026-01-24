@@ -236,7 +236,7 @@ impl AgentActor {
             role: MessageRole::User,
             content: request.content.clone(),
             tool_call_id: None,
-            tool_call: None,
+            tool_calls: vec![],
             created_at: chrono::Utc::now(),
         };
 
@@ -335,7 +335,7 @@ impl AgentActor {
                 role: MessageRole::Assistant,
                 content: response.content.clone(),
                 tool_call_id: None,
-                tool_call: None,
+                tool_calls: vec![],
                 created_at: chrono::Utc::now(),
             };
             ctx.state.add_message(assistant_msg);
@@ -352,11 +352,11 @@ impl AgentActor {
                     role: MessageRole::Assistant,
                     content: response.content.clone(),
                     tool_call_id: None,
-                    tool_call: Some(ToolCall {
+                    tool_calls: vec![ToolCall {
                         id: tool_call.id.clone(),
                         name: tool_call.name.clone(),
                         arguments: tool_call.input.clone(),
-                    }),
+                    }],
                     created_at: chrono::Utc::now(),
                 };
                 ctx.state.add_message(tool_call_msg);
@@ -379,7 +379,7 @@ impl AgentActor {
                     role: MessageRole::Tool,
                     content: result,
                     tool_call_id: Some(tool_call.id.clone()),
-                    tool_call: None,
+                    tool_calls: vec![],
                     created_at: chrono::Utc::now(),
                 };
                 ctx.state.add_message(tool_msg);
@@ -473,7 +473,7 @@ impl AgentActor {
             role: MessageRole::Assistant,
             content: final_content,
             tool_call_id: None,
-            tool_call: None,
+            tool_calls: vec![],
             created_at: chrono::Utc::now(),
         };
         ctx.state.add_message(assistant_msg);

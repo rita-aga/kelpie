@@ -1389,7 +1389,7 @@ mod tests {
             message_type: "user_message".to_string(),
             role: MessageRole::User,
             content: "Hello".to_string(),
-            tool_call: None,
+            tool_calls: vec![],
             tool_call_id: None,
             created_at: chrono::Utc::now(),
         };
@@ -1401,7 +1401,7 @@ mod tests {
             message_type: "assistant_message".to_string(),
             role: MessageRole::Assistant,
             content: "Hi there!".to_string(),
-            tool_call: None,
+            tool_calls: vec![],
             tool_call_id: None,
             created_at: chrono::Utc::now(),
         };
@@ -1524,7 +1524,7 @@ mod tests {
             message_type: "user_message".to_string(),
             role: MessageRole::User,
             content: "Test message".to_string(),
-            tool_call: None,
+            tool_calls: vec![],
             tool_call_id: None,
             created_at: chrono::Utc::now(),
         };

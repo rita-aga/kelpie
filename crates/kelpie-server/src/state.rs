@@ -845,6 +845,8 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                     tags: metadata.tags,
                     metadata: metadata.metadata,
                     project_id: None, // TODO: Add project_id to AgentMetadata
+                    user_id: None,    // TODO: Add user_id to AgentMetadata
+                    org_id: None,     // TODO: Add org_id to AgentMetadata
                     created_at: metadata.created_at,
                     updated_at: metadata.updated_at,
                 });
@@ -975,6 +977,8 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             system: metadata.system,
             description: metadata.description,
             project_id: None, // Phase 6: Projects not stored in legacy storage yet
+            user_id: None,    // TODO: Store user_id in AgentMetadata
+            org_id: None,     // TODO: Store org_id in AgentMetadata
             blocks,
             tool_ids: metadata.tool_ids,
             tags: metadata.tags,
@@ -3390,6 +3394,8 @@ mod tests {
             system: None,
             description: None,
             project_id: None,
+            user_id: None,
+            org_id: None,
             memory_blocks: vec![CreateBlockRequest {
                 label: "persona".to_string(),
                 value: "I am a test agent".to_string(),
