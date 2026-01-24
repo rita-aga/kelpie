@@ -6,14 +6,39 @@ use crate::config::ClusterConfig;
 use crate::error::{ClusterError, ClusterResult};
 use crate::migration::{plan_migrations, MigrationCoordinator};
 use crate::rpc::{RpcMessage, RpcTransport};
+use async_trait::async_trait;
+use bytes::Bytes;
 use kelpie_core::actor::ActorId;
 use kelpie_core::runtime::{JoinHandle, Runtime};
 use kelpie_registry::{Heartbeat, NodeId, NodeInfo, NodeStatus, PlacementDecision, Registry};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::{watch, RwLock};
 use tracing::{debug, info, warn};
+
+// ============================================================================
+// Actor State Provider
+// ============================================================================
+
+/// Trait for providing actor state during migration
+///
+/// This trait is implemented by the runtime to allow the cluster to:
+/// 1. Get the serialized state of a local actor
+/// 2. Deactivate an actor after successful migration
+#[async_trait]
+pub trait ActorStateProvider: Send + Sync {
+    /// Get the serialized state of an actor
+    ///
+    /// Returns None if the actor is not locally active.
+    async fn get_actor_state(&self, actor_id: &ActorId) -> Result<Option<Bytes>, String>;
+
+    /// Deactivate an actor locally after migration
+    ///
+    /// This should stop the actor and clean up local resources.
+    /// The registry update is handled by the cluster.
+    async fn deactivate_local(&self, actor_id: &ActorId) -> Result<(), String>;
+}
 
 /// Cluster state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,16 +69,18 @@ pub struct Cluster<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime
     runtime: RT,
     /// Migration coordinator
     migration: Arc<MigrationCoordinator<R, T>>,
+    /// Actor state provider for migration
+    state_provider: Option<Arc<dyn ActorStateProvider>>,
     /// Current cluster state
     state: RwLock<ClusterState>,
     /// Heartbeat task handle
     heartbeat_task: RwLock<Option<JoinHandle<()>>>,
     /// Failure detection task handle
     failure_task: RwLock<Option<JoinHandle<()>>>,
-    /// Shutdown signal
-    shutdown: Arc<Notify>,
-    /// Whether shutdown was requested
-    shutdown_requested: AtomicBool,
+    /// Shutdown signal sender (sends true when shutting down)
+    shutdown_tx: watch::Sender<bool>,
+    /// Shutdown signal receiver (clone for each task)
+    shutdown_rx: watch::Receiver<bool>,
     /// Next heartbeat sequence (for future use in coordinated heartbeats)
     #[allow(dead_code)]
     heartbeat_sequence: AtomicU64,
@@ -75,6 +102,8 @@ impl<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> Cl
             config.rpc_timeout(),
         ));
 
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
         Self {
             local_node,
             config,
@@ -82,13 +111,24 @@ impl<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> Cl
             transport,
             runtime,
             migration,
+            state_provider: None,
             state: RwLock::new(ClusterState::Stopped),
             heartbeat_task: RwLock::new(None),
             failure_task: RwLock::new(None),
-            shutdown: Arc::new(Notify::new()),
-            shutdown_requested: AtomicBool::new(false),
+            shutdown_tx,
+            shutdown_rx,
             heartbeat_sequence: AtomicU64::new(0),
         }
+    }
+
+    /// Set the actor state provider for migration support
+    ///
+    /// The state provider allows the cluster to get actor state and deactivate
+    /// actors locally during migration. Without a state provider, drain_actors()
+    /// will only unregister actors without transferring state.
+    pub fn with_state_provider(mut self, provider: Arc<dyn ActorStateProvider>) -> Self {
+        self.state_provider = Some(provider);
+        self
     }
 
     /// Get the local node ID
@@ -178,9 +218,8 @@ impl<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> Cl
             "stopping cluster node"
         );
 
-        // Signal shutdown
-        self.shutdown_requested.store(true, Ordering::SeqCst);
-        self.shutdown.notify_waiters();
+        // Signal shutdown via watch channel (receivers will see value change to true)
+        let _ = self.shutdown_tx.send(true);
 
         {
             let mut state = self.state.write().await;
@@ -239,15 +278,21 @@ impl<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> Cl
     }
 
     /// Join an existing cluster
+    ///
+    /// TODO(Phase 3): This currently does nothing. Once FdbRegistry is implemented,
+    /// cluster membership will be managed through FDB transactions instead of gossip.
+    /// The seed_nodes config will be used for initial FDB cluster connection, not
+    /// for a separate cluster join protocol.
     async fn join_cluster(&self) -> ClusterResult<()> {
         info!("joining cluster via seed nodes");
 
         for seed_addr in &self.config.seed_nodes {
-            // For now, we don't have a way to resolve addresses to node IDs
-            // In a real implementation, this would involve discovery
-            debug!(seed = %seed_addr, "attempting to join via seed");
+            // TODO(Phase 3): Use FDB for cluster membership discovery
+            // Seed nodes will point to FDB coordinators, not peer Kelpie nodes
+            debug!(seed = %seed_addr, "seed node configured (FDB membership not yet implemented)");
         }
 
+        // For now, single-node operation works. Multi-node requires FdbRegistry (Phase 3)
         Ok(())
     }
 
@@ -257,13 +302,28 @@ impl<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> Cl
         let transport = self.transport.clone();
         let node_id = self.local_node.id.clone();
         let interval = Duration::from_millis(self.config.heartbeat.interval_ms);
-        let shutdown = self.shutdown.clone();
+        let mut shutdown_rx = self.shutdown_rx.clone();
         let sequence = Arc::new(AtomicU64::new(0));
         let runtime = self.runtime.clone();
 
         let task = self.runtime.spawn(async move {
             loop {
+                // Check if shutdown was already signaled before we started
+                if *shutdown_rx.borrow() {
+                    debug!("heartbeat task shutting down (pre-signaled)");
+                    break;
+                }
+
                 tokio::select! {
+                    biased;  // Prioritize shutdown check
+
+                    result = shutdown_rx.changed() => {
+                        // Channel closed or value changed to true
+                        if result.is_err() || *shutdown_rx.borrow() {
+                            debug!("heartbeat task shutting down");
+                            break;
+                        }
+                    }
                     _ = runtime.sleep(interval) => {
                         // Get current actor count
                         let actor_count = registry
@@ -288,10 +348,6 @@ impl<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> Cl
                             debug!(error = %e, "failed to broadcast heartbeat");
                         }
                     }
-                    _ = shutdown.notified() => {
-                        debug!("heartbeat task shutting down");
-                        break;
-                    }
                 }
             }
         });
@@ -306,12 +362,27 @@ impl<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> Cl
         let config = self.config.clone();
         let local_node_id = self.local_node.id.clone();
         let interval = Duration::from_millis(self.config.heartbeat.interval_ms);
-        let shutdown = self.shutdown.clone();
+        let mut shutdown_rx = self.shutdown_rx.clone();
         let runtime = self.runtime.clone();
 
         let task = self.runtime.spawn(async move {
             loop {
+                // Check if shutdown was already signaled before we started
+                if *shutdown_rx.borrow() {
+                    debug!("failure detection task shutting down (pre-signaled)");
+                    break;
+                }
+
                 tokio::select! {
+                    biased;  // Prioritize shutdown check
+
+                    result = shutdown_rx.changed() => {
+                        // Channel closed or value changed to true
+                        if result.is_err() || *shutdown_rx.borrow() {
+                            debug!("failure detection task shutting down");
+                            break;
+                        }
+                    }
                     _ = runtime.sleep(interval) => {
                         // Check for failed nodes (if registry supports it)
                         // For MemoryRegistry, we'd need to add a method to check timeouts
@@ -338,7 +409,8 @@ impl<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> Cl
                                                     to = %target,
                                                     "planning migration due to node failure"
                                                 );
-                                                // Migration would be executed here
+                                                // TODO(Phase 6): Execute migration via MigrationCoordinator
+                                                // Requires cluster RPC for state transfer
                                             }
                                         }
                                         Err(e) => {
@@ -353,10 +425,6 @@ impl<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> Cl
                             }
                         }
                     }
-                    _ = shutdown.notified() => {
-                        debug!("failure detection task shutting down");
-                        break;
-                    }
                 }
             }
         });
@@ -365,6 +433,13 @@ impl<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> Cl
     }
 
     /// Drain actors from this node (for graceful shutdown)
+    ///
+    /// If a state provider is configured, actors are migrated to other nodes:
+    /// 1. Select target nodes for each actor
+    /// 2. Use MigrationCoordinator to transfer state
+    /// 3. Deactivate locally after successful migration
+    ///
+    /// If no state provider, actors are simply unregistered (state is lost).
     async fn drain_actors(&self) -> ClusterResult<()> {
         info!("draining actors from node");
 
@@ -379,17 +454,129 @@ impl<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> Cl
 
         info!(count = actors.len(), "actors to drain");
 
-        // In a real implementation, we would migrate each actor to another node
-        // For now, we just unregister them
-        for placement in actors {
-            if let Err(e) = self.registry.unregister_actor(&placement.actor_id).await {
+        // Get available target nodes (excluding self)
+        let available_nodes: Vec<NodeInfo> = self
+            .registry
+            .list_nodes_by_status(NodeStatus::Active)
+            .await?
+            .into_iter()
+            .filter(|n| n.id != self.local_node.id)
+            .collect();
+
+        // If no state provider or no target nodes, fall back to unregister
+        if self.state_provider.is_none() || available_nodes.is_empty() {
+            if self.state_provider.is_none() {
                 warn!(
-                    actor = %placement.actor_id,
-                    error = %e,
-                    "failed to unregister actor during drain"
+                    "no state provider configured, actors will be unregistered without migration"
                 );
+            } else {
+                warn!("no available target nodes, actors will be unregistered without migration");
+            }
+
+            for placement in actors {
+                if let Err(e) = self.registry.unregister_actor(&placement.actor_id).await {
+                    warn!(
+                        actor = %placement.actor_id,
+                        error = %e,
+                        "failed to unregister actor during drain"
+                    );
+                }
+            }
+            return Ok(());
+        }
+
+        let state_provider = self.state_provider.as_ref().unwrap();
+
+        // Migrate each actor
+        let mut migrated = 0;
+        let mut failed = 0;
+
+        for placement in &actors {
+            // Select target node (simple round-robin based on actor index)
+            let target_idx = migrated % available_nodes.len();
+            let target_node = &available_nodes[target_idx];
+
+            debug!(
+                actor = %placement.actor_id,
+                target = %target_node.id,
+                "migrating actor during drain"
+            );
+
+            // Get actor state
+            let state = match state_provider.get_actor_state(&placement.actor_id).await {
+                Ok(Some(s)) => s,
+                Ok(None) => {
+                    // Actor not locally active, just unregister
+                    debug!(
+                        actor = %placement.actor_id,
+                        "actor not locally active, skipping migration"
+                    );
+                    if let Err(e) = self.registry.unregister_actor(&placement.actor_id).await {
+                        warn!(
+                            actor = %placement.actor_id,
+                            error = %e,
+                            "failed to unregister inactive actor"
+                        );
+                    }
+                    continue;
+                }
+                Err(e) => {
+                    warn!(
+                        actor = %placement.actor_id,
+                        error = %e,
+                        "failed to get actor state for migration"
+                    );
+                    failed += 1;
+                    continue;
+                }
+            };
+
+            // Perform migration via MigrationCoordinator
+            match self
+                .migration
+                .migrate(
+                    placement.actor_id.clone(),
+                    self.local_node.id.clone(),
+                    target_node.id.clone(),
+                    state,
+                    now_ms(),
+                )
+                .await
+            {
+                Ok(()) => {
+                    // Deactivate locally after successful migration
+                    if let Err(e) = state_provider.deactivate_local(&placement.actor_id).await {
+                        warn!(
+                            actor = %placement.actor_id,
+                            error = %e,
+                            "failed to deactivate actor locally after migration"
+                        );
+                    }
+                    migrated += 1;
+                    debug!(
+                        actor = %placement.actor_id,
+                        target = %target_node.id,
+                        "actor migrated successfully"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        actor = %placement.actor_id,
+                        target = %target_node.id,
+                        error = %e,
+                        "failed to migrate actor"
+                    );
+                    failed += 1;
+                }
             }
         }
+
+        info!(
+            total = actors.len(),
+            migrated = migrated,
+            failed = failed,
+            "drain complete"
+        );
 
         Ok(())
     }

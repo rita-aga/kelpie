@@ -3,6 +3,7 @@
 //! TigerStyle: These models mirror Letta's API schema for compatibility.
 
 use chrono::{DateTime, Utc};
+use croner::Cron;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -552,8 +553,9 @@ pub struct Message {
     pub content: String,
     /// Tool call ID if this is a tool response
     pub tool_call_id: Option<String>,
-    /// Single tool call made by assistant (Letta compatibility - singular, not plural)
-    pub tool_call: Option<ToolCall>,
+    /// Tool calls made by assistant (OpenAI/Letta spec - plural array)
+    #[serde(default)]
+    pub tool_calls: Vec<ToolCall>,
     /// Creation timestamp
     #[serde(rename = "date")]
     pub created_at: DateTime<Utc>,
@@ -824,8 +826,9 @@ pub struct MessageImportData {
     pub content: String,
     /// Tool call ID if this is a tool response
     pub tool_call_id: Option<String>,
-    /// Single tool call made by assistant (Letta compatibility)
-    pub tool_call: Option<ToolCall>,
+    /// Tool calls made by assistant (OpenAI/Letta spec - plural array)
+    #[serde(default)]
+    pub tool_calls: Vec<ToolCall>,
 }
 
 /// Response from exporting an agent
@@ -1056,9 +1059,11 @@ fn calculate_next_run(
                 .map(|dt| dt.with_timezone(&Utc))
         }
         ScheduleType::Cron => {
-            // For now, return None (cron parsing would require cron library)
-            // Production implementation would use a cron parser
-            None
+            // Parse cron expression using croner (builder pattern)
+            match Cron::new(schedule).parse() {
+                Ok(cron) => cron.find_next_occurrence(&from, false).ok(),
+                Err(_) => None,
+            }
         }
     }
 }
@@ -1471,6 +1476,102 @@ mod tests {
         let err = ErrorResponse::not_found("Agent", "abc123");
         assert_eq!(err.code, "not_found");
         assert!(err.message.contains("abc123"));
+    }
+
+    #[test]
+    fn test_calculate_next_run_interval() {
+        let from = Utc::now();
+        let next = calculate_next_run(&ScheduleType::Interval, "3600", from);
+        assert!(next.is_some());
+        let next_time = next.unwrap();
+        // Should be approximately 3600 seconds in the future
+        let diff = (next_time - from).num_seconds();
+        assert_eq!(diff, 3600);
+    }
+
+    #[test]
+    fn test_calculate_next_run_interval_invalid() {
+        let from = Utc::now();
+        let next = calculate_next_run(&ScheduleType::Interval, "not_a_number", from);
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn test_calculate_next_run_cron() {
+        let from = Utc::now();
+        // Every minute
+        let next = calculate_next_run(&ScheduleType::Cron, "* * * * *", from);
+        assert!(next.is_some());
+        let next_time = next.unwrap();
+        // Should be within 60 seconds (next minute)
+        let diff = (next_time - from).num_seconds();
+        assert!(
+            (0..=60).contains(&diff),
+            "Expected 0-60 seconds, got {}",
+            diff
+        );
+    }
+
+    #[test]
+    fn test_calculate_next_run_cron_hourly() {
+        let from = Utc::now();
+        // At minute 0 of every hour
+        let next = calculate_next_run(&ScheduleType::Cron, "0 * * * *", from);
+        assert!(next.is_some());
+        let next_time = next.unwrap();
+        // Should be within 60 minutes
+        let diff = (next_time - from).num_seconds();
+        assert!(
+            (0..=3600).contains(&diff),
+            "Expected 0-3600 seconds, got {}",
+            diff
+        );
+    }
+
+    #[test]
+    fn test_calculate_next_run_cron_invalid() {
+        let from = Utc::now();
+        let next = calculate_next_run(&ScheduleType::Cron, "invalid cron", from);
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn test_calculate_next_run_once() {
+        let from = Utc::now();
+        let future_time = from + chrono::Duration::hours(1);
+        let schedule = future_time.to_rfc3339();
+        let next = calculate_next_run(&ScheduleType::Once, &schedule, from);
+        assert!(next.is_some());
+        // The returned time should match the schedule
+        let next_time = next.unwrap();
+        let diff = (next_time - future_time).num_seconds().abs();
+        assert!(diff < 2, "Times should match within 2 seconds");
+    }
+
+    #[test]
+    fn test_calculate_next_run_once_invalid() {
+        let from = Utc::now();
+        let next = calculate_next_run(&ScheduleType::Once, "not-a-date", from);
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn test_job_from_request_with_cron() {
+        let request = CreateJobRequest {
+            agent_id: "agent-1".to_string(),
+            schedule_type: ScheduleType::Cron,
+            schedule: "0 0 * * *".to_string(), // Daily at midnight
+            action: JobAction::SummarizeConversation,
+            action_params: serde_json::json!({}),
+            description: Some("Daily summary".to_string()),
+        };
+
+        let job = Job::from_request(request);
+        assert_eq!(job.schedule_type, ScheduleType::Cron);
+        assert!(
+            job.next_run.is_some(),
+            "Cron job should have next_run calculated"
+        );
     }
 }
 

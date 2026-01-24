@@ -120,6 +120,8 @@ Two examinations found significant issues blocking Kelpie's distributed guarante
 | 2026-01-23 | Wire handler to transport | TcpTransport/MemoryTransport now route incoming requests to handler | Handler must be set before start() |
 | 2026-01-23 | RequestForwarder trait | Loose coupling between Dispatcher and transport | Requires implementing trait |
 | 2026-01-23 | Check placement before claim | get_placement() read-only check before try_claim_actor() | Small race window (handled by claim error) |
+| 2026-01-23 | ActorStateProvider trait | Loose coupling between Cluster and runtime for migration | Requires implementing trait |
+| 2026-01-23 | Round-robin target selection in drain | Simple load balancing during drain | Not load-aware |
 
 ---
 
@@ -371,6 +373,16 @@ Two examinations found significant issues blocking Kelpie's distributed guarante
 - [~] **6.6: Integration tests** (Deferred)
   - Two-node TCP test deferred to Phase 7 (end-to-end integration)
   - Handler logic is tested via DST
+
+- [x] **6.7: Migration triggering in drain_actors** ✅
+  - Created `ActorStateProvider` trait for getting actor state and deactivating locally
+  - Added `with_state_provider()` builder method to `Cluster`
+  - Rewrote `drain_actors()` to:
+    - Get available target nodes (excluding self)
+    - For each actor: get state → migrate via MigrationCoordinator → deactivate locally
+    - Round-robin target selection for simple load balancing
+    - Falls back to unregister if no state provider or no target nodes
+  - 28 cluster tests pass
 
 **Deliverable:** Working request forwarding and actor migration handling
 

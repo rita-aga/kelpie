@@ -1022,7 +1022,8 @@ fn test_dst_rpc_handler_invoke() {
         let local_node_id = test_node_id(1);
 
         // Register local node
-        let mut node = NodeInfo::with_timestamp(local_node_id.clone(), test_addr(9001), clock.now_ms());
+        let mut node =
+            NodeInfo::with_timestamp(local_node_id.clone(), test_addr(9001), clock.now_ms());
         node.status = NodeStatus::Active;
         registry.register_node(node).await.map_err(to_core_error)?;
 
@@ -1042,7 +1043,9 @@ fn test_dst_rpc_handler_invoke() {
             .map_err(to_core_error)?;
 
         // Set expected response
-        invoker.set_response(&actor_id.qualified_name(), Ok(Bytes::from("test-result"))).await;
+        invoker
+            .set_response(&actor_id.qualified_name(), Ok(Bytes::from("test-result")))
+            .await;
 
         // Handle invoke message
         let msg = RpcMessage::ActorInvoke {
@@ -1153,12 +1156,8 @@ fn test_dst_rpc_handler_migration_rejected() {
         let migration_receiver = Arc::new(DstMockMigrationReceiver::new());
         migration_receiver.set_can_accept(false).await;
 
-        let handler = ClusterRpcHandler::new(
-            test_node_id(2),
-            registry,
-            invoker,
-            migration_receiver,
-        );
+        let handler =
+            ClusterRpcHandler::new(test_node_id(2), registry, invoker, migration_receiver);
 
         let msg = RpcMessage::MigratePrepare {
             request_id: 1,
@@ -1195,7 +1194,8 @@ fn test_dst_rpc_handler_determinism() {
             let local_node_id = test_node_id(1);
 
             // Register local node
-            let mut node = NodeInfo::with_timestamp(local_node_id.clone(), test_addr(9001), clock.now_ms());
+            let mut node =
+                NodeInfo::with_timestamp(local_node_id.clone(), test_addr(9001), clock.now_ms());
             node.status = NodeStatus::Active;
             registry.register_node(node).await.map_err(to_core_error)?;
 
@@ -1217,7 +1217,12 @@ fn test_dst_rpc_handler_determinism() {
                     .map_err(to_core_error)?;
 
                 let expected = format!("result-{}", i);
-                invoker.set_response(&actor_id.qualified_name(), Ok(Bytes::from(expected.clone()))).await;
+                invoker
+                    .set_response(
+                        &actor_id.qualified_name(),
+                        Ok(Bytes::from(expected.clone())),
+                    )
+                    .await;
 
                 let msg = RpcMessage::ActorInvoke {
                     request_id: i as u64,
