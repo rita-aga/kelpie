@@ -34,6 +34,7 @@
 
 mod error;
 mod heartbeat;
+mod lease;
 mod node;
 mod placement;
 mod registry;
@@ -42,6 +43,10 @@ pub use error::{RegistryError, RegistryResult};
 pub use heartbeat::{
     Heartbeat, HeartbeatConfig, HeartbeatTracker, NodeHeartbeatState, HEARTBEAT_FAILURE_COUNT,
     HEARTBEAT_INTERVAL_MS_MAX, HEARTBEAT_INTERVAL_MS_MIN, HEARTBEAT_SUSPECT_COUNT,
+};
+pub use lease::{
+    Lease, LeaseConfig, LeaseManager, MemoryLeaseManager, LEASE_DURATION_MS_DEFAULT,
+    LEASE_DURATION_MS_MAX, LEASE_DURATION_MS_MIN,
 };
 pub use node::{NodeId, NodeInfo, NodeStatus, NODE_ID_LENGTH_BYTES_MAX};
 pub use placement::{
