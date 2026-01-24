@@ -55,6 +55,9 @@ bytes = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 
+# Cron scheduling
+croner = { workspace = true }
+
 # HTTP client for LLM APIs
 reqwest = { workspace = true }
 

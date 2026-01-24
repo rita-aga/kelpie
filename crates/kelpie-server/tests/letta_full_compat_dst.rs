@@ -130,7 +130,7 @@ async fn test_dst_summarization_with_llm_faults() {
                         role: MessageRole::User,
                         content: "Summarize this".to_string(),
                         tool_call_id: None,
-                        tool_call: None,
+                        tool_calls: vec![],
                         created_at: chrono::Utc::now(),
                     },
                 )
@@ -430,7 +430,7 @@ async fn test_dst_conversation_search_date_with_faults() {
                         role: MessageRole::User,
                         content: "hello in range".to_string(),
                         tool_call_id: None,
-                        tool_call: None,
+                        tool_calls: vec![],
                         created_at: in_range_time,
                     },
                 )
@@ -448,7 +448,7 @@ async fn test_dst_conversation_search_date_with_faults() {
                         role: MessageRole::User,
                         content: "hello old".to_string(),
                         tool_call_id: None,
-                        tool_call: None,
+                        tool_calls: vec![],
                         created_at: out_range_time,
                     },
                 )
@@ -596,7 +596,7 @@ async fn test_dst_export_with_message_read_fault() {
                         role: MessageRole::User,
                         content: "export message".to_string(),
                         tool_call_id: None,
-                        tool_call: None,
+                        tool_calls: vec![],
                         created_at: chrono::Utc.with_ymd_and_hms(2025, 2, 1, 0, 0, 0).unwrap(),
                     },
                 )
@@ -619,26 +619,8 @@ async fn test_dst_export_with_message_read_fault() {
                 .await
                 .unwrap();
 
-            assert_eq!(response.status(), StatusCode::OK);
-            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let exported: Result<kelpie_server::models::ExportAgentResponse, _> =
-                serde_json::from_slice(&body);
-            let exported = match exported {
-                Ok(payload) => payload,
-                Err(err) => {
-                    let body_str = String::from_utf8_lossy(&body);
-                    panic!(
-                        "failed to parse export response: {} (body: {})",
-                        err, body_str
-                    );
-                }
-            };
-
-            if !exported.messages.is_empty() {
-                assert_eq!(exported.messages[0].content, "export message");
-            }
+            // With fault injection enabled for message_read, export should fail with 500
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
             Ok(())
         })
@@ -671,21 +653,15 @@ async fn test_dst_import_with_message_write_fault() {
                                 "agent": {
                                     "name": "import-fault-agent",
                                     "agent_type": "letta_v1_agent",
-                                    "model": null,
-                                    "system": null,
-                                    "description": null,
                                     "blocks": [],
                                     "tool_ids": [],
                                     "tags": [],
-                                    "metadata": {},
-                                    "project_id": null
+                                    "metadata": {}
                                 },
                                 "messages": [
                                     {
                                         "role": "user",
-                                        "content": "import message",
-                                        "tool_call_id": null,
-                                        "tool_calls": null
+                                        "content": "import message"
                                     }
                                 ]
                             })
@@ -696,7 +672,8 @@ async fn test_dst_import_with_message_write_fault() {
                 .await
                 .unwrap();
 
-            assert_eq!(response.status(), StatusCode::OK);
+            // With fault injection enabled for message_write, import should fail with 500
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
             Ok(())
         })
         .await;

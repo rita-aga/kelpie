@@ -438,4 +438,158 @@ mod tests {
 
         assert_eq!(updated_job.status, JobStatus::Paused);
     }
+
+    // ============================================================================
+    // Phase 5: Job Persistence Verification Tests
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_job_delete_removes_from_storage() {
+        let app = test_app().await;
+        let agent_id = create_test_agent(&app).await;
+
+        // Create job
+        let job_request = serde_json::json!({
+            "agent_id": agent_id,
+            "schedule_type": "interval",
+            "schedule": "3600",
+            "action": "summarize_conversation"
+        });
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/jobs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&job_request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let job: Job = serde_json::from_slice(&body).unwrap();
+        let job_id = job.id.clone();
+
+        // Verify job exists
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/jobs/{}", job_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Delete job
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/v1/jobs/{}", job_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify job is gone
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/jobs/{}", job_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_job_update_persists() {
+        let app = test_app().await;
+        let agent_id = create_test_agent(&app).await;
+
+        // Create job
+        let job_request = serde_json::json!({
+            "agent_id": agent_id,
+            "schedule_type": "interval",
+            "schedule": "3600",
+            "action": "summarize_conversation",
+            "description": "Original description"
+        });
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/jobs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&job_request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let job: Job = serde_json::from_slice(&body).unwrap();
+        let job_id = job.id.clone();
+
+        // Update job
+        let update_request = serde_json::json!({
+            "status": "paused",
+            "description": "Updated description"
+        });
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/v1/jobs/{}", job_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&update_request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Read job back to verify update persisted
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/jobs/{}", job_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let fetched: Job = serde_json::from_slice(&body).unwrap();
+
+        // Verify updates persisted
+        assert_eq!(fetched.status, JobStatus::Paused);
+        assert_eq!(fetched.description.as_deref(), Some("Updated description"));
+    }
 }

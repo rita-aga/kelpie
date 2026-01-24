@@ -715,4 +715,251 @@ mod tests {
         let health: kelpie_server::models::HealthResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(health.status, "ok");
     }
+
+    // ============================================================================
+    // Phase 5: Persistence Verification Tests
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_agent_roundtrip_all_fields() {
+        let app = test_app().await;
+
+        // Create agent with ALL fields populated
+        let create_body = serde_json::json!({
+            "name": "roundtrip-agent",
+            "description": "A test agent for round-trip verification",
+            "system": "You are a helpful assistant",
+            "agent_type": "letta_v1_agent",
+            "memory_blocks": [
+                {"label": "persona", "value": "I am a test persona"},
+                {"label": "human", "value": "The user is testing"}
+            ],
+            "tool_ids": ["tool-1", "tool-2"],
+            "tags": ["test", "roundtrip", "verification"],
+            "metadata": {"key1": "value1", "key2": "value2"}
+        });
+
+        // Create the agent
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/agents")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&create_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: AgentState = serde_json::from_slice(&body).unwrap();
+
+        // Verify all fields in create response
+        assert_eq!(created.name, "roundtrip-agent");
+        assert_eq!(
+            created.description.as_deref(),
+            Some("A test agent for round-trip verification")
+        );
+        assert_eq!(
+            created.system.as_deref(),
+            Some("You are a helpful assistant")
+        );
+        assert_eq!(created.blocks.len(), 2);
+        assert_eq!(created.tool_ids, vec!["tool-1", "tool-2"]);
+        assert_eq!(created.tags, vec!["test", "roundtrip", "verification"]);
+        assert_eq!(
+            created.metadata.get("key1").and_then(|v| v.as_str()),
+            Some("value1")
+        );
+
+        // Read the agent back
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/agents/{}", created.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let fetched: AgentState = serde_json::from_slice(&body).unwrap();
+
+        // Verify ALL fields match after round-trip
+        assert_eq!(fetched.id, created.id);
+        assert_eq!(fetched.name, created.name);
+        assert_eq!(fetched.description, created.description);
+        assert_eq!(fetched.system, created.system);
+        assert_eq!(fetched.blocks.len(), created.blocks.len());
+        for (fetched_block, created_block) in fetched.blocks.iter().zip(created.blocks.iter()) {
+            assert_eq!(fetched_block.label, created_block.label);
+            assert_eq!(fetched_block.value, created_block.value);
+        }
+        assert_eq!(fetched.tool_ids, created.tool_ids);
+        assert_eq!(fetched.tags, created.tags);
+        assert_eq!(fetched.metadata, created.metadata);
+    }
+
+    #[tokio::test]
+    async fn test_agent_update_persists() {
+        let app = test_app().await;
+
+        // Create an agent
+        let create_body = serde_json::json!({
+            "name": "update-test-agent",
+            "description": "Original description",
+            "tags": ["original"]
+        });
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/agents")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&create_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: AgentState = serde_json::from_slice(&body).unwrap();
+        let agent_id = created.id.clone();
+
+        // Update the agent (uses PATCH, not PUT)
+        let update_body = serde_json::json!({
+            "name": "updated-agent-name",
+            "description": "Updated description",
+            "tags": ["updated", "modified"]
+        });
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/v1/agents/{}", agent_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&update_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Read the agent back to verify update persisted
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/agents/{}", agent_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let fetched: AgentState = serde_json::from_slice(&body).unwrap();
+
+        // Verify updates persisted
+        assert_eq!(fetched.name, "updated-agent-name");
+        assert_eq!(fetched.description.as_deref(), Some("Updated description"));
+        assert_eq!(fetched.tags, vec!["updated", "modified"]);
+    }
+
+    #[tokio::test]
+    async fn test_agent_delete_removes_from_storage() {
+        let app = test_app().await;
+
+        // Create an agent
+        let create_body = serde_json::json!({
+            "name": "delete-test-agent"
+        });
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/agents")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&create_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: AgentState = serde_json::from_slice(&body).unwrap();
+        let agent_id = created.id.clone();
+
+        // Verify agent exists
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/agents/{}", agent_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Delete the agent
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/v1/agents/{}", agent_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify agent is gone
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/agents/{}", agent_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 }
