@@ -3,9 +3,11 @@
 //! TigerStyle: DST-first development - these tests define the streaming contract
 //! and will initially FAIL until streaming is implemented.
 #![cfg(feature = "dst")]
+// Allow tokio::time::timeout in tests - needed for stream timeout handling
+#![allow(clippy::disallowed_methods)]
 
 use async_trait::async_trait;
-use kelpie_core::{CurrentRuntime, Result, Runtime, TimeProvider};
+use kelpie_core::{Result, Runtime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -78,7 +80,7 @@ fn create_service<R: Runtime + 'static>(
     );
     let handle = dispatcher.handle();
 
-    runtime.spawn(async move {
+    let _dispatcher_handle = runtime.spawn(async move {
         dispatcher.run().await;
     });
 
@@ -135,7 +137,7 @@ async fn test_dst_streaming_basic() {
 
             // Start streaming in background
             let agent_id = agent.id.clone();
-            runtime.spawn(async move {
+            let _stream_task = runtime.spawn(async move {
                 // This will fail until send_message_stream is implemented
                 let _ = service
                     .send_message_stream(&agent_id, message_json, tx)
@@ -246,7 +248,7 @@ async fn test_dst_streaming_with_network_delay() {
 
             // Start streaming in background
             let agent_id = agent.id.clone();
-            runtime.spawn(async move {
+            let _stream_task = runtime.spawn(async move {
                 let _ = service
                     .send_message_stream(&agent_id, message_json, tx)
                     .await;
@@ -438,7 +440,7 @@ async fn test_dst_streaming_backpressure() {
 
             // Start streaming in background
             let agent_id = agent.id.clone();
-            runtime.spawn(async move {
+            let _stream_task = runtime.spawn(async move {
                 let _ = service
                     .send_message_stream(&agent_id, message_json, tx)
                     .await;
@@ -539,7 +541,7 @@ async fn test_dst_streaming_with_tool_calls() {
 
             // Start streaming in background
             let agent_id = agent.id.clone();
-            runtime.spawn(async move {
+            let _stream_task = runtime.spawn(async move {
                 let _ = service
                     .send_message_stream(&agent_id, message_json, tx)
                     .await;

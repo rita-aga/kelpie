@@ -11,6 +11,7 @@ use kelpie_vm::{MockVmFactory, VmConfig, VmInstance};
 use std::sync::Arc;
 
 /// Helper to create a mock agent storage
+#[allow(dead_code)]
 fn mock_agent_storage() -> Arc<KvAdapter> {
     Arc::new(KvAdapter::new(Arc::new(MemoryKV::new())))
 }

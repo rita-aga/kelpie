@@ -397,7 +397,11 @@ where
 
                             // Record metrics for forwarded request
                             let duration = start.elapsed().as_secs_f64();
-                            let status = if result.is_ok() { "forwarded" } else { "forward_error" };
+                            let status = if result.is_ok() {
+                                "forwarded"
+                            } else {
+                                "forward_error"
+                            };
                             metrics::record_invocation(operation, status, duration);
 
                             return result;

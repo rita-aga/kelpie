@@ -12,7 +12,7 @@
 #![cfg(feature = "dst")]
 
 use async_trait::async_trait;
-use kelpie_core::{current_runtime, CurrentRuntime, Result, Runtime};
+use kelpie_core::{current_runtime, Result, Runtime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -143,7 +143,7 @@ fn create_service<R: Runtime + 'static>(
     );
     let handle = dispatcher.handle();
 
-    runtime.spawn(async move {
+    let _dispatcher_handle = runtime.spawn(async move {
         dispatcher.run().await;
     });
 

@@ -861,7 +861,7 @@ async fn test_dst_memory_agent_isolation() {
 
 #[tokio::test]
 async fn test_dst_memory_concurrent_access() {
-    use kelpie_core::{current_runtime, CurrentRuntime, Runtime};
+    use kelpie_core::{current_runtime, Runtime};
     let runtime = current_runtime();
 
     let seed = std::env::var("DST_SEED")

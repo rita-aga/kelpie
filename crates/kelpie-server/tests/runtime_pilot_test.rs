@@ -8,7 +8,7 @@
 use async_trait::async_trait;
 #[cfg(madsim)]
 use kelpie_core::MadsimRuntime;
-use kelpie_core::{current_runtime, CurrentRuntime, Result, Runtime};
+use kelpie_core::{current_runtime, Result, Runtime};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
 use kelpie_server::models::{AgentType, CreateAgentRequest, CreateBlockRequest};
@@ -70,7 +70,7 @@ async fn create_agent_service<R: Runtime + 'static>(runtime: R) -> Result<AgentS
     let handle = dispatcher.handle();
 
     // Spawn dispatcher in background
-    runtime.spawn(async move {
+    let _dispatcher_handle = runtime.spawn(async move {
         dispatcher.run().await;
     });
 

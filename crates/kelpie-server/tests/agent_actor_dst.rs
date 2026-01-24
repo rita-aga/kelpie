@@ -149,7 +149,7 @@ fn create_dispatcher<R: Runtime + 'static>(
     let handle = dispatcher.handle();
 
     // Spawn dispatcher task
-    runtime.spawn(async move {
+    let _dispatcher_handle = runtime.spawn(async move {
         dispatcher.run().await;
     });
 

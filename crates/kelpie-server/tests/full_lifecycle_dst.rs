@@ -13,7 +13,7 @@ use kelpie_dst::{SimConfig, Simulation};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
 use kelpie_server::models::{AgentType, CreateAgentRequest, CreateBlockRequest};
 use kelpie_server::tools::UnifiedToolRegistry;
-use kelpie_storage::{ActorKV, ScopedKV};
+use kelpie_storage::ScopedKV;
 use std::sync::Arc;
 
 /// Mock LLM for testing

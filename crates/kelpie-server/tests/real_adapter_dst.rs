@@ -6,7 +6,6 @@
 //! Tests WILL FAIL initially because RealLlmAdapter doesn't override stream_complete().
 #![cfg(feature = "dst")]
 
-use kelpie_core::TimeProvider;
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
 
 /// Test that RealLlmAdapter.stream_complete() produces incremental chunks
@@ -174,7 +173,7 @@ async fn test_dst_concurrent_streaming_with_faults() {
             0.4, // 40% operations delayed
         ))
         .run_async(|sim_env| async move {
-            use kelpie_core::{current_runtime, CurrentRuntime, Runtime};
+            use kelpie_core::{current_runtime, Runtime};
             let runtime = current_runtime();
             let time = sim_env.io_context.time.clone();
 

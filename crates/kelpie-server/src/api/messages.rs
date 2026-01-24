@@ -238,7 +238,7 @@ pub async fn handle_message_request<R: Runtime + 'static>(
         role: role.clone(),
         content: content.clone(),
         tool_call_id: request.tool_call_id.clone(),
-        tool_call: None,
+        tool_calls: vec![],
         created_at: Utc::now(),
     };
 
@@ -437,11 +437,11 @@ pub async fn handle_message_request<R: Runtime + 'static>(
                             role: MessageRole::Assistant,
                             content: response.content.clone(),
                             tool_call_id: None,
-                            tool_call: Some(kelpie_server::models::ToolCall {
+                            tool_calls: vec![kelpie_server::models::ToolCall {
                                 id: tool_call.id.clone(),
                                 name: tool_call.name.clone(),
                                 arguments: tool_call.input.clone(),
-                            }),
+                            }],
                             created_at: Utc::now(),
                         };
                         all_intermediate_messages.push(tool_call_msg);
@@ -470,7 +470,7 @@ pub async fn handle_message_request<R: Runtime + 'static>(
                             role: MessageRole::Tool,
                             content: exec_result.output.clone(),
                             tool_call_id: Some(tool_call.id.clone()),
-                            tool_call: None,
+                            tool_calls: vec![],
                             created_at: Utc::now(),
                         };
                         all_intermediate_messages.push(tool_return_msg);
@@ -619,7 +619,7 @@ pub async fn handle_message_request<R: Runtime + 'static>(
         role: MessageRole::Assistant,
         content: response_content,
         tool_call_id: None,
-        tool_call: None,
+        tool_calls: vec![],
         created_at: Utc::now(),
     };
 
@@ -788,7 +788,7 @@ async fn send_message_streaming<R: Runtime + 'static>(
         role: role.clone(),
         content: content.clone(),
         tool_call_id: request.tool_call_id.clone(),
-        tool_call: None,
+        tool_calls: vec![],
         created_at: Utc::now(),
     };
 
@@ -1106,7 +1106,7 @@ async fn generate_sse_events<R: Runtime + 'static>(
                 events.push(Ok(Event::default().data(json)));
             }
 
-            // Store assistant message
+            // Store assistant message - log error if persistence fails
             let assistant_message = Message {
                 id: Uuid::new_v4().to_string(),
                 agent_id: agent_id.to_string(),
@@ -1114,10 +1114,20 @@ async fn generate_sse_events<R: Runtime + 'static>(
                 role: MessageRole::Assistant,
                 content: final_content,
                 tool_call_id: None,
-                tool_call: None,
+                tool_calls: vec![],
                 created_at: Utc::now(),
             };
-            let _ = state.add_message(agent_id, assistant_message);
+            if let Err(e) = state.add_message(agent_id, assistant_message) {
+                tracing::error!(agent_id = %agent_id, error = ?e, "failed to persist assistant message in streaming");
+                // Send error event to client so they know persistence failed
+                let error_event = SseMessage::AssistantMessage {
+                    id: Uuid::new_v4().to_string(),
+                    content: format!("[Warning: message persistence failed: {}]", e),
+                };
+                if let Ok(json) = serde_json::to_string(&error_event) {
+                    events.push(Ok(Event::default().data(json)));
+                }
+            }
         }
         Err(e) => {
             // Send error as assistant message
@@ -1287,7 +1297,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
-    use kelpie_core::Runtime;
+
     use kelpie_server::models::AgentState;
     use kelpie_server::state::AppState;
     use tower::ServiceExt;
@@ -1403,5 +1413,152 @@ mod tests {
 
         // No messages sent yet
         assert_eq!(messages.len(), 0);
+    }
+
+    // ============================================================================
+    // Phase 5: Message Persistence Verification Tests
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_message_roundtrip_persists() {
+        let (app, agent_id) = test_app_with_agent().await;
+
+        // Send a user message
+        let message = serde_json::json!({
+            "role": "user",
+            "content": "Hello, this is a test message for persistence verification"
+        });
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/agents/{}/messages", agent_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&message).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Should succeed (might return assistant response too)
+        assert!(
+            response.status() == StatusCode::OK
+                || response.status() == StatusCode::INTERNAL_SERVER_ERROR
+        );
+
+        // List messages to verify persistence
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/agents/{}/messages?limit=10", agent_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let messages: Vec<kelpie_server::models::Message> = serde_json::from_slice(&body).unwrap();
+
+        // Should have at least one message (the user message)
+        assert!(
+            !messages.is_empty(),
+            "Expected at least 1 message, got {}",
+            messages.len()
+        );
+
+        // Find the user message and verify content
+        let user_msg = messages
+            .iter()
+            .find(|m| m.role == kelpie_server::models::MessageRole::User);
+        assert!(user_msg.is_some(), "User message not found in message list");
+        let user_msg = user_msg.unwrap();
+        assert!(
+            user_msg.content.contains("persistence verification"),
+            "User message content not preserved: {}",
+            user_msg.content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_multiple_messages_order_preserved() {
+        let (app, agent_id) = test_app_with_agent().await;
+
+        // Send multiple messages
+        for i in 1..=3 {
+            let message = serde_json::json!({
+                "role": "user",
+                "content": format!("Message number {}", i)
+            });
+
+            let _response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/v1/agents/{}/messages", agent_id))
+                        .header("content-type", "application/json")
+                        .body(Body::from(serde_json::to_vec(&message).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+        }
+
+        // List messages
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/agents/{}/messages?limit=20", agent_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let messages: Vec<kelpie_server::models::Message> = serde_json::from_slice(&body).unwrap();
+
+        // Filter to just user messages
+        let user_messages: Vec<_> = messages
+            .iter()
+            .filter(|m| m.role == kelpie_server::models::MessageRole::User)
+            .collect();
+
+        // Should have all 3 user messages
+        assert!(
+            user_messages.len() >= 3,
+            "Expected at least 3 user messages, got {}",
+            user_messages.len()
+        );
+
+        // Verify they contain expected content
+        let contents: Vec<&str> = user_messages.iter().map(|m| m.content.as_str()).collect();
+        assert!(
+            contents.iter().any(|c| c.contains("Message number 1")),
+            "Message 1 not found"
+        );
+        assert!(
+            contents.iter().any(|c| c.contains("Message number 2")),
+            "Message 2 not found"
+        );
+        assert!(
+            contents.iter().any(|c| c.contains("Message number 3")),
+            "Message 3 not found"
+        );
     }
 }

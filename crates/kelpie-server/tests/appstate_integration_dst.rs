@@ -11,9 +11,11 @@
 //!
 //! ALL TESTS MUST FAIL INITIALLY (AppState doesn't have service yet)
 #![cfg(feature = "dst")]
+// Allow tokio::time::timeout in tests - needed for timeout handling
+#![allow(clippy::disallowed_methods)]
 
 use async_trait::async_trait;
-use kelpie_core::{current_runtime, Result, Runtime, TimeProvider};
+use kelpie_core::{current_runtime, Result, Runtime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -387,7 +389,7 @@ async fn test_service_invoke_during_shutdown() {
             // Start shutdown in background (deterministic sleep)
             let app_clone = app_state.clone();
             let time_clone = time.clone();
-            runtime.spawn(async move {
+            let _shutdown_task = runtime.spawn(async move {
                 time_clone.sleep_ms(10).await;
                 let _ = app_clone.shutdown(Duration::from_secs(2)).await;
             });
@@ -655,7 +657,7 @@ async fn create_appstate_with_service<R: Runtime + 'static>(
     let handle = dispatcher.handle();
 
     // Spawn dispatcher runtime
-    runtime.spawn(async move {
+    let _dispatcher_handle = runtime.spawn(async move {
         dispatcher.run().await;
     });
 

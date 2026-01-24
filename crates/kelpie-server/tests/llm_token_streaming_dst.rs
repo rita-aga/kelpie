@@ -14,7 +14,7 @@
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
-use kelpie_core::{CurrentRuntime, Result, Runtime};
+use kelpie_core::{Result, Runtime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{
@@ -90,7 +90,7 @@ fn create_service<R: Runtime + 'static>(
     );
     let handle = dispatcher.handle();
 
-    runtime.spawn(async move {
+    let _dispatcher_handle = runtime.spawn(async move {
         dispatcher.run().await;
     });
 
