@@ -75,11 +75,12 @@ async fn test_agent_env_with_llm_faults() {
                 {
                     Ok(_) => success_count += 1,
                     Err(e) => {
-                        // Verify fault injection is working (LLM errors map to Internal)
-                        let err_str = e.to_string();
+                        // Verify fault injection is working (LLM errors map to Internal or OperationTimedOut)
+                        // Use matches! for type-safe error checking instead of string matching
+                        use kelpie_core::Error;
                         assert!(
-                            err_str.contains("timed out") || err_str.contains("Internal"),
-                            "Unexpected error: {}",
+                            matches!(e, Error::OperationTimedOut { .. } | Error::Internal { .. }),
+                            "Unexpected error type: {:?}",
                             e
                         );
                         failure_count += 1;

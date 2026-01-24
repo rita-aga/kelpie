@@ -3,8 +3,8 @@
 //! TigerStyle: Deterministic verification of temporal properties.
 //!
 //! Note: Some methods in the state machines are defined for completeness
-//! (matching TLA+ specs) but not used in all tests.
-#![allow(dead_code)]
+//! (matching TLA+ specs) but not used in all tests. These are marked with
+//! `#[allow(dead_code)]` individually with comments explaining their purpose.
 //!
 //! This module tests liveness properties defined in TLA+ specifications:
 //! - EventualActivation (KelpieSingleActivation.tla)
@@ -94,6 +94,8 @@ impl std::fmt::Display for NodeStatus {
 enum WalEntryStatus {
     Pending,
     Completed,
+    /// TLA+ spec models Failed state; kept for spec completeness
+    #[allow(dead_code)]
     Failed,
 }
 
@@ -119,7 +121,8 @@ struct ActivationProtocol {
     holder: RwLock<Option<usize>>,
     /// FDB version for OCC
     version: AtomicU64,
-    /// Clock for timeouts
+    /// Clock for timeouts (TLA+ spec includes timing; kept for spec completeness)
+    #[allow(dead_code)]
     clock: Arc<SimClock>,
 }
 
@@ -175,6 +178,8 @@ impl ActivationProtocol {
     }
 
     /// Release - active node releases
+    /// TLA+ spec includes Release action; kept for spec completeness
+    #[allow(dead_code)]
     fn release(&self, node: usize) {
         let mut states = self.node_states.write().unwrap();
         let mut holder = self.holder.write().unwrap();
@@ -233,7 +238,8 @@ struct RegistrySystem {
     placement: RwLock<Vec<Option<usize>>>,
     /// Max heartbeats before failure
     max_heartbeat_miss: u64,
-    /// Clock
+    /// Clock (TLA+ spec includes timing; kept for spec completeness)
+    #[allow(dead_code)]
     clock: Arc<SimClock>,
 }
 
@@ -438,6 +444,8 @@ impl LeaseSystem {
     }
 
     /// Renew lease
+    /// TLA+ spec includes RenewLease action; kept for spec completeness
+    #[allow(dead_code)]
     fn renew_lease(&self, node: usize, actor: usize) -> bool {
         let current_time = self.clock.now_ms();
         let holders = self.lease_holders.read().unwrap();
@@ -455,6 +463,8 @@ impl LeaseSystem {
     }
 
     /// Release lease
+    /// TLA+ spec includes ReleaseLease action; kept for spec completeness
+    #[allow(dead_code)]
     fn release_lease(&self, node: usize, actor: usize) {
         let mut holders = self.lease_holders.write().unwrap();
         let mut expiry = self.lease_expiry.write().unwrap();
@@ -536,7 +546,8 @@ struct WalSystem {
     crashed: RwLock<bool>,
     /// Whether system is recovering
     recovering: RwLock<bool>,
-    /// Clock
+    /// Clock (TLA+ spec includes timing; kept for spec completeness)
+    #[allow(dead_code)]
     clock: Arc<SimClock>,
 }
 
@@ -566,6 +577,8 @@ impl WalSystem {
     }
 
     /// Complete an entry
+    /// TLA+ spec includes CompleteEntry action; kept for spec completeness
+    #[allow(dead_code)]
     fn complete(&self, idx: usize) {
         let crashed = self.crashed.read().unwrap();
         if *crashed {
@@ -579,6 +592,8 @@ impl WalSystem {
     }
 
     /// Fail an entry
+    /// TLA+ spec includes FailEntry action; kept for spec completeness
+    #[allow(dead_code)]
     fn fail(&self, idx: usize) {
         let crashed = self.crashed.read().unwrap();
         if *crashed {

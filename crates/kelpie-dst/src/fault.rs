@@ -279,17 +279,49 @@ impl FaultInjector {
                 continue;
             }
 
-            // Check max triggers
-            let trigger_count = fault_state.trigger_count.load(Ordering::SeqCst);
-            if let Some(max) = config.max_triggers {
-                if trigger_count >= max {
-                    continue;
-                }
-            }
-
             // Probabilistic check
             if self.rng.next_bool(config.probability) {
-                fault_state.trigger_count.fetch_add(1, Ordering::SeqCst);
+                // Use compare_exchange loop to atomically check max_triggers and increment
+                // This avoids TOCTOU race between checking trigger_count and incrementing it
+                if let Some(max) = config.max_triggers {
+                    loop {
+                        let current = fault_state.trigger_count.load(Ordering::SeqCst);
+                        if current >= max {
+                            // Already at max triggers, skip this fault
+                            break;
+                        }
+                        // Try to atomically increment
+                        match fault_state.trigger_count.compare_exchange(
+                            current,
+                            current + 1,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        ) {
+                            Ok(_) => {
+                                // Successfully incremented, trigger the fault
+                                let trigger_count = current + 1;
+
+                                tracing::debug!(
+                                    fault = config.fault_type.name(),
+                                    operation = operation,
+                                    trigger_count = trigger_count,
+                                    "Injecting fault"
+                                );
+
+                                return Some(config.fault_type.clone());
+                            }
+                            Err(_) => {
+                                // Another thread modified it, retry
+                                continue;
+                            }
+                        }
+                    }
+                    // If we broke out of the loop, we hit max triggers
+                    continue;
+                }
+
+                // No max_triggers limit, just increment and trigger
+                let trigger_count = fault_state.trigger_count.fetch_add(1, Ordering::SeqCst);
 
                 tracing::debug!(
                     fault = config.fault_type.name(),
