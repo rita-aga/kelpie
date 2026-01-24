@@ -37,6 +37,7 @@
 pub mod agent;
 pub mod clock;
 pub mod fault;
+pub mod invariants;
 pub mod llm;
 pub mod network;
 pub mod rng;
@@ -51,6 +52,11 @@ pub mod vm;
 pub use agent::{AgentTestConfig, AgentTestState, BlockTestState, SimAgentEnv};
 pub use clock::SimClock;
 pub use fault::{FaultConfig, FaultInjector, FaultInjectorBuilder, FaultType};
+pub use invariants::{
+    AtomicVisibility, ConsistentHolder, Durability, Invariant, InvariantChecker,
+    InvariantViolation, LeaseInfo, LeaseUniqueness, NodeInfo, NodeState, NodeStatus,
+    PlacementConsistency, SingleActivation, SystemState, WalEntry, WalEntryStatus,
+};
 pub use kelpie_core::teleport::{Architecture, SnapshotKind, TeleportPackage, VmSnapshotBlob};
 pub use llm::{
     SimChatMessage, SimCompletionResponse, SimLlmClient, SimToolCall, SimToolDefinition,

@@ -17,6 +17,7 @@
 
 use crate::clock::SimClock;
 use crate::fault::{FaultConfig, FaultInjector, FaultInjectorBuilder};
+use crate::invariants::{InvariantChecker, InvariantViolation, SystemState};
 use crate::network::SimNetwork;
 use crate::rng::DeterministicRng;
 use crate::sandbox::SimSandboxFactory;
@@ -165,6 +166,8 @@ impl SimEnvironment {
 pub struct Simulation {
     config: SimConfig,
     fault_configs: Vec<FaultConfig>,
+    /// Optional invariant checker for verified simulation runs
+    invariant_checker: Option<InvariantChecker>,
 }
 
 impl Simulation {
@@ -173,6 +176,7 @@ impl Simulation {
         Self {
             config,
             fault_configs: Vec::new(),
+            invariant_checker: None,
         }
     }
 
@@ -186,6 +190,25 @@ impl Simulation {
     pub fn with_faults(mut self, faults: Vec<FaultConfig>) -> Self {
         self.fault_configs.extend(faults);
         self
+    }
+
+    /// Add an invariant checker for verified simulation runs
+    ///
+    /// When an invariant checker is configured, use `run_checked()` to
+    /// verify invariants against system state snapshots.
+    pub fn with_invariants(mut self, checker: InvariantChecker) -> Self {
+        self.invariant_checker = Some(checker);
+        self
+    }
+
+    /// Check if this simulation has an invariant checker configured
+    pub fn has_invariant_checker(&self) -> bool {
+        self.invariant_checker.is_some()
+    }
+
+    /// Get a reference to the invariant checker, if configured
+    pub fn invariant_checker(&self) -> Option<&InvariantChecker> {
+        self.invariant_checker.as_ref()
     }
 
     /// Run the simulation with the given test function
@@ -348,6 +371,126 @@ impl Simulation {
 
         test(env).await.map_err(SimulationError::TestFailed)
     }
+
+    /// Run simulation with invariant checking
+    ///
+    /// This method runs the simulation and allows the test to verify invariants
+    /// against system state snapshots at any point. The test function receives
+    /// both the environment and an invariant verifier.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use kelpie_dst::{Simulation, SimConfig, InvariantChecker, SystemState, SingleActivation};
+    ///
+    /// let checker = InvariantChecker::new().with_invariant(SingleActivation);
+    ///
+    /// Simulation::new(SimConfig::new(42))
+    ///     .with_invariants(checker)
+    ///     .run_checked(|env, verifier| async move {
+    ///         // ... perform operations ...
+    ///
+    ///         // Capture and verify state
+    ///         let state = SystemState::new()
+    ///             .with_node(/* ... */);
+    ///         verifier(&state)?;
+    ///
+    ///         Ok(())
+    ///     })?;
+    /// ```
+    pub fn run_checked<F, Fut, T>(self, test: F) -> Result<T, SimulationError>
+    where
+        F: FnOnce(
+            SimEnvironment,
+            Box<dyn Fn(&SystemState) -> Result<(), InvariantViolation> + Send + Sync>,
+        ) -> Fut,
+        Fut: Future<Output = Result<T, kelpie_core::Error>>,
+    {
+        let checker = self.invariant_checker.unwrap_or_default();
+        let checker = Arc::new(checker);
+
+        // Build the simulation environment
+        let rng = Arc::new(DeterministicRng::new(self.config.seed));
+        let clock = Arc::new(SimClock::default());
+
+        // Build fault injector
+        let mut fault_builder = FaultInjectorBuilder::new(rng.fork());
+        for fault in &self.fault_configs {
+            fault_builder = fault_builder.with_fault(fault.clone());
+        }
+        let faults = Arc::new(fault_builder.build());
+
+        // Build SimTime
+        let sim_time = Arc::new(SimTime::new(clock.clone()));
+
+        // Build IoContext
+        let io_context = IoContext {
+            time: sim_time as Arc<dyn TimeProvider>,
+            rng: rng.clone() as Arc<dyn RngProvider>,
+        };
+
+        // Build storage
+        let mut storage = SimStorage::new(rng.fork(), faults.clone());
+        if let Some(limit) = self.config.storage_limit_bytes {
+            storage = storage.with_size_limit(limit);
+        }
+
+        // Build network
+        let network = SimNetwork::new((*clock).clone(), rng.fork(), faults.clone()).with_latency(
+            self.config.network_latency_ms,
+            self.config.network_jitter_ms,
+        );
+
+        // Build sandbox factories
+        let sandbox_factory = SimSandboxFactory::new(rng.fork(), faults.clone());
+        let sandbox_io_factory =
+            SimSandboxIOFactory::new(rng.clone(), faults.clone(), clock.clone());
+
+        // Build teleport storage
+        let teleport_storage = SimTeleportStorage::new(rng.fork(), faults.clone());
+        let vm_factory = SimVmFactory::new(rng.clone(), faults.clone(), clock.clone());
+
+        let env = SimEnvironment {
+            clock,
+            rng,
+            io_context,
+            storage,
+            network,
+            faults,
+            sandbox_factory,
+            sandbox_io_factory,
+            teleport_storage,
+            vm_factory,
+        };
+
+        // Create verifier closure
+        let verifier: Box<dyn Fn(&SystemState) -> Result<(), InvariantViolation> + Send + Sync> =
+            Box::new(move |state| checker.verify_all(state));
+
+        // Run the test
+        #[cfg(not(madsim))]
+        {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| SimulationError::RuntimeError(e.to_string()))?;
+
+            runtime.block_on(async {
+                test(env, verifier)
+                    .await
+                    .map_err(SimulationError::TestFailed)
+            })
+        }
+
+        #[cfg(madsim)]
+        {
+            madsim::runtime::Handle::current().block_on(async {
+                test(env, verifier)
+                    .await
+                    .map_err(SimulationError::TestFailed)
+            })
+        }
+    }
 }
 
 /// Errors that can occur during simulation
@@ -361,6 +504,8 @@ pub enum SimulationError {
     MaxTimeExceeded,
     /// Runtime initialization failed
     RuntimeError(String),
+    /// An invariant was violated
+    InvariantViolation(InvariantViolation),
 }
 
 impl std::fmt::Display for SimulationError {
@@ -370,7 +515,14 @@ impl std::fmt::Display for SimulationError {
             SimulationError::MaxStepsExceeded => write!(f, "Maximum simulation steps exceeded"),
             SimulationError::MaxTimeExceeded => write!(f, "Maximum simulation time exceeded"),
             SimulationError::RuntimeError(e) => write!(f, "Runtime error: {}", e),
+            SimulationError::InvariantViolation(v) => write!(f, "Invariant violated: {}", v),
         }
+    }
+}
+
+impl From<InvariantViolation> for SimulationError {
+    fn from(v: InvariantViolation) -> Self {
+        SimulationError::InvariantViolation(v)
     }
 }
 
