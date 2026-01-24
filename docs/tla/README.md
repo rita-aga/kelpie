@@ -99,6 +99,38 @@ Models cluster membership protocol with:
 - **Safe version**: PASS - All invariants hold
 - **Buggy version**: FAIL - NoSplitBrain violated
 
+### KelpieLinearizability.tla
+Models linearization points for client-visible operations as defined in ADR-004.
+- **TLC Results**: PASS (10,680 distinct states)
+
+#### Linearization Points (per ADR-004)
+| Operation | Linearization Point | Description |
+|-----------|---------------------|-------------|
+| `Claim` | FDB transaction commit | Actor ownership acquisition |
+| `Release` | FDB transaction commit | Actor ownership release |
+| `Read` | FDB snapshot read | Query current actor owner |
+| `Dispatch` | Activation check | Message dispatch to active actor |
+
+#### Safety Invariants
+| Invariant | Description |
+|-----------|-------------|
+| `TypeOK` | Type correctness of all variables |
+| `SequentialPerActor` | Operations on same actor are totally ordered |
+| `ReadYourWrites` | Same client sees own successful claims (per-client) |
+| `MonotonicReads` | Same client's reads don't regress (per-client) |
+| `DispatchConsistency` | Dispatch succeeds iff actor is owned |
+| `OwnershipConsistency` | owner_client and ownership are always in sync |
+
+#### Authorization
+- Only the client who claimed an actor can release it
+- Release by unauthorized client fails with "fail" response
+
+#### Liveness Properties
+| Property | Description |
+|----------|-------------|
+| `EventualCompletion` | Every pending operation eventually completes |
+| `EventualClaim` | Claims on free actors eventually succeed |
+
 ---
 
 ## Running TLC Model Checker
@@ -117,6 +149,7 @@ java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieRegistry.cf
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieWAL.cfg KelpieWAL.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieClusterMembership.cfg KelpieClusterMembership.tla
 java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieAgentActor.cfg KelpieAgentActor.tla
+java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieLinearizability.cfg KelpieLinearizability.tla
 ```
 
 ### Buggy Configurations (should fail)
@@ -171,6 +204,84 @@ Specs use different mechanisms for bug injection:
 | KelpieActorLifecycle | No | Needs crash-during-activation |
 
 
+## Cross-Module Composition
+
+Kelpie's distributed guarantees are verified across multiple TLA+ specifications. This section documents how specifications compose to provide global single activation.
+
+### Composition Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      Global Single Activation                            │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ┌──────────────────┐   ┌──────────────────┐   ┌────────────────────┐   │
+│  │ KelpieSingle     │   │ KelpieLease      │   │ KelpieLineariz-    │   │
+│  │ Activation.tla   │   │ .tla             │   │ ability.tla        │   │
+│  │                  │   │                  │   │                    │   │
+│  │ FDB OCC for      │   │ Lease expiry     │   │ Client-visible     │   │
+│  │ atomic claim     │   │ and renewal      │   │ ordering           │   │
+│  └────────┬─────────┘   └────────┬─────────┘   └─────────┬──────────┘   │
+│           │                      │                       │               │
+│           └──────────────────────┼───────────────────────┘               │
+│                                  │                                       │
+│                    ┌─────────────▼─────────────┐                        │
+│                    │ KelpieRegistry.tla        │                        │
+│                    │                           │                        │
+│                    │ Actor placement and       │                        │
+│                    │ cache coherence           │                        │
+│                    └─────────────┬─────────────┘                        │
+│                                  │                                       │
+│           ┌──────────────────────┼──────────────────────┐               │
+│           │                      │                      │               │
+│  ┌────────▼─────────┐   ┌────────▼─────────┐   ┌───────▼───────────┐   │
+│  │ KelpieAgent      │   │ KelpieCluster    │   │ KelpieMigration   │   │
+│  │ Actor.tla        │   │ Membership.tla   │   │ .tla              │   │
+│  │                  │   │                  │   │                   │   │
+│  │ Agent state      │   │ Split-brain      │   │ Migration         │   │
+│  │ machine          │   │ prevention       │   │ atomicity         │   │
+│  └──────────────────┘   └──────────────────┘   └───────────────────┘   │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Why Per-Module Verification is Sufficient
+
+Rather than a single unified specification, Kelpie uses modular verification because:
+
+1. **State Space Tractability**: A unified spec combining all modules would have an enormous state space (product of all module state spaces). Per-module specs stay tractable for TLC.
+
+2. **Clear Abstraction Boundaries**: Each module has well-defined inputs and outputs:
+   - `KelpieSingleActivation` assumes FDB OCC semantics
+   - `KelpieRegistry` assumes single activation from `KelpieSingleActivation`
+   - `KelpieLinearizability` assumes registry correctness
+
+3. **Shared Invariants**: Key invariants are verified across multiple specs:
+   | Invariant | Verified In |
+   |-----------|-------------|
+   | At most one active instance | KelpieSingleActivation, KelpieAgentActor, KelpieClusterMembership |
+   | Lease uniqueness | KelpieLease, KelpieRegistry |
+   | No split-brain | KelpieClusterMembership |
+   | Linearizable history | KelpieLinearizability |
+
+4. **Assumption Chaining**: Each spec's postconditions become the next spec's preconditions:
+   - FDB provides serializable transactions → SingleActivation guarantees uniqueness
+   - SingleActivation guarantees uniqueness → Registry maintains consistent placement
+   - Registry maintains placement → Linearizability holds for clients
+
+### Verification Evidence
+
+| Composition Layer | Verified By | Key Invariant |
+|-------------------|-------------|---------------|
+| FDB Transactions | KelpieFDBTransaction.tla | SerializableIsolation |
+| Single Activation | KelpieSingleActivation.tla | SingleActivation, ConsistentHolder |
+| Lease Ownership | KelpieLease.tla | LeaseUniqueness |
+| Client Ordering | KelpieLinearizability.tla | ReadYourWrites, MonotonicReads |
+| Cluster Membership | KelpieClusterMembership.tla | NoSplitBrain |
+| Migration | KelpieMigration.tla | MigrationAtomicity |
+
+---
+
 ## Spec-to-ADR Cross-References
 
 | TLA+ Specification | Related ADR |
@@ -181,6 +292,7 @@ Specs use different mechanisms for bug injection:
 | KelpieClusterMembership.tla | [ADR-025: Cluster Membership Protocol](../adr/025-cluster-membership-protocol.md) |
 | KelpieLease.tla | [ADR-004: Linearizability Guarantees](../adr/004-linearizability-guarantees.md) |
 | KelpieSingleActivation.tla | [ADR-004: Linearizability Guarantees](../adr/004-linearizability-guarantees.md) |
+| KelpieLinearizability.tla | [ADR-004: Linearizability Guarantees](../adr/004-linearizability-guarantees.md) |
 | KelpieAgentActor.tla | [ADR-013: Actor-Based Agent Server](../adr/013-actor-based-agent-server.md) |
 
 ## References
