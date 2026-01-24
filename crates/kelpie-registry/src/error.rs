@@ -42,6 +42,30 @@ pub enum RegistryError {
     /// Internal registry error
     #[error("internal error: {message}")]
     Internal { message: String },
+
+    /// Lease is held by another node
+    #[error("lease for actor {actor_id} held by {holder}, expires at {expiry_ms}ms")]
+    LeaseHeldByOther {
+        actor_id: String,
+        holder: String,
+        expiry_ms: u64,
+    },
+
+    /// Lease not found (no active lease for actor)
+    #[error("no lease found for actor {actor_id}")]
+    LeaseNotFound { actor_id: String },
+
+    /// Not the lease holder (cannot renew/release)
+    #[error("node {requester} is not the lease holder for actor {actor_id}, holder is {holder}")]
+    NotLeaseHolder {
+        actor_id: String,
+        holder: String,
+        requester: String,
+    },
+
+    /// Lease has expired
+    #[error("lease for actor {actor_id} expired at {expiry_ms}ms")]
+    LeaseExpired { actor_id: String, expiry_ms: u64 },
 }
 
 impl RegistryError {
