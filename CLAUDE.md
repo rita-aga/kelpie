@@ -362,6 +362,16 @@ cargo test --workspace && cargo clippy --workspace -- -D warnings && cargo fmt -
 2. **Simulated time** - `SimClock` replaces wall clock
 3. **Explicit fault injection** - 16+ fault types with configurable probability
 4. **Deterministic network** - `SimNetwork` with partitions, delays, reordering
+5. **Deterministic task scheduling** - madsim provides consistent task interleaving
+
+### Deterministic Task Scheduling (Issue #15)
+
+The `madsim` feature is **enabled by default** for `kelpie-dst`, ensuring true deterministic
+task scheduling. Unlike tokio's scheduler (which is non-deterministic), madsim guarantees:
+
+- **Same seed = same task interleaving order**
+- Race conditions can be reliably reproduced
+- `DST_SEED=12345 cargo test -p kelpie-dst` produces identical results every time
 
 ### Running DST Tests
 
@@ -372,23 +382,58 @@ cargo test -p kelpie-dst
 # Reproduce specific run
 DST_SEED=12345 cargo test -p kelpie-dst
 
+# Verify determinism across runs
+DST_SEED=12345 cargo test -p kelpie-dst test_name -- --nocapture > run1.txt
+DST_SEED=12345 cargo test -p kelpie-dst test_name -- --nocapture > run2.txt
+diff run1.txt run2.txt  # Should be identical
+
 # Stress test (longer, more iterations)
 cargo test -p kelpie-dst stress --release -- --ignored
 ```
 
 ### Writing DST Tests
 
+**Recommended pattern: Use `#[madsim::test]` for deterministic scheduling:**
+
+```rust
+use std::time::Duration;
+
+#[madsim::test]
+async fn test_concurrent_operations() {
+    // Spawn tasks - ordering is deterministic based on sleep durations!
+    let handle1 = madsim::task::spawn(async {
+        madsim::time::sleep(Duration::from_millis(10)).await;
+        "task1"
+    });
+
+    let handle2 = madsim::task::spawn(async {
+        madsim::time::sleep(Duration::from_millis(5)).await;
+        "task2"
+    });
+
+    // task2 completes first (deterministically!) due to shorter sleep
+    let result2 = handle2.await.unwrap();
+    let result1 = handle1.await.unwrap();
+
+    assert_eq!(result2, "task2");
+    assert_eq!(result1, "task1");
+}
+```
+
+**Using the Simulation harness with fault injection:**
+
 ```rust
 use kelpie_dst::{Simulation, SimConfig, FaultConfig, FaultType};
 
-#[test]
-fn test_actor_under_faults() {
+#[madsim::test]
+async fn test_actor_under_faults() {
     let config = SimConfig::from_env_or_random();
 
+    // Use run_async() when inside #[madsim::test]
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.1))
         .with_fault(FaultConfig::new(FaultType::NetworkPacketLoss, 0.05))
-        .run(|env| async move {
+        .run_async(|env| async move {
             // Test logic using env.storage, env.network, env.clock
             env.storage.write(b"key", b"value").await?;
 
@@ -400,7 +445,8 @@ fn test_actor_under_faults() {
             assert_eq!(value, Some(Bytes::from("value")));
 
             Ok(())
-        });
+        })
+        .await;
 
     assert!(result.is_ok());
 }

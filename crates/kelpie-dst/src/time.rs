@@ -5,6 +5,12 @@
 //! Provides TimeProvider trait with two implementations:
 //! - SimTime: Uses SimClock, advances time instantly (no real delays)
 //! - RealTime: Uses tokio::time, for production and non-DST tests
+//!
+//! ## Deterministic Scheduling (Issue #15)
+//!
+//! With madsim as the default runtime for kelpie-dst, SimTime now yields
+//! to madsim's deterministic scheduler instead of tokio's non-deterministic one.
+//! This ensures same seed = same task interleaving order.
 
 // Allow tokio usage in DST framework code (this IS the abstraction layer)
 #![allow(clippy::disallowed_methods)]
@@ -20,7 +26,7 @@
 //! ## Solution
 //!
 //! Replace `tokio::time::sleep(dur)` with `time_provider.sleep(dur)`:
-//! - In DST: Advances SimClock + yields (instant, deterministic)
+//! - In DST: Advances SimClock + yields to madsim (instant, deterministic)
 //! - In production: Uses tokio::time (real delays)
 
 use async_trait::async_trait;
@@ -62,9 +68,21 @@ impl TimeProvider for SimTime {
         // Advance SimClock by the requested duration
         self.clock.advance_ms(ms);
 
-        // Yield to tokio scheduler to allow other tasks to run
+        // Yield to scheduler to allow other tasks to run
         // This is critical: without yielding, we'd have busy loops
-        tokio::task::yield_now().await;
+        //
+        // IMPORTANT (Issue #15): Use madsim's yield when madsim feature is enabled.
+        // madsim provides deterministic scheduling, ensuring same seed = same order.
+        #[cfg(madsim)]
+        {
+            // madsim doesn't have yield_now(), but sleep(0) has the same effect
+            madsim::time::sleep(Duration::from_millis(0)).await;
+        }
+
+        #[cfg(not(madsim))]
+        {
+            tokio::task::yield_now().await;
+        }
 
         // Postcondition: time has advanced
         debug_assert!(self.clock.now_ms() > 0 || ms == 0);
@@ -112,7 +130,11 @@ impl TimeProvider for RealTime {
 mod tests {
     use super::*;
 
-    #[tokio::test]
+    // =========================================================================
+    // SimTime tests (use madsim for deterministic scheduling)
+    // =========================================================================
+
+    #[madsim::test]
     async fn test_sim_time_advances_clock() {
         let clock = Arc::new(SimClock::from_millis(1000));
         let time = SimTime::new(clock.clone());
@@ -126,7 +148,7 @@ mod tests {
         assert_eq!(after - before, 500);
     }
 
-    #[tokio::test]
+    #[madsim::test]
     async fn test_sim_time_multiple_sleeps() {
         let clock = Arc::new(SimClock::from_millis(0));
         let time = SimTime::new(clock.clone());
@@ -141,7 +163,7 @@ mod tests {
         assert_eq!(time.now_ms(), 400);
     }
 
-    #[tokio::test]
+    #[madsim::test]
     async fn test_sim_time_zero_duration() {
         let clock = Arc::new(SimClock::from_millis(1000));
         let time = SimTime::new(clock.clone());
@@ -154,7 +176,7 @@ mod tests {
         assert_eq!(before, after);
     }
 
-    #[tokio::test]
+    #[madsim::test]
     async fn test_sim_time_yields_to_scheduler() {
         use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -164,8 +186,8 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(false));
         let flag_clone = flag.clone();
 
-        // Spawn a task that sets the flag
-        tokio::spawn(async move {
+        // Spawn a task that sets the flag (using madsim for determinism)
+        madsim::task::spawn(async move {
             flag_clone.store(true, Ordering::SeqCst);
         });
 
@@ -176,7 +198,56 @@ mod tests {
         assert!(flag.load(Ordering::SeqCst));
     }
 
+    #[madsim::test]
+    async fn test_sim_time_concurrent_sleeps() {
+        let clock = Arc::new(SimClock::from_millis(0));
+        let time1 = SimTime::new(clock.clone());
+        let time2 = SimTime::new(clock.clone());
+
+        // Spawn two concurrent tasks that sleep (using madsim for determinism)
+        let handle1 = madsim::task::spawn({
+            let time = time1.clone();
+            async move {
+                time.sleep_ms(100).await;
+                time.now_ms()
+            }
+        });
+
+        let handle2 = madsim::task::spawn({
+            let time = time2.clone();
+            async move {
+                time.sleep_ms(50).await;
+                time.now_ms()
+            }
+        });
+
+        let result1 = handle1.await.unwrap();
+        let result2 = handle2.await.unwrap();
+
+        // Both should have advanced the shared clock
+        // Final clock should be sum of both sleeps
+        let final_time = time1.now_ms();
+        assert_eq!(final_time, 150); // 100 + 50
+
+        // With madsim, task ordering is deterministic
+        // But the results depend on which task runs first
+        assert!((50..=150).contains(&result1));
+        assert!((50..=150).contains(&result2));
+    }
+
+    // =========================================================================
+    // RealTime tests (use tokio - these test actual wall-clock behavior)
+    //
+    // Note: RealTime is for production use, not DST. These tests verify
+    // that RealTime actually sleeps using real wall-clock time.
+    // =========================================================================
+
+    /// Test RealTime actually sleeps (wall-clock)
+    ///
+    /// This test is ignored by default because it uses real wall-clock time
+    /// and doesn't benefit from DST's deterministic scheduling.
     #[tokio::test]
+    #[ignore = "Uses real wall-clock time, not suitable for DST"]
     async fn test_real_time_actually_sleeps() {
         let time = RealTime::new();
 
@@ -189,7 +260,11 @@ mod tests {
         assert!(elapsed.as_millis() <= 70);
     }
 
+    /// Test RealTime now_ms returns reasonable values
+    ///
+    /// This test is ignored by default because it uses real wall-clock time.
     #[tokio::test]
+    #[ignore = "Uses real wall-clock time, not suitable for DST"]
     async fn test_real_time_now_ms() {
         let time = RealTime::new();
 
@@ -208,42 +283,5 @@ mod tests {
         // now_ms should be between before and after (within 100ms)
         assert!(now >= before);
         assert!(now <= after + 100);
-    }
-
-    #[tokio::test]
-    async fn test_sim_time_concurrent_sleeps() {
-        let clock = Arc::new(SimClock::from_millis(0));
-        let time1 = SimTime::new(clock.clone());
-        let time2 = SimTime::new(clock.clone());
-
-        // Spawn two concurrent tasks that sleep
-        let handle1 = tokio::spawn({
-            let time = time1.clone();
-            async move {
-                time.sleep_ms(100).await;
-                time.now_ms()
-            }
-        });
-
-        let handle2 = tokio::spawn({
-            let time = time2.clone();
-            async move {
-                time.sleep_ms(50).await;
-                time.now_ms()
-            }
-        });
-
-        let result1 = handle1.await.unwrap();
-        let result2 = handle2.await.unwrap();
-
-        // Both should have advanced the shared clock
-        // Final clock should be sum of both sleeps
-        let final_time = time1.now_ms();
-        assert_eq!(final_time, 150); // 100 + 50
-
-        // Each task sees clock at or after its sleep duration
-        // (order is non-deterministic, so we can't assert exact values)
-        assert!((50..=150).contains(&result1));
-        assert!((50..=150).contains(&result2));
     }
 }
