@@ -20,10 +20,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 // =============================================================================
-// Test Clock (uses AtomicU64 for reliable synchronous reads)
+// Test Clock
 // =============================================================================
 
-/// A test clock using AtomicU64 for reliable synchronous reads
+/// A test clock with manually controllable time.
+///
+/// Uses AtomicU64 for thread-safe reads across concurrent tasks.
+/// SeqCst ordering ensures all tasks see consistent time values.
 #[derive(Debug)]
 struct TestClock {
     time_ms: AtomicU64,

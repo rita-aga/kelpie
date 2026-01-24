@@ -84,8 +84,9 @@ impl ActivationProtocol {
             }
         };
 
-        // Simulate some processing time (allows interleaving)
-        // In a real system, this is where network latency would occur
+        // Simulate processing time between read and commit phases.
+        // This yield point allows task interleaving to test race conditions.
+        // Note: madsim deterministically schedules tasks, making races reproducible.
         tokio::task::yield_now().await;
 
         // Phase 2: CommitClaim - atomic commit with OCC check
