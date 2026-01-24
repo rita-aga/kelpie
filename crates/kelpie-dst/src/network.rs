@@ -258,6 +258,31 @@ impl SimNetwork {
         tracing::info!("All network partitions healed");
     }
 
+    /// Partition two groups of nodes completely
+    ///
+    /// All nodes in group_a become isolated from all nodes in group_b.
+    /// This creates bidirectional partitions between every pair.
+    pub async fn partition_group(&self, group_a: &[&str], group_b: &[&str]) {
+        for a in group_a {
+            for b in group_b {
+                self.partition(a, b).await;
+            }
+        }
+        tracing::info!(
+            group_a = ?group_a,
+            group_b = ?group_b,
+            "Network group partition created"
+        );
+    }
+
+    /// Check if there's a one-way partition from one node to another
+    ///
+    /// This checks ONLY one-way partitions, not bidirectional ones.
+    pub async fn is_one_way_partitioned(&self, from: &str, to: &str) -> bool {
+        let partitions = self.one_way_partitions.read().await;
+        partitions.contains(&(from.to_string(), to.to_string()))
+    }
+
     /// Check if messages from `from` to `to` are blocked by any partition
     ///
     /// This checks both bidirectional and one-way partitions.
@@ -589,5 +614,51 @@ mod tests {
 
         assert!(network.send("node-1", "node-2", Bytes::from("test")).await);
         assert!(network.send("node-2", "node-1", Bytes::from("test")).await);
+    }
+
+    #[tokio::test]
+    async fn test_sim_network_partition_group() {
+        let clock = SimClock::from_millis(0);
+        let network = create_test_network(clock);
+
+        // Partition [node-1, node-2] from [node-3, node-4]
+        network
+            .partition_group(&["node-1", "node-2"], &["node-3", "node-4"])
+            .await;
+
+        // Messages within groups should work
+        assert!(
+            network
+                .send("node-1", "node-2", Bytes::from("intra-1"))
+                .await
+        );
+        assert!(
+            network
+                .send("node-3", "node-4", Bytes::from("intra-2"))
+                .await
+        );
+
+        // Messages across groups should fail
+        assert!(!network.send("node-1", "node-3", Bytes::from("cross")).await);
+        assert!(!network.send("node-2", "node-4", Bytes::from("cross")).await);
+        assert!(!network.send("node-3", "node-1", Bytes::from("cross")).await);
+        assert!(!network.send("node-4", "node-2", Bytes::from("cross")).await);
+    }
+
+    #[tokio::test]
+    async fn test_sim_network_is_one_way_partitioned() {
+        let clock = SimClock::from_millis(0);
+        let network = create_test_network(clock);
+
+        // Create one-way partition: node-1 -> node-2 blocked
+        network.partition_one_way("node-1", "node-2").await;
+
+        // Check one-way partition detection
+        assert!(network.is_one_way_partitioned("node-1", "node-2").await);
+        assert!(!network.is_one_way_partitioned("node-2", "node-1").await);
+
+        // Heal one-way partition
+        network.heal_one_way("node-1", "node-2").await;
+        assert!(!network.is_one_way_partitioned("node-1", "node-2").await);
     }
 }
