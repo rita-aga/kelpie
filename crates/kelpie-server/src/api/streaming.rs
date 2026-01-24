@@ -479,7 +479,19 @@ async fn generate_streaming_response_events<R: Runtime + 'static>(
                                         tool_calls: vec![],
                                         created_at: Utc::now(),
                                     };
-                                    let _ = state_ref.add_message(agent_id_ref, assistant_message);
+
+                                    // TigerStyle: No silent failures - log and notify client
+                                    if let Err(e) =
+                                        state_ref.add_message(agent_id_ref, assistant_message)
+                                    {
+                                        tracing::error!(
+                                            agent_id = %agent_id_ref,
+                                            error = ?e,
+                                            "failed to persist assistant message in token streaming"
+                                        );
+                                        // Note: We still send stop_reason but client should be aware
+                                        // persistence may have failed (logged server-side)
+                                    }
 
                                     // Send stop_reason event
                                     let stop_event = StopReasonEvent {

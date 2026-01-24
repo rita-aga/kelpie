@@ -144,6 +144,9 @@ Build from foundation to formal verification in two major stages:
 | 2026-01-22 | Hybrid audit approach | Balance thoroughness with progress | Tracking complexity |
 | 2026-01-22 | Critical paths bar for Stage 2 | Pragmatic path to formal verification | Non-critical gaps |
 | 2026-01-22 | TLA+ for distributed core only | Highest value targets | Limited scope |
+| 2026-01-23 | Add Phase 1.5 for invariants | Test quality audit revealed no invariant verification; invariants serve dual purpose (test quality + TLA+ input) | Additional phase before fixes |
+| 2026-01-23 | Invariants in Rust, not just docs | Code-level invariants can be used by test helpers; documentation alone isn't enforceable | Implementation effort |
+| 2026-01-23 | 6 core invariants first | Cover critical paths identified in examination; can add more later | Limited initial scope |
 
 ---
 
@@ -217,13 +220,81 @@ repl_load(pattern="**/*_chaos.rs", var_name="chaos_tests")
     - [ ] Cluster coordination
   - Document gaps
 
-- [ ] **1.4: Assess Test Quality**
-  - Do tests use `DST_SEED` for reproducibility?
-  - Do tests inject faults?
-  - Do tests verify invariants (not just "doesn't crash")?
-  - Rate each test: Real DST / Partial DST / Fake DST
+- [x] **1.4: Assess Test Quality** ✅ COMPLETE (2026-01-23)
+  - Do tests use `DST_SEED` for reproducibility? **Yes, framework supports it**
+  - Do tests inject faults? **Yes, 40+ fault types**
+  - Do tests verify invariants (not just "doesn't crash")? **NO - CRITICAL GAP**
+  - Rate each test: Real DST / Partial DST / Fake DST **See findings below**
+
+**Findings from Phase 1.4 (Critical Review 2026-01-23):**
+
+| Finding | Severity | Details |
+|---------|----------|---------|
+| Tests accept success+failure | HIGH | `match { Ok => ..., Err => continue }` pattern means tests "pass" regardless of behavior |
+| ~68% smoke tests | MEDIUM | Most tests only verify `response.status() == 200`, not data correctness |
+| No invariant verification | HIGH | Tests don't verify "if create succeeded, get must work" type invariants |
+| No fault-type distinction | MEDIUM | Can't tell if failure was expected (fault injected) vs bug |
+
+**Root Cause:** Tests verify "doesn't crash" not "behaves correctly under faults"
 
 **Deliverable:** `.kelpie-index/audits/dst_coverage_audit.md`
+
+---
+
+#### Phase 1.5: Define System Invariants [NEW]
+
+**Goal:** Define invariants that tests MUST verify. These become the foundation for TLA+ specs in Phase 5.
+
+**Why This Phase:**
+- Phase 1.4 found tests don't verify invariants
+- Examination (MAP.md/ISSUES.md) found 17 component issues
+- Connection: Tests didn't catch issues because no invariants defined
+- Invariants serve dual purpose: (1) fix test quality, (2) input to TLA+ specs
+
+**Approach:** Create invariant definitions and test helpers.
+
+- [ ] **1.5.1: Create Invariant Definitions**
+  - Create `crates/kelpie-server/src/invariants.rs`
+  - Define invariants as constants with documentation
+  - Map each invariant to examination issues it would catch
+
+- [ ] **1.5.2: Define Core Invariants**
+
+  | Invariant | Description | Would Catch (from ISSUES.md) |
+  |-----------|-------------|------------------------------|
+  | `SINGLE_ACTIVATION` | At most one active instance per ActorId | [HIGH] Distributed single-activation not enforced |
+  | `CREATE_GET_CONSISTENCY` | If create returns Ok(agent), get(agent.id) must succeed | BUG-001 pattern (fixed) |
+  | `DELETE_GET_CONSISTENCY` | If delete returns Ok, get must return NotFound | Delete atomicity issues |
+  | `MESSAGE_DURABILITY` | Committed messages survive crashes | Message loss under faults |
+  | `TRANSACTION_ATOMICITY` | Partial writes never visible | [MEDIUM] Range scans not transactional |
+  | `BLOCK_ATOMICITY` | Memory block updates are atomic | Partial block updates |
+
+- [ ] **1.5.3: Create Test Helpers**
+  - Create `crates/kelpie-server/tests/common/invariants.rs`
+  - `InvariantTracker` - tracks state for verification
+  - `assert_create_get_consistent()` - verify after create
+  - `assert_delete_get_consistent()` - verify after delete
+  - `verify_all_invariants()` - comprehensive check
+
+- [ ] **1.5.4: Create Fault-Aware Macros**
+  - `assert_fails_under_fault!` - expected failure when fault active
+  - `assert_no_corruption!` - operation may fail but no state corruption
+  - Distinguish expected transient failures from bugs
+
+- [ ] **1.5.5: Document Invariant-to-TLA+ Mapping**
+  - Create `.kelpie-index/specs/invariant-tla-mapping.md`
+  - Map each Rust invariant to future TLA+ invariant
+  - This bridges Phase 1.5 → Phase 5
+
+**Deliverable:**
+- `crates/kelpie-server/src/invariants.rs`
+- `crates/kelpie-server/tests/common/invariants.rs`
+- `.kelpie-index/specs/invariant-tla-mapping.md`
+
+**Exit Criteria:**
+- [ ] All 6 core invariants defined with documentation
+- [ ] Test helpers compile and have unit tests
+- [ ] Mapping document connects to Phase 5 TLA+ specs
 
 ---
 
@@ -313,9 +384,9 @@ repl_load(pattern="**/*_chaos.rs", var_name="chaos_tests")
 
 #### Phase 4: Foundation Fixes
 
-**Goal:** Fix issues identified in Phases 1-3 to achieve known-good baseline.
+**Goal:** Fix issues identified in Phases 1-3 and refactor tests to use invariants from Phase 1.5.
 
-**Prerequisites:** Phases 1-3 complete, issues documented.
+**Prerequisites:** Phases 1-3 complete, Phase 1.5 invariants defined.
 
 - [ ] **4.1: Critical DST Gaps**
   - Add DST tests for uncovered critical paths
@@ -327,9 +398,44 @@ repl_load(pattern="**/*_chaos.rs", var_name="chaos_tests")
 
 - [ ] **4.3: ADR Updates**
   - Update stale ADRs to match implementation
-  - Create missing ADRs for undocumented decisions
 
-- [ ] **4.4: Code Quality Fixes**
+- [ ] **4.5: Refactor Tests to Use Invariants** [NEW - from Phase 1.4 findings]
+  - Priority 1: Refactor 5 key test files as proof of concept
+    - `agent_service_dst.rs`
+    - `delete_atomicity_test.rs`
+    - `agent_streaming_dst.rs`
+    - `memory_tools_real_dst.rs`
+    - `full_lifecycle_dst.rs`
+  - Priority 2: Refactor remaining ~35 test files
+  - Transform from smoke tests to invariant verification:
+    ```rust
+    // OLD: Smoke test
+    match service.create_agent(request).await {
+        Ok(_) => {},
+        Err(_) => continue,  // Hides bugs!
+    }
+
+    // NEW: Invariant verification
+    match service.create_agent(request).await {
+        Ok(agent) => {
+            tracker.record_create(&agent);
+            assert_create_get_consistent(&service, &agent).await?;
+        },
+        Err(e) => println!("Expected failure under faults: {}", e),
+    }
+    let violations = tracker.verify_all(&service).await;
+    assert!(violations.is_empty());
+    ```
+
+- [ ] **4.6: Add Fault-Type Distinction** [NEW]
+  - Use `assert_fails_under_fault!` for expected failures
+  - Use `assert_no_corruption!` for graceful degradation
+  - Tests should distinguish "expected transient failure" from "bug"
+
+- [ ] **4.7: Create Missing ADRs**
+  - Create ADRs for undocumented decisions identified in Phase 2
+
+- [ ] **4.8: Code Quality Fixes**
   - Remove dead code
   - Fix stubs in production paths
   - Replace unwraps with proper error handling
@@ -349,6 +455,9 @@ repl_load(pattern="**/*_chaos.rs", var_name="chaos_tests")
 - [ ] No fake DST in test suite
 - [ ] No stubs in production code paths
 - [ ] All tests pass
+- [ ] **[NEW] Core invariants defined in `invariants.rs`**
+- [ ] **[NEW] At least 5 test files refactored to use invariant verification**
+- [ ] **[NEW] Invariant-to-TLA+ mapping documented**
 
 ---
 
@@ -361,6 +470,22 @@ repl_load(pattern="**/*_chaos.rs", var_name="chaos_tests")
 **Goal:** Create formal TLA+ specifications for distributed core components.
 
 **Reference:** VDE paper section on TLA+ integration.
+
+**Input from Phase 1.5:** The invariants defined in `invariants.rs` are formalized here as TLA+ specs.
+
+| Phase 1.5 Rust Invariant | Phase 5 TLA+ Invariant | Spec File |
+|--------------------------|------------------------|-----------|
+| `SINGLE_ACTIVATION` | SingleActivation | ActorLifecycle.tla |
+| `CREATE_GET_CONSISTENCY` | Linearizability | ActorStorage.tla |
+| `DELETE_GET_CONSISTENCY` | Linearizability | ActorStorage.tla |
+| `MESSAGE_DURABILITY` | NoLostMessages | ActorLifecycle.tla |
+| `TRANSACTION_ATOMICITY` | Isolation | ActorStorage.tla |
+| `BLOCK_ATOMICITY` | Durability | ActorStorage.tla |
+
+This mapping ensures:
+1. DST tests verify the same invariants as TLA+ specs
+2. Bugs caught by TLA+ model checker have corresponding DST regression tests
+3. Single source of truth for system correctness properties
 
 - [ ] **5.1: Actor Lifecycle Spec** (`specs/tla/ActorLifecycle.tla`)
   - States: Inactive, Activating, Active, Deactivating
@@ -507,7 +632,8 @@ New Feature → Write ADR → Generate TLA+ → Generate DST → Implement → V
 - [x] **Quick Decision Log maintained**
 
 ### Stage 1 Checkpoints
-- [ ] Phase 1: DST Coverage Audit complete
+- [x] Phase 1: DST Coverage Audit complete (1.4 done 2026-01-23)
+- [ ] Phase 1.5: Define System Invariants [NEW]
 - [ ] Phase 2: ADR Audit complete
 - [ ] Phase 3: Code Quality Audit complete
 - [ ] Phase 4: Foundation Fixes complete
@@ -599,7 +725,103 @@ cargo fmt
 
 ## Findings
 
-[Key discoveries from audits will be documented here]
+### Thorough Examination Complete (2026-01-23)
+
+**Total Tests: 208+ passing across workspace**
+- kelpie-core: 27 tests ✅
+- kelpie-runtime: 23 tests ✅
+- kelpie-dst: 70 tests ✅
+- kelpie-storage: 9 tests ✅ (8 ignored - require FDB cluster)
+- kelpie-vm: 36 tests ✅
+- kelpie-registry: 43 tests ✅
+- kelpie-server: 70+ DST tests ✅
+- kelpie-wasm: 0 tests (stub only)
+- kelpie-agent: 0 tests (stub only)
+
+### What Kelpie CAN Currently Do
+
+| Capability | Status | Evidence |
+|------------|--------|----------|
+| **Actor Lifecycle** | ✅ Working | 23 runtime tests, activation/deactivation/invocation |
+| **Actor State Persistence** | ✅ Working | KV store integration, JSON serialization |
+| **Transactional KV** | ✅ Working | Atomic commit, read-your-writes, rollback |
+| **DST Framework** | ✅ Working | 70 tests, 40+ fault types, deterministic simulation |
+| **Fault Injection** | ✅ Working | Storage, crash, network, time, sandbox faults |
+| **VM Abstraction** | ✅ Working | MockVm, Apple Vz, Firecracker backends |
+| **Snapshot/Restore** | ✅ Working | CRC32 checksums, architecture validation |
+| **Registry** | ✅ Working | Node management, placement, heartbeat tracking |
+| **Agent Server** | ✅ Working | REST API, LLM integration, tools, DST coverage |
+| **Agent Types** | ✅ Working | MemGPT, LettaV1, React with tool filtering |
+| **Teleport Types** | ✅ Working | Package encode/decode, architecture checks |
+
+### What Kelpie CANNOT Yet Do
+
+| Capability | Status | Blocker |
+|------------|--------|---------|
+| **Distributed Single-Activation** | ❌ Missing | Cluster not integrated with runtime |
+| **Multi-Node Deployment** | ❌ Missing | No distributed coordination |
+| **WASM Actors** | ❌ Stub | kelpie-wasm is placeholder only |
+| **FDB in CI** | ❌ External | Requires running FDB cluster |
+| **Formal Verification** | ❌ Not Started | No TLA+ specs yet |
+
+### Issues Found (17 total)
+
+**High (1):**
+- Cluster coordination not integrated with runtime - distributed single-activation not enforced
+
+**Medium (6):**
+- No distributed lock for single-activation (runtime)
+- FDB tests require external cluster (storage)
+- No tests for kelpie-cluster
+- PlacementStrategy algorithms not implemented
+- No actual network heartbeat sending
+- LLM API key required for production
+
+**Low (10):**
+- Various minor gaps documented in ISSUES.md
+
+### ADRs Status
+
+**24 ADRs documented** covering:
+- Core architecture (001-005): Virtual actors, FDB, WASM, linearizability, DST
+- Compatibility (006): Letta-code compatibility
+- Implementation (007-020): Storage, snapshots, tools, agent types, VM backends
+- Most are **Accepted** status and appear current with implementation
+
+### DST Quality Assessment
+
+**Real DST (deterministic):**
+- SimClock - explicit time control ✅
+- DeterministicRng - seeded, reproducible ✅
+- SimStorage - fault injection, transactions ✅
+- SimNetwork - partitions, latency ✅
+- FaultInjector - 40+ fault types ✅
+- Simulation harness - determinism verification ✅
+
+**Partial DST:**
+- SimTeleportStorage - ignores RNG parameter
+- SimVm - synthetic exec output, not fully deterministic
+
+### Path to Formal Verification
+
+**Foundation Status:**
+- ✅ DST framework exists and is real DST
+- ✅ 208+ tests passing
+- ✅ ADRs are documented and mostly current
+- ⚠️ Single-node only (no distributed coordination)
+- ⚠️ 17 issues to address (1 high, 6 medium)
+
+**Ready for Stage 2?**
+Not yet. The high-priority issue (distributed single-activation) must be resolved first. However, single-node formal verification could proceed:
+1. Actor lifecycle TLA+ spec - feasible now
+2. Storage transaction TLA+ spec - feasible now
+3. Cluster coordination TLA+ spec - need implementation first
+
+**Recommended Next Steps:**
+1. Fix DST determinism gaps (SimTeleportStorage RNG)
+2. Add kelpie-cluster tests
+3. Create actor lifecycle TLA+ spec (single-node first)
+4. Integrate cluster with runtime for distributed guarantee
 
 ---
 
@@ -608,22 +830,34 @@ cargo fmt
 ### Works Now ✅
 | What | How to Try | Expected Result |
 |------|------------|-----------------|
-| MCP Server | `cd tools/mcp-kelpie-python && uv run mcp-kelpie` | Server starts, 31 tools available |
+| MCP Server | `cd kelpie-mcp && uv run --prerelease=allow mcp-kelpie` | Server starts, 37 tools available |
 | Structural Indexes | `index_refresh` then `index_status` | Indexes built and queryable |
 | RLM Analysis | `repl_load` + `repl_sub_llm` | Can analyze code with sub-LLM |
+| Core Tests | `cargo test -p kelpie-core` | 27 tests pass |
+| Runtime Tests | `cargo test -p kelpie-runtime` | 23 tests pass |
+| DST Tests | `cargo test -p kelpie-dst --lib` | 70 tests pass |
+| Storage Tests | `cargo test -p kelpie-storage` | 9 pass, 8 ignored (FDB) |
+| VM Tests | `cargo test -p kelpie-vm` | 36 tests pass |
+| Registry Tests | `cargo test -p kelpie-registry` | 43 tests pass |
+| Full Workspace | `cargo test --workspace` | 208+ tests pass |
 
 ### Doesn't Work Yet ❌
 | What | Why | When Expected |
 |------|-----|---------------|
-| DST coverage visibility | Need Phase 1 audit | After Phase 1 |
-| TLA+ specs | Need foundation first | After Phase 4 |
+| Distributed single-activation | Cluster not integrated with runtime | Phase 4 |
+| FDB tests in CI | Require external FDB cluster | External dependency |
+| TLA+ specs | Need to write them | Phase 5 |
 | Verification pyramid | Need TLA+ first | After Phase 5 |
+| WASM actors | kelpie-wasm is stub only | P3 priority |
 
 ### Known Limitations ⚠️
+- Single-node only (distributed coordination not integrated)
+- FDB tests require external cluster (8 tests ignored)
+- LLM API key required for production server
+- kelpie-wasm and kelpie-agent are stubs only
 - Stage 2 depends on Stage 1 completion
 - TLA+ tools need to be installed (`brew install tla-plus`)
 - Kani is optional (requires separate installation)
-- Production telemetry (Phase 7) may be deferred if not yet deployed
 
 ---
 

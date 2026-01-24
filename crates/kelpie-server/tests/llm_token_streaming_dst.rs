@@ -94,7 +94,7 @@ fn create_service<R: Runtime + 'static>(
         dispatcher.run().await;
     });
 
-    Ok(AgentService::new(handle))
+    Ok(AgentService::new_without_wal(handle))
 }
 
 /// Test basic token streaming
@@ -126,6 +126,8 @@ async fn test_dst_llm_token_streaming_basic() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -213,6 +215,8 @@ async fn test_dst_llm_streaming_with_network_delay() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -277,6 +281,8 @@ async fn test_dst_llm_streaming_cancellation() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -338,6 +344,8 @@ async fn test_dst_llm_streaming_with_tool_calls() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -413,6 +421,8 @@ async fn test_dst_llm_streaming_concurrent() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 };
                 let agent = service.create_agent(request).await?;
                 agent_ids.push(agent.id);
@@ -508,6 +518,8 @@ async fn test_dst_llm_streaming_with_comprehensive_faults() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 

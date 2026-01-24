@@ -48,6 +48,8 @@ async fn test_dst_service_create_agent() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
 
             let agent_state = service.create_agent(request).await?;
@@ -99,6 +101,8 @@ async fn test_dst_service_send_message() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -157,6 +161,8 @@ async fn test_dst_service_get_agent() {
                 tags: vec!["test".to_string()],
                 metadata: serde_json::json!({"key": "value"}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let created = service.create_agent(request).await?;
 
@@ -211,6 +217,8 @@ async fn test_dst_service_update_agent() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -269,6 +277,8 @@ async fn test_dst_service_delete_agent() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -335,6 +345,8 @@ async fn test_dst_service_dispatcher_failure() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 };
 
                 match service.create_agent(request).await {
@@ -508,5 +520,5 @@ fn create_service<R: Runtime + 'static>(
     });
 
     // Create service
-    Ok(AgentService::new(handle))
+    Ok(AgentService::new_without_wal(handle))
 }

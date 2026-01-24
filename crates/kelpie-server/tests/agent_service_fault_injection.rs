@@ -64,6 +64,8 @@ async fn test_create_agent_crash_after_write() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 };
 
                 // All creates should succeed since no storage writes during create
@@ -140,6 +142,8 @@ async fn test_delete_agent_atomicity_crash() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
                 };
                 // Ignore creation failures
                 if let Ok(agent) = service.create_agent(request).await {
@@ -230,6 +234,8 @@ async fn test_update_agent_concurrent_with_faults() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
 
             let agent = match service.create_agent(request).await {
@@ -344,7 +350,9 @@ async fn test_agent_state_corruption() {
                 tool_ids: vec![],
                 tags: vec![],
                 metadata: serde_json::json!({"key": "value"}),
-                project_id: None,            };
+                project_id: None,
+                user_id: None,
+                org_id: None,            };
 
             let agent = match service.create_agent(request).await {
                 Ok(a) => a,
@@ -467,6 +475,8 @@ async fn test_send_message_crash_after_llm() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
 
             let agent = match service.create_agent(request).await {
@@ -668,5 +678,5 @@ fn create_service(sim_env: &SimEnvironment) -> Result<AgentService<kelpie_core::
     let _dispatcher_handle = kelpie_core::current_runtime().spawn(async move {
         dispatcher.run().await;
     });
-    Ok(AgentService::new(handle))
+    Ok(AgentService::new_without_wal(handle))
 }

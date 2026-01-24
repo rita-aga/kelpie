@@ -111,6 +111,8 @@ async fn test_actor_writes_granular_keys_on_deactivate() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
 
             let payload = serde_json::to_vec(&request).unwrap();
@@ -214,6 +216,8 @@ async fn test_empty_agent_writes_zero_count() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
 
             let payload = serde_json::to_vec(&request).unwrap();

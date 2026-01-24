@@ -147,7 +147,7 @@ fn create_service<R: Runtime + 'static>(
         dispatcher.run().await;
     });
 
-    Ok(AgentService::new(handle))
+    Ok(AgentService::new_without_wal(handle))
 }
 
 /// Test basic message handling: send message, get LLM response
@@ -185,6 +185,8 @@ async fn test_dst_agent_message_basic() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -274,6 +276,8 @@ async fn test_dst_agent_message_with_tool_call() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -347,6 +351,8 @@ async fn test_dst_agent_message_with_storage_fault() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -417,6 +423,8 @@ async fn test_dst_agent_message_history() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -496,6 +504,8 @@ async fn test_dst_agent_message_concurrent() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 };
                 let agent = service.create_agent(request).await?;
                 agent_ids.push(agent.id);

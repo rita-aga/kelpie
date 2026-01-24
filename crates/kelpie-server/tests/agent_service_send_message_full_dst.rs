@@ -147,7 +147,7 @@ fn create_service<R: Runtime + 'static>(
         dispatcher.run().await;
     });
 
-    Ok(AgentService::new(handle))
+    Ok(AgentService::new_without_wal(handle))
 }
 
 /// Test send_message_full returns typed HandleMessageFullResponse
@@ -179,6 +179,8 @@ async fn test_dst_send_message_full_typed_response() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -255,6 +257,8 @@ async fn test_dst_send_message_full_storage_faults() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -326,6 +330,8 @@ async fn test_dst_send_message_full_network_delay() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -381,6 +387,8 @@ async fn test_dst_send_message_full_concurrent_with_faults() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 };
                 let agent = service.create_agent(request).await?;
                 agent_ids.push(agent.id);

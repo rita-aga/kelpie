@@ -612,6 +612,8 @@ mod tests {
             tags: vec![],
             metadata: json!({}),
             project_id: None,
+            user_id: None,
+            org_id: None,
         })
     }
 

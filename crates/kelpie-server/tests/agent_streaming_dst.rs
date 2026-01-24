@@ -84,7 +84,7 @@ fn create_service<R: Runtime + 'static>(
         dispatcher.run().await;
     });
 
-    Ok(AgentService::new(handle))
+    Ok(AgentService::new_without_wal(handle))
 }
 
 /// Test basic streaming flow: tokens → tool_call → result → done
@@ -123,6 +123,8 @@ async fn test_dst_streaming_basic() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -234,6 +236,8 @@ async fn test_dst_streaming_with_network_delay() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -332,6 +336,8 @@ async fn test_dst_streaming_cancellation() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -426,6 +432,8 @@ async fn test_dst_streaming_backpressure() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -527,6 +535,8 @@ async fn test_dst_streaming_with_tool_calls() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 

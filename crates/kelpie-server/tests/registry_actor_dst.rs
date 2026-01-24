@@ -343,6 +343,8 @@ async fn test_agent_lifecycle_with_registry_dst() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
 
             let payload = serde_json::to_vec(&request).map_err(|e| Error::Internal {

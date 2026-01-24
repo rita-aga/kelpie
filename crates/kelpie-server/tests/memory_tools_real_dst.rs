@@ -60,6 +60,8 @@ fn create_test_agent(name: &str) -> AgentState {
         tags: vec![],
         metadata: json!({}),
         project_id: None,
+        user_id: None,
+        org_id: None,
     })
 }
 

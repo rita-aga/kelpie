@@ -113,6 +113,12 @@ pub struct CreateAgentRequest {
     pub description: Option<String>,
     /// Optional project ID (Phase 6: Projects)
     pub project_id: Option<String>,
+    /// User ID (Letta compatibility - owner of the agent)
+    #[serde(default)]
+    pub user_id: Option<String>,
+    /// Organization ID (Letta compatibility - org context)
+    #[serde(default)]
+    pub org_id: Option<String>,
     /// Initial memory blocks (inline creation)
     #[serde(default)]
     pub memory_blocks: Vec<CreateBlockRequest>,
@@ -139,6 +145,27 @@ fn default_embedding_model() -> Option<String> {
     std::env::var("KELPIE_DEFAULT_EMBEDDING_MODEL")
         .ok()
         .or_else(|| Some("openai/text-embedding-3-small".to_string()))
+}
+
+impl Default for CreateAgentRequest {
+    fn default() -> Self {
+        Self {
+            name: default_agent_name(),
+            agent_type: AgentType::default(),
+            model: None,
+            embedding: default_embedding_model(),
+            system: None,
+            description: None,
+            project_id: None,
+            user_id: None,
+            org_id: None,
+            memory_blocks: Vec::new(),
+            block_ids: Vec::new(),
+            tool_ids: Vec::new(),
+            tags: Vec::new(),
+            metadata: serde_json::Value::Null,
+        }
+    }
 }
 
 /// Request to update an agent
@@ -179,6 +206,12 @@ pub struct AgentState {
     pub description: Option<String>,
     /// Optional project ID (Phase 6: Projects)
     pub project_id: Option<String>,
+    /// User ID (Letta compatibility - owner of the agent)
+    #[serde(default)]
+    pub user_id: Option<String>,
+    /// Organization ID (Letta compatibility - org context)
+    #[serde(default)]
+    pub org_id: Option<String>,
     /// Memory blocks
     pub blocks: Vec<Block>,
     /// Attached tool IDs
@@ -214,6 +247,8 @@ impl AgentState {
             system: request.system,
             description: request.description,
             project_id: request.project_id,
+            user_id: request.user_id,
+            org_id: request.org_id,
             blocks,
             tool_ids: request.tool_ids,
             tags: request.tags,
@@ -1422,6 +1457,8 @@ mod tests {
             system: Some("You are a helpful assistant".to_string()),
             description: Some("A test agent".to_string()),
             project_id: None,
+            user_id: None,
+            org_id: None,
             memory_blocks: vec![CreateBlockRequest {
                 label: "persona".to_string(),
                 value: "I am a helpful AI.".to_string(),
@@ -1450,6 +1487,8 @@ mod tests {
             system: None,
             description: None,
             project_id: None,
+            user_id: None,
+            org_id: None,
             memory_blocks: vec![],
             block_ids: vec![],
             tool_ids: vec![],

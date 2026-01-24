@@ -74,7 +74,7 @@ async fn create_agent_service<R: Runtime + 'static>(runtime: R) -> Result<AgentS
         dispatcher.run().await;
     });
 
-    Ok(AgentService::new(handle))
+    Ok(AgentService::new_without_wal(handle))
 }
 
 /// Test AgentService with CurrentRuntime (production)
@@ -102,6 +102,8 @@ async fn test_agent_service_tokio_runtime() {
         tags: vec![],
         metadata: serde_json::json!({}),
         project_id: None,
+        user_id: None,
+        org_id: None,
     };
 
     let agent_state = service.create_agent(request).await.unwrap();
@@ -139,6 +141,8 @@ async fn test_agent_service_madsim_runtime() {
         tags: vec![],
         metadata: serde_json::json!({}),
         project_id: None,
+        user_id: None,
+        org_id: None,
     };
 
     let agent_state = service.create_agent(request).await.unwrap();

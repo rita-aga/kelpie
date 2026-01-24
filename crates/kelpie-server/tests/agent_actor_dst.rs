@@ -209,6 +209,8 @@ async fn test_dst_agent_actor_activation_basic() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
 
             // Activate actor by invoking create
@@ -264,6 +266,8 @@ async fn test_dst_agent_actor_activation_with_storage_fail() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 };
 
                 match dispatcher
@@ -329,6 +333,8 @@ async fn test_dst_agent_actor_deactivation_persists_state() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             dispatcher
                 .invoke(actor_id.clone(), "create".to_string(), to_bytes(&request)?)
@@ -386,6 +392,8 @@ async fn test_dst_agent_actor_deactivation_with_storage_fail() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 };
 
                 // Try to create (may fail with storage faults during activation reads)
@@ -471,6 +479,8 @@ async fn test_dst_agent_actor_crash_recovery() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             dispatcher
                 .invoke(actor_id.clone(), "create".to_string(), to_bytes(&request)?)
@@ -542,6 +552,8 @@ async fn test_dst_agent_memory_tools() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             dispatcher
                 .invoke(actor_id.clone(), "create".to_string(), to_bytes(&request)?)
@@ -623,6 +635,8 @@ async fn test_dst_agent_handle_message_basic() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             dispatcher
                 .invoke(actor_id.clone(), "create".to_string(), to_bytes(&request)?)
@@ -682,6 +696,8 @@ async fn test_dst_agent_handle_message_with_llm_timeout() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             dispatcher
                 .invoke(actor_id.clone(), "create".to_string(), to_bytes(&request)?)
@@ -759,6 +775,8 @@ async fn test_dst_agent_handle_message_with_llm_failure() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             dispatcher
                 .invoke(actor_id.clone(), "create".to_string(), to_bytes(&request)?)
@@ -839,6 +857,8 @@ async fn test_dst_agent_tool_execution() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             dispatcher
                 .invoke(actor_id.clone(), "create".to_string(), to_bytes(&request)?)

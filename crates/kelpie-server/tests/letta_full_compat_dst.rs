@@ -114,6 +114,8 @@ async fn test_dst_summarization_with_llm_faults() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 })
                 .await
                 .map_err(|e| Error::Internal {
@@ -411,6 +413,8 @@ async fn test_dst_conversation_search_date_with_faults() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 })
                 .await
                 .map_err(|e| Error::Internal {
@@ -580,6 +584,8 @@ async fn test_dst_export_with_message_read_fault() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 })
                 .await
                 .map_err(|e| Error::Internal {
