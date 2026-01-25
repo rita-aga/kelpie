@@ -115,7 +115,10 @@ async fn test_serializable_isolation() {
     }
 
     // Postconditions
-    assert!(committed_count <= 3, "cannot have more commits than transactions");
+    assert!(
+        committed_count <= 3,
+        "cannot have more commits than transactions"
+    );
 }
 
 /// Verify ConflictDetection: concurrent read-write conflict detection.
@@ -266,12 +269,28 @@ async fn test_atomic_commit() {
         let result = txn.commit().await;
 
         // Check atomicity: either all 3 keys exist or none
-        let k1_exists = storage.get(&actor_id, k1.as_bytes()).await.unwrap().is_some();
-        let k2_exists = storage.get(&actor_id, k2.as_bytes()).await.unwrap().is_some();
-        let k3_exists = storage.get(&actor_id, k3.as_bytes()).await.unwrap().is_some();
+        let k1_exists = storage
+            .get(&actor_id, k1.as_bytes())
+            .await
+            .unwrap()
+            .is_some();
+        let k2_exists = storage
+            .get(&actor_id, k2.as_bytes())
+            .await
+            .unwrap()
+            .is_some();
+        let k3_exists = storage
+            .get(&actor_id, k3.as_bytes())
+            .await
+            .unwrap()
+            .is_some();
 
         if result.is_ok() {
-            assert!(k1_exists && k2_exists && k3_exists, "if commit succeeded, all keys should exist for txn {}", i);
+            assert!(
+                k1_exists && k2_exists && k3_exists,
+                "if commit succeeded, all keys should exist for txn {}",
+                i
+            );
         } else {
             assert!(
                 !k1_exists && !k2_exists && !k3_exists,
@@ -494,8 +513,14 @@ async fn test_high_contention_stress() {
     let fault_injector = Arc::new(
         FaultInjectorBuilder::new(rng.fork())
             .with_fault(
-                FaultConfig::new(FaultType::StorageLatency { min_ms: 1, max_ms: 5 }, 0.2)
-                    .with_filter("storage_write"),
+                FaultConfig::new(
+                    FaultType::StorageLatency {
+                        min_ms: 1,
+                        max_ms: 5,
+                    },
+                    0.2,
+                )
+                .with_filter("storage_write"),
             )
             .build(),
     );
@@ -522,9 +547,12 @@ async fn test_high_contention_stress() {
             // Each transaction reads and writes multiple keys
             for i in 0..3 {
                 let _ = txn.get(format!("k{}", i).as_bytes()).await;
-                txn.set(format!("k{}", i).as_bytes(), format!("updated_by_{}", task_id).as_bytes())
-                    .await
-                    .unwrap();
+                txn.set(
+                    format!("k{}", i).as_bytes(),
+                    format!("updated_by_{}", task_id).as_bytes(),
+                )
+                .await
+                .unwrap();
             }
 
             txn.commit().await.is_ok()
@@ -553,10 +581,6 @@ async fn test_high_contention_stress() {
             .get(&actor_id, format!("k{}", i).as_bytes())
             .await
             .unwrap();
-        assert!(
-            value.is_some(),
-            "key k{} should exist after stress test",
-            i
-        );
+        assert!(value.is_some(), "key k{} should exist after stress test", i);
     }
 }
