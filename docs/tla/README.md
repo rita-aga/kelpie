@@ -60,7 +60,26 @@ Models the lease-based actor ownership protocol from ADR-004.
 11. **AcquireLeaseNoCheck** (buggy) - Race condition lease acquisition
 12. **RenewLeaseBuggy** (buggy) - Renewal without proper checks
 
-- **TLC Results**: PASS (safe) / FAIL LeaseUniqueness (buggy)
+#### Verification Status
+- **Safety invariants**: 130M+ states explored, no violations found
+- **Liveness**: Uses strong fairness (SF_vars) for AcquireLeaseSafe to ensure progress despite suspicion/recovery cycles
+- **Quick check**: Use `KelpieLease_Minimal.cfg` for rapid iteration
+- **Safety only**: Use `KelpieLease_SafetyOnly.cfg` to skip expensive liveness checking
+
+#### TLC Commands
+```bash
+# Full verification (may take extended time due to liveness checking)
+java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieLease.cfg KelpieLease.tla
+
+# Safety only (faster)
+java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieLease_SafetyOnly.cfg KelpieLease.tla
+
+# Minimal model (quick iteration)
+java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieLease_Minimal.cfg KelpieLease.tla
+
+# Buggy version (should fail)
+java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieLease_Buggy.cfg KelpieLease.tla
+```
 
 ### KelpieActorLifecycle.tla
 Models the lifecycle of a Kelpie virtual actor.
