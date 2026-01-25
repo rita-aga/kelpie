@@ -49,6 +49,7 @@ fn default_limit() -> usize {
 /// Request to add to archival memory
 #[derive(Debug, Deserialize)]
 pub struct AddArchivalRequest {
+    #[serde(alias = "text")]
     pub content: String,
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
@@ -145,7 +146,7 @@ pub async fn delete_archival_entry<R: Runtime + 'static>(
 
 #[cfg(test)]
 mod tests {
-
+    use super::*;
     use crate::api;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
@@ -224,5 +225,18 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_archival_text_alias() {
+        // Test "text" field is accepted (Letta compatibility)
+        let json = r#"{"text": "test entry"}"#;
+        let parsed: AddArchivalRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.content, "test entry");
+
+        // Test "content" field still works
+        let json = r#"{"content": "test entry"}"#;
+        let parsed: AddArchivalRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.content, "test entry");
     }
 }
