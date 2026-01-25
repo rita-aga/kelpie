@@ -1,6 +1,6 @@
 # True DST Simulation Architecture
 
-**Status:** PHASE 4 COMPLETE (Phases 1-4 done, Phase 5 analyzed)
+**Status:** PHASE 5 IN PROGRESS (1/5 migrations complete)
 **Created:** 2026-01-25
 **Issue:** To be created after plan approval
 **Branch:** feature/phase1-storage-time-provider
@@ -237,9 +237,12 @@ Detailed code review revealed:
 **Key Finding:** `lease_dst.rs` is already using production `MemoryLeaseManager` - no migration needed!
 
 **Revised Tasks:**
-1. [ ] Migrate single_activation_dst.rs (P1, ~1 day)
-   - Replace mock `ActivationProtocol` with production `MemoryRegistry` or `FdbRegistry`
-   - The `try_claim_with_storage()` helper already uses `env.storage` (production SimStorage)
+1. [x] Migrate single_activation_dst.rs (P1) (**COMPLETE** - 2026-01-25)
+   - Created `single_activation_production_dst.rs` using production `MemoryRegistry`
+   - Uses `MemoryRegistry::with_providers()` for DST clock injection
+   - 8 tests: concurrent activation, high contention, determinism, release/reactivation,
+     concurrent during release, placement strategies, crash recovery, no capacity
+   - All 8 tests pass, proving production MemoryRegistry works under simulated time
 
 2. [ ] Migrate partition_tolerance_dst.rs (P1, ~0.5 day)
    - Replace `SimClusterNode` with production `Cluster` + `SimRpcTransport` from Phase 3
@@ -290,6 +293,7 @@ After all phases:
 | Phase 3 | Keep existing partition_tolerance_dst.rs tests | They test quorum logic with SimClusterNode mock | Both mock and production tests coexist |
 | Phase 5 | lease_dst.rs already uses production code | Analysis found it uses MemoryLeaseManager, not mocks | No migration needed, effort reduced |
 | Phase 5 | Revised estimate from 7-8 days to 4-5 days | One file already production, SimRpcTransport enables partition_tolerance migration | Faster completion |
+| Phase 5 | Create single_activation_production_dst.rs | New file rather than modifying existing mock-based tests | Mock tests remain for algorithm verification, production tests catch real bugs |
 
 ## Risks & Mitigations
 
