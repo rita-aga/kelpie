@@ -46,12 +46,11 @@ const LIST_LIMIT_MAX: usize = 1000;
 
 /// Query parameters for sending messages (streaming support)
 #[derive(Debug, Deserialize, Default)]
-#[allow(dead_code)]
 pub struct SendMessageQuery {
     /// Enable step streaming (letta-code compatibility)
     #[serde(default)]
     pub stream_steps: bool,
-    /// Enable token streaming (not yet implemented)
+    /// Enable token streaming
     #[serde(default)]
     pub stream_tokens: bool,
 }
@@ -170,11 +169,16 @@ pub async fn send_message<R: Runtime + 'static>(
     // This provides compatibility with both:
     // - letta-code (uses stream_steps query param)
     // - Letta SDK (uses streaming field in request body)
-    let should_stream = query.stream_steps || request.streaming;
-    tracing::info!(stream = should_stream, "Processing message request");
+    // stream_tokens enables token-by-token streaming (finer granularity than step streaming)
+    let should_stream = query.stream_steps || query.stream_tokens || request.streaming;
+    tracing::info!(
+        stream_steps = query.stream_steps,
+        stream_tokens = query.stream_tokens,
+        "Processing message request"
+    );
 
     if should_stream {
-        return send_message_streaming(state, agent_id, request).await;
+        return send_message_streaming(state, agent_id, query, request).await;
     }
 
     // Otherwise return JSON response
@@ -751,10 +755,11 @@ pub async fn get_batch_status<R: Runtime + 'static>(
 }
 
 /// Send a message with SSE streaming response
-#[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
+#[instrument(skip(state, query, request), fields(agent_id = %agent_id), level = "info")]
 async fn send_message_streaming<R: Runtime + 'static>(
     state: AppState<R>,
     agent_id: String,
+    query: SendMessageQuery,
     request: CreateMessageRequest,
 ) -> Result<Response, ApiError> {
     // Extract effective content from various request formats
@@ -796,8 +801,12 @@ async fn send_message_streaming<R: Runtime + 'static>(
     let _stored_user_msg = state.add_message(&agent_id, user_message)?;
 
     // Create the SSE stream
-    let stream = stream::once(async move {
-        let events = generate_sse_events(
+    // Use token streaming if requested, otherwise use step streaming (batch mode)
+    let use_token_streaming = query.stream_tokens;
+
+    let stream = if use_token_streaming {
+        // Token-by-token streaming - real-time token events
+        let events_stream = generate_streaming_sse_events(
             &state_clone,
             &agent_id_clone,
             &agent_clone,
@@ -806,9 +815,24 @@ async fn send_message_streaming<R: Runtime + 'static>(
             &client_tools_clone,
         )
         .await;
-        stream::iter(events)
-    })
-    .flatten();
+        events_stream.boxed()
+    } else {
+        // Step streaming (original batch mode) - complete messages
+        stream::once(async move {
+            let events = generate_sse_events(
+                &state_clone,
+                &agent_id_clone,
+                &agent_clone,
+                &llm_clone,
+                content,
+                &client_tools_clone,
+            )
+            .await;
+            stream::iter(events)
+        })
+        .flatten()
+        .boxed()
+    };
 
     Ok(Sse::new(stream)
         .keep_alive(
@@ -1165,6 +1189,217 @@ async fn generate_sse_events<R: Runtime + 'static>(
     events.push(Ok(Event::default().data("[DONE]")));
 
     events
+}
+
+/// Generate streaming SSE events using real LLM token streaming
+///
+/// This function provides token-by-token streaming where each token is emitted
+/// as it arrives from the LLM, rather than batching complete messages.
+/// Uses LlmClient::stream_complete_with_tools for real-time token deltas.
+#[instrument(
+    skip(state, agent, llm, content, client_tools),
+    fields(agent_id),
+    level = "debug"
+)]
+async fn generate_streaming_sse_events<R: Runtime + 'static>(
+    state: &AppState<R>,
+    agent_id: &str,
+    agent: &kelpie_server::models::AgentState,
+    llm: &crate::llm::LlmClient,
+    content: String,
+    _client_tools: &[ClientTool],
+) -> impl futures::stream::Stream<Item = Result<Event, Infallible>> {
+    use futures::stream::StreamExt;
+
+    // Build messages for LLM
+    let mut messages = Vec::new();
+
+    // System message with memory blocks
+    let system_content = build_system_prompt(&agent.system, &agent.blocks);
+    messages.push(ChatMessage {
+        role: "system".to_string(),
+        content: system_content,
+    });
+
+    // Get recent message history
+    let history = state.list_messages(agent_id, 20, None).unwrap_or_default();
+    for msg in history.iter() {
+        // Skip tool and system messages - Claude API doesn't support role "tool"
+        if msg.role == MessageRole::Tool || msg.role == MessageRole::System {
+            continue;
+        }
+        // Skip messages with empty content - Claude API requires non-empty content
+        if msg.content.is_empty() {
+            continue;
+        }
+        messages.push(ChatMessage {
+            role: match msg.role {
+                MessageRole::User => "user",
+                MessageRole::Assistant => "assistant",
+                MessageRole::System => "system", // Won't reach here
+                MessageRole::Tool => "user",     // Won't reach here
+            }
+            .to_string(),
+            content: msg.content.clone(),
+        });
+    }
+
+    // Add current user message
+    messages.push(ChatMessage {
+        role: "user".to_string(),
+        content: content.clone(),
+    });
+
+    // Get available tools (simplified for token streaming - no tool execution in v1)
+    let tools = vec![];
+
+    // Clone state for stream
+    let state_clone = state.clone();
+    let agent_id_clone = agent_id.to_string();
+
+    // Call LLM streaming
+    match llm.stream_complete_with_tools(messages, tools).await {
+        Ok(llm_stream) => {
+            // Track content for storage and usage stats
+            let content_buffer = String::new();
+            let mut token_count = 0u64;
+
+            // Convert LLM StreamDelta to SSE events
+            let events_stream = llm_stream
+                .scan(
+                    (content_buffer, state_clone, agent_id_clone, token_count),
+                    |(content_buf, state_ref, agent_id_ref, count), delta_result| {
+                        let events: Vec<Result<Event, Infallible>> = match delta_result {
+                            Ok(delta) => match delta {
+                                crate::llm::StreamDelta::ContentDelta { text } => {
+                                    // Accumulate content
+                                    content_buf.push_str(&text);
+                                    *count += 1;
+
+                                    // Emit token event
+                                    let token_event = serde_json::json!({
+                                        "type": "token",
+                                        "content": text
+                                    });
+                                    if let Ok(json_str) = serde_json::to_string(&token_event) {
+                                        vec![Ok(Event::default().data(json_str))]
+                                    } else {
+                                        vec![]
+                                    }
+                                }
+                                crate::llm::StreamDelta::Done { stop_reason } => {
+                                    // Store final assistant message
+                                    let assistant_message = Message {
+                                        id: Uuid::new_v4().to_string(),
+                                        agent_id: agent_id_ref.clone(),
+                                        message_type: "assistant_message".to_string(),
+                                        role: MessageRole::Assistant,
+                                        content: content_buf.clone(),
+                                        tool_call_id: None,
+                                        tool_calls: vec![],
+                                        created_at: Utc::now(),
+                                    };
+
+                                    // TigerStyle: No silent failures - log and notify client
+                                    if let Err(e) =
+                                        state_ref.add_message(agent_id_ref, assistant_message.clone())
+                                    {
+                                        tracing::error!(
+                                            agent_id = %agent_id_ref,
+                                            error = ?e,
+                                            "failed to persist assistant message in token streaming"
+                                        );
+                                    }
+
+                                    let mut final_events = vec![];
+
+                                    // Send final assistant_message event with complete content
+                                    let assistant_msg = SseMessage::AssistantMessage {
+                                        id: assistant_message.id.clone(),
+                                        content: content_buf.clone(),
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&assistant_msg) {
+                                        final_events.push(Ok(Event::default().data(json)));
+                                    }
+
+                                    // Send stop_reason event
+                                    let stop_event = StopReasonEvent {
+                                        message_type: "stop_reason",
+                                        stop_reason,
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&stop_event) {
+                                        final_events.push(Ok(Event::default().data(json)));
+                                    }
+
+                                    // Send usage statistics (approximated since streaming doesn't provide exact counts)
+                                    let usage_msg = SseMessage::UsageStatistics {
+                                        completion_tokens: *count,
+                                        prompt_tokens: 0, // Not available in streaming mode
+                                        total_tokens: *count,
+                                        step_count: 1,
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&usage_msg) {
+                                        final_events.push(Ok(Event::default().data(json)));
+                                    }
+
+                                    final_events
+                                }
+                                _ => vec![], // Ignore tool calls for now (simplified v1)
+                            },
+                            Err(e) => {
+                                // Send error as assistant message
+                                let error_msg = SseMessage::AssistantMessage {
+                                    id: Uuid::new_v4().to_string(),
+                                    content: format!("Error: {}", e),
+                                };
+                                if let Ok(json) = serde_json::to_string(&error_msg) {
+                                    vec![Ok(Event::default().data(json))]
+                                } else {
+                                    vec![]
+                                }
+                            }
+                        };
+
+                        futures::future::ready(Some(events))
+                    },
+                )
+                .flat_map(stream::iter)
+                .chain(stream::once(async {
+                    // Send [DONE]
+                    Ok(Event::default().data("[DONE]"))
+                }));
+
+            events_stream.boxed()
+        }
+        Err(e) => {
+            // Return error stream
+            let error_stream = stream::once(async move {
+                let error_msg = SseMessage::AssistantMessage {
+                    id: Uuid::new_v4().to_string(),
+                    content: format!("Streaming error: {}", e),
+                };
+                if let Ok(json) = serde_json::to_string(&error_msg) {
+                    Ok(Event::default().data(json))
+                } else {
+                    Ok(Event::default().data(format!("Error: {}", e)))
+                }
+            })
+            .chain(stream::once(async {
+                let stop_event = StopReasonEvent {
+                    message_type: "stop_reason",
+                    stop_reason: "error".to_string(),
+                };
+                if let Ok(json) = serde_json::to_string(&stop_event) {
+                    Ok(Event::default().data(json))
+                } else {
+                    Ok(Event::default().data("{}"))
+                }
+            }))
+            .chain(stream::once(async { Ok(Event::default().data("[DONE]")) }));
+
+            error_stream.boxed()
+        }
+    }
 }
 
 /// Load an MCP tool by parsing its ID and discovering from the server
@@ -1560,5 +1795,38 @@ mod tests {
             contents.iter().any(|c| c.contains("Message number 3")),
             "Message 3 not found"
         );
+    }
+
+    #[tokio::test]
+    async fn test_stream_tokens_parameter_accepted() {
+        let (app, agent_id) = test_app_with_agent().await;
+
+        let message = serde_json::json!({
+            "role": "user",
+            "content": "Hello"
+        });
+
+        // Test with stream_tokens=true
+        // Without LLM configured, should return 500 (but parameter is accepted)
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/agents/{}/messages?stream_tokens=true", agent_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&message).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Should error due to missing LLM, not due to invalid parameter
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let error_text = String::from_utf8_lossy(&body);
+        assert!(error_text.contains("LLM not configured"));
     }
 }
