@@ -1197,7 +1197,7 @@ async fn generate_sse_events<R: Runtime + 'static>(
 /// as it arrives from the LLM, rather than batching complete messages.
 /// Uses LlmClient::stream_complete_with_tools for real-time token deltas.
 #[instrument(
-    skip(state, agent, llm, content, client_tools),
+    skip(state, agent, llm, content, _client_tools),
     fields(agent_id),
     level = "debug"
 )]
@@ -1262,7 +1262,7 @@ async fn generate_streaming_sse_events<R: Runtime + 'static>(
         Ok(llm_stream) => {
             // Track content for storage and usage stats
             let content_buffer = String::new();
-            let mut token_count = 0u64;
+            let token_count = 0u64;
 
             // Convert LLM StreamDelta to SSE events
             let events_stream = llm_stream
