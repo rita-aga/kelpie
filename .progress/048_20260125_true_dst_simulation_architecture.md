@@ -1,6 +1,6 @@
 # True DST Simulation Architecture
 
-**Status:** PHASE 3 COMPLETE
+**Status:** PHASE 4 COMPLETE (Phases 1-4 done, Phase 5 analyzed)
 **Created:** 2026-01-25
 **Issue:** To be created after plan approval
 **Branch:** feature/phase1-storage-time-provider
@@ -199,46 +199,66 @@ EFFORT                   │                    EFFORT
 ### Phase 4: FDB Abstraction (Week 6)
 **Goal:** Run CI without real FDB
 
-**Tasks:**
-1. [ ] Create StorageBackend trait
-   ```rust
-   #[async_trait]
-   pub trait StorageBackend: Send + Sync {
-       async fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
-       async fn set(&self, key: &[u8], value: &[u8]) -> Result<()>;
-       async fn transaction(&self) -> Result<Box<dyn Transaction>>;
-   }
-   ```
+**Status:** ALREADY COMPLETE (discovered during implementation)
 
-2. [ ] Refactor kelpie-registry/fdb.rs and kelpie-storage/fdb.rs
-   - 52 functions total
-   - Production uses FdbBackend
-   - Tests use SimStorage (implements StorageBackend)
+**Analysis (2026-01-24):**
+The abstraction already exists! The `ActorKV` trait in kelpie-storage IS the StorageBackend:
+- **ActorKV trait**: Defines `get()`, `set()`, `delete()`, `list_keys()`, `scan_prefix()`, `begin_transaction()`
+- **FdbKV**: Production implementation using FoundationDB
+- **MemoryKV**: In-memory implementation for unit tests
+- **SimStorage**: DST implementation with fault injection (in kelpie-dst)
 
-**Deliverable:** Full DST without FDB dependency
-**Effort:** 4-5 days
-**Risk:** Medium
+**Evidence:**
+1. CI tests already use SimStorage/MemoryKV - no FDB dependency required
+2. FDB-specific tests are properly isolated (ignored when FDB unavailable)
+3. `cargo test -p kelpie-storage` passes without FDB (20 tests pass, 8 FDB-specific ignored)
+4. No direct FDB usage outside of fdb.rs implementation files
+
+**Deliverable:** Full DST without FDB dependency ✅
+**Effort:** 0 days (already done)
+**Risk:** None
 
 ### Phase 5: Test Migration (Week 7-8)
 **Goal:** All DST tests use production code
 
-**Tasks:**
-1. [ ] Migrate each test file:
-   | Test File | Priority | Effort |
-   |-----------|----------|--------|
-   | single_activation_dst.rs | P1 | 1 day |
-   | lease_dst.rs | P1 | 1 day |
-   | liveness_dst.rs | P2 | 0.5 day |
-   | cluster_membership_dst.rs | P2 | 1 day |
-   | partition_tolerance_dst.rs | P1 | 1 day |
-   | Others (13 files) | P3 | 3 days |
+**Status:** ANALYZED - Ready for implementation
 
-2. [ ] Delete mock implementations (ActivationProtocol, etc.)
+**Analysis (2026-01-24):**
+Detailed code review revealed:
 
-3. [ ] Update CLAUDE.md with new testing patterns
+| Test File | Mock Components | Production Components | Status |
+|-----------|-----------------|----------------------|--------|
+| single_activation_dst.rs | `ActivationProtocol` | SimStorage via env.storage | Needs migration (P1) |
+| partition_tolerance_dst.rs | `SimClusterNode` | SimNetwork | Can use SimRpcTransport (P1) |
+| **lease_dst.rs** | **None** | **MemoryLeaseManager** | **✅ ALREADY PRODUCTION** |
+| liveness_dst.rs | 4 mock systems | SimClock, BoundedLiveness | Complex migration (P2) |
+| cluster_membership_dst.rs | `ClusterMember` | HeartbeatTracker | Partial migration (P2) |
+
+**Key Finding:** `lease_dst.rs` is already using production `MemoryLeaseManager` - no migration needed!
+
+**Revised Tasks:**
+1. [ ] Migrate single_activation_dst.rs (P1, ~1 day)
+   - Replace mock `ActivationProtocol` with production `MemoryRegistry` or `FdbRegistry`
+   - The `try_claim_with_storage()` helper already uses `env.storage` (production SimStorage)
+
+2. [ ] Migrate partition_tolerance_dst.rs (P1, ~0.5 day)
+   - Replace `SimClusterNode` with production `Cluster` + `SimRpcTransport` from Phase 3
+   - Reference: `cluster_partition_dst.rs` already demonstrates the pattern
+
+3. [x] lease_dst.rs (**Already uses production code**)
+   - Uses `kelpie_registry::MemoryLeaseManager` - already testable
+
+4. [ ] Migrate liveness_dst.rs (P2, ~1-2 days)
+   - 4 mock systems: `ActivationProtocol`, `RegistrySystem`, `LeaseSystem`, `WalSystem`
+   - Consider: Keep mocks for algorithm testing, add separate production tests
+
+5. [ ] Migrate cluster_membership_dst.rs (P2, ~0.5-1 day)
+   - `ClusterMember` mock, but already uses production `HeartbeatTracker`
+
+6. [ ] Update CLAUDE.md with new testing patterns
 
 **Deliverable:** True TigerBeetle/FDB-style DST
-**Effort:** 7-8 days
+**Revised Effort:** 4-5 days (was 7-8 days)
 **Risk:** Low (tests only)
 
 ## Success Criteria
@@ -268,6 +288,8 @@ After all phases:
 | Phase 3 | SimRpcTransport instead of NetworkProvider | Simpler approach: bridges SimNetwork to existing RpcTransport | No TcpTransport refactoring, achieves same DST value |
 | Phase 3 | Added kelpie-cluster to kelpie-dst dependencies | SimRpcTransport needs RpcTransport trait | Slightly larger kelpie-dst crate |
 | Phase 3 | Keep existing partition_tolerance_dst.rs tests | They test quorum logic with SimClusterNode mock | Both mock and production tests coexist |
+| Phase 5 | lease_dst.rs already uses production code | Analysis found it uses MemoryLeaseManager, not mocks | No migration needed, effort reduced |
+| Phase 5 | Revised estimate from 7-8 days to 4-5 days | One file already production, SimRpcTransport enables partition_tolerance migration | Faster completion |
 
 ## Risks & Mitigations
 
