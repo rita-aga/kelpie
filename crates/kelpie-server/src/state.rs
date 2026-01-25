@@ -890,14 +890,50 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             Ok((items, next_cursor))
         } else {
             // Fall back to HashMap for in-memory mode
-            let (mut agents, next_cursor) = self.list_agents(limit, cursor)?;
+            // TigerStyle: Apply name filter BEFORE pagination (same as FDB path)
+            let agents_lock = self
+                .inner
+                .agents
+                .read()
+                .map_err(|_| StateError::LockPoisoned)?;
 
-            // TigerStyle: Apply name filter BEFORE returning (HashMap mode)
+            let mut all_agents: Vec<_> = agents_lock.values().cloned().collect();
+            drop(agents_lock); // Release lock early
+
+            // Sort by created_at descending (newest first, same as FDB path)
+            all_agents.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+            // TigerStyle: Apply name filter BEFORE pagination
             if let Some(name) = name_filter {
-                agents.retain(|agent| agent.name == name);
+                all_agents.retain(|agent| agent.name == name);
             }
 
-            Ok((agents, next_cursor))
+            // Apply cursor (skip until we find the cursor ID)
+            let start_idx = if let Some(cursor_id) = cursor {
+                all_agents
+                    .iter()
+                    .position(|a| a.id == cursor_id)
+                    .map(|i| i + 1)
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+
+            // Paginate
+            let page: Vec<_> = all_agents
+                .into_iter()
+                .skip(start_idx)
+                .take(limit + 1)
+                .collect();
+            let (items, next_cursor) = if page.len() > limit {
+                let items: Vec<_> = page.into_iter().take(limit).collect();
+                let next_cursor = items.last().map(|a| a.id.clone());
+                (items, next_cursor)
+            } else {
+                (page, None)
+            };
+
+            Ok((items, next_cursor))
         }
     }
 
