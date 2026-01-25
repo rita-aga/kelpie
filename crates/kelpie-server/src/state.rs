@@ -742,12 +742,26 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
         request: crate::models::CreateAgentRequest,
     ) -> Result<AgentState, StateError> {
         if let Some(service) = self.agent_service() {
-            service
+            let agent = service
                 .create_agent(request)
                 .await
                 .map_err(|e| StateError::Internal {
                     message: format!("Service error: {}", e),
-                })
+                })?;
+
+            // TigerStyle: Also store in HashMap for list operations in memory mode
+            // When no storage is configured, list_agents_async reads from HashMap.
+            // Without this, agents created via AgentService would not appear in list.
+            if self.inner.storage.is_none() {
+                let mut agents = self
+                    .inner
+                    .agents
+                    .write()
+                    .map_err(|_| StateError::LockPoisoned)?;
+                agents.insert(agent.id.clone(), agent.clone());
+            }
+
+            Ok(agent)
         } else {
             // Fallback to HashMap for backward compatibility
             // Use from_request to convert CreateAgentRequest to AgentState
@@ -767,12 +781,24 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
         update: serde_json::Value,
     ) -> Result<AgentState, StateError> {
         if let Some(service) = self.agent_service() {
-            service
+            let agent = service
                 .update_agent(id, update)
                 .await
                 .map_err(|e| StateError::Internal {
                     message: format!("Service error: {}", e),
-                })
+                })?;
+
+            // TigerStyle: Also update HashMap to keep list in sync (memory mode)
+            if self.inner.storage.is_none() {
+                let mut agents = self
+                    .inner
+                    .agents
+                    .write()
+                    .map_err(|_| StateError::LockPoisoned)?;
+                agents.insert(agent.id.clone(), agent.clone());
+            }
+
+            Ok(agent)
         } else {
             // Fallback: For HashMap mode, parse update and apply manually
             let update_req: crate::models::UpdateAgentRequest = serde_json::from_value(update)
@@ -812,7 +838,19 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 .await
                 .map_err(|e| StateError::Internal {
                     message: format!("Service error: {}", e),
-                })
+                })?;
+
+            // TigerStyle: Also remove from HashMap to keep list in sync (memory mode)
+            if self.inner.storage.is_none() {
+                let mut agents = self
+                    .inner
+                    .agents
+                    .write()
+                    .map_err(|_| StateError::LockPoisoned)?;
+                agents.remove(id);
+            }
+
+            Ok(())
         } else {
             // Fallback to HashMap for backward compatibility
             self.delete_agent(id)
