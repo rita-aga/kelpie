@@ -5,7 +5,8 @@
 use super::llm_trait::{LlmClient, LlmMessage, LlmToolCall};
 use super::state::AgentActorState;
 use crate::models::{
-    AgentState, CreateAgentRequest, Message, MessageRole, ToolCall, UpdateAgentRequest, UsageStats,
+    AgentState, CreateAgentRequest, LettaToolCall, Message, MessageRole, ToolCall,
+    UpdateAgentRequest, UsageStats,
 };
 use crate::tools::{parse_pause_signal, ToolExecutionContext, ToolSignal, UnifiedToolRegistry};
 use async_trait::async_trait;
@@ -237,6 +238,9 @@ impl AgentActor {
             content: request.content.clone(),
             tool_call_id: None,
             tool_calls: vec![],
+            tool_call: None,
+            tool_return: None,
+            status: None,
             created_at: chrono::Utc::now(),
         };
 
@@ -336,6 +340,9 @@ impl AgentActor {
                 content: response.content.clone(),
                 tool_call_id: None,
                 tool_calls: vec![],
+                tool_call: None,
+                tool_return: None,
+                status: None,
                 created_at: chrono::Utc::now(),
             };
             ctx.state.add_message(assistant_msg);
@@ -357,6 +364,15 @@ impl AgentActor {
                         name: tool_call.name.clone(),
                         arguments: tool_call.input.clone(),
                     }],
+                    // Letta SDK format (singular tool_call)
+                    tool_call: Some(LettaToolCall {
+                        name: tool_call.name.clone(),
+                        arguments: serde_json::to_string(&tool_call.input)
+                            .unwrap_or_else(|_| "{}".to_string()),
+                        tool_call_id: tool_call.id.clone(),
+                    }),
+                    tool_return: None,
+                    status: None,
                     created_at: chrono::Utc::now(),
                 };
                 ctx.state.add_message(tool_call_msg);
@@ -377,9 +393,20 @@ impl AgentActor {
                     agent_id: ctx.id.id().to_string(),
                     message_type: "tool_return_message".to_string(),
                     role: MessageRole::Tool,
-                    content: result,
+                    content: result.clone(),
                     tool_call_id: Some(tool_call.id.clone()),
                     tool_calls: vec![],
+                    tool_call: None,
+                    // Letta SDK format fields
+                    tool_return: Some(result),
+                    status: Some(
+                        if exec_result.success {
+                            "success"
+                        } else {
+                            "error"
+                        }
+                        .to_string(),
+                    ),
                     created_at: chrono::Utc::now(),
                 };
                 ctx.state.add_message(tool_msg);
@@ -474,6 +501,9 @@ impl AgentActor {
             content: final_content,
             tool_call_id: None,
             tool_calls: vec![],
+            tool_call: None,
+            tool_return: None,
+            status: None,
             created_at: chrono::Utc::now(),
         };
         ctx.state.add_message(assistant_msg);

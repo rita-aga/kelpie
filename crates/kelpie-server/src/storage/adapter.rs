@@ -1391,6 +1391,9 @@ mod tests {
             content: "Hello".to_string(),
             tool_calls: vec![],
             tool_call_id: None,
+            tool_call: None,
+            tool_return: None,
+            status: None,
             created_at: chrono::Utc::now(),
         };
         adapter.append_message("agent-1", &msg1).await.unwrap();
@@ -1403,6 +1406,9 @@ mod tests {
             content: "Hi there!".to_string(),
             tool_calls: vec![],
             tool_call_id: None,
+            tool_call: None,
+            tool_return: None,
+            status: None,
             created_at: chrono::Utc::now(),
         };
         adapter.append_message("agent-1", &msg2).await.unwrap();
@@ -1526,6 +1532,9 @@ mod tests {
             content: "Test message".to_string(),
             tool_calls: vec![],
             tool_call_id: None,
+            tool_call: None,
+            tool_return: None,
+            status: None,
             created_at: chrono::Utc::now(),
         };
 

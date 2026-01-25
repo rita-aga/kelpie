@@ -3518,6 +3518,9 @@ mod tests {
                 content: format!("Message {}", i),
                 tool_call_id: None,
                 tool_calls: vec![],
+                tool_call: None,
+                tool_return: None,
+                status: None,
                 created_at: chrono::Utc::now(),
             };
             state.add_message(&agent_id, msg).unwrap();
