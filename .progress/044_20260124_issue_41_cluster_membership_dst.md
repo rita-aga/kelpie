@@ -3,7 +3,9 @@
 ## Summary
 Implement DST tests for cluster membership protocol (ADR-025) including split-brain, election, heartbeat failure detection, and quorum loss handling.
 
-## Status: In Progress
+## Status: Complete
+
+**PR:** https://github.com/rita-aga/kelpie/pull/47
 
 ## Context
 - ADR-025 defines cluster membership protocol with heartbeat-based failure detection and Raft-style primary election
@@ -77,6 +79,6 @@ Implement DST tests for cluster membership protocol (ADR-025) including split-br
 - `crates/kelpie-dst/tests/cluster_membership_dst.rs` - New test file
 
 ## Verification
-- [ ] All tests pass: `cargo test -p kelpie-dst cluster_membership`
-- [ ] No clippy warnings
-- [ ] Code formatted
+- [x] All tests pass: `cargo test -p kelpie-dst test_membership` - 6 passed, 1 ignored
+- [x] No clippy warnings
+- [x] Code formatted
