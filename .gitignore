@@ -44,3 +44,7 @@ states/
 
 # Git worktrees
 .worktrees/
+
+# Letta SDK test artifacts
+letta-repo/
+*.log
