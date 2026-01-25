@@ -79,7 +79,7 @@ async fn test_serializable_isolation() {
 
     // Transaction 3: Read k2, write k4
     let mut txn3 = storage.begin_transaction(&actor_id).await.unwrap();
-    let k2_value = txn3.get(b"k2").await.unwrap();
+    let _k2_value = txn3.get(b"k2").await.unwrap();
     txn3.set(b"k4", b"v4").await.unwrap();
     let commit3_result = txn3.commit().await;
 
@@ -118,16 +118,17 @@ async fn test_serializable_isolation() {
     assert!(committed_count <= 3, "cannot have more commits than transactions");
 }
 
-/// Verify ConflictDetection: concurrent writes to same key cause conflict.
+/// Verify ConflictDetection: concurrent read-write conflict detection.
 ///
-/// TLA+ invariant (line 196): If two transactions both write to the same key
-/// and commit, one must have committed before the other started, OR they must
-/// have different snapshots.
+/// TLA+ invariant (line 196): If two transactions both access the same key
+/// and commit, OCC must detect conflicts when one reads and another writes.
 ///
 /// Test approach:
-/// - Transaction 1: write k1=v1
-/// - Transaction 2: write k1=v2 (concurrent)
-/// - Verify exactly one commits, one aborts with TransactionConflict
+/// - Set initial value k1=v0
+/// - Transaction 1: read k1, write k2
+/// - Transaction 2: write k1 (before T1 commits)
+/// - T2 commits first (succeeds)
+/// - T1 tries to commit (should fail with conflict on k1)
 #[madsim::test]
 async fn test_conflict_detection() {
     let rng = DeterministicRng::from_env_or_random();
@@ -135,30 +136,43 @@ async fn test_conflict_detection() {
     let storage = Arc::new(SimStorage::new(rng, fault_injector));
     let actor_id = ActorId::new("fdb-test", "conflict-1").unwrap();
 
-    // Both transactions start concurrently
+    // Set initial value
+    storage.set(&actor_id, b"k1", b"v0").await.unwrap();
+
+    // Transaction 1: Read k1 (adds to read-set), write k2
     let mut txn1 = storage.begin_transaction(&actor_id).await.unwrap();
+    let _v1 = txn1.get(b"k1").await.unwrap();
+    txn1.set(b"k2", b"from_t1").await.unwrap();
+
+    // Transaction 2: Write k1 (before T1 commits)
     let mut txn2 = storage.begin_transaction(&actor_id).await.unwrap();
+    txn2.set(b"k1", b"v1").await.unwrap();
 
-    // Both write to the same key
-    txn1.set(b"k1", b"v1").await.unwrap();
-    txn2.set(b"k1", b"v2").await.unwrap();
-
-    // Commit T1 first
-    let result1 = txn1.commit().await;
-    assert!(result1.is_ok(), "first transaction should commit");
-
-    // Commit T2 second - should detect conflict
+    // Commit T2 first
     let result2 = txn2.commit().await;
+    assert!(result2.is_ok(), "T2 should commit successfully");
 
-    // Conflict detection: T2 should abort because k1 was modified
-    // (Note: in this test T2 didn't read k1, so no conflict. Need to read first.)
-    // Let me fix this test - T2 needs to READ k1 to have a conflict
+    // Commit T1 - should detect conflict on k1
+    let result1 = txn1.commit().await;
+    assert!(
+        result1.is_err(),
+        "T1 should fail due to conflict on k1: {:?}",
+        result1
+    );
+    assert!(
+        matches!(result1, Err(Error::TransactionConflict { .. })),
+        "should be TransactionConflict error"
+    );
 
     // Postconditions
     assert_eq!(
         storage.get(&actor_id, b"k1").await.unwrap(),
         Some(Bytes::from("v1")),
-        "only T1's write should be visible"
+        "T2's write to k1 should be visible"
+    );
+    assert!(
+        storage.get(&actor_id, b"k2").await.unwrap().is_none(),
+        "T1's write to k2 should NOT be visible (T1 aborted)"
     );
 }
 
@@ -467,7 +481,7 @@ async fn test_conflict_retry() {
     );
 }
 
-/// Stress test: high-contention workload.
+/// Stress test: high-contention workload with concurrent transactions.
 ///
 /// Run many concurrent transactions on a small key set.
 /// Verifies:
@@ -497,20 +511,32 @@ async fn test_high_contention_stress() {
     }
 
     // Run 50 concurrent transactions on the same 5 keys (high contention)
+    let mut handles = Vec::new();
+    for task_id in 0..50 {
+        let storage = storage.clone();
+        let actor_id = actor_id.clone();
+
+        let handle = madsim::task::spawn(async move {
+            let mut txn = storage.begin_transaction(&actor_id).await.unwrap();
+
+            // Each transaction reads and writes multiple keys
+            for i in 0..3 {
+                let _ = txn.get(format!("k{}", i).as_bytes()).await;
+                txn.set(format!("k{}", i).as_bytes(), format!("updated_by_{}", task_id).as_bytes())
+                    .await
+                    .unwrap();
+            }
+
+            txn.commit().await.is_ok()
+        });
+
+        handles.push(handle);
+    }
+
+    // Wait for all concurrent transactions to complete
     let mut outcomes = Vec::new();
-    for _ in 0..50 {
-        let mut txn = storage.begin_transaction(&actor_id).await.unwrap();
-
-        // Each transaction reads and writes multiple keys
-        for i in 0..3 {
-            let _ = txn.get(format!("k{}", i).as_bytes()).await;
-            txn.set(format!("k{}", i).as_bytes(), b"updated")
-                .await
-                .unwrap();
-        }
-
-        let result = txn.commit().await;
-        outcomes.push(result.is_ok());
+    for handle in handles {
+        outcomes.push(handle.await.unwrap());
     }
 
     // Forward progress: at least some transactions should commit
