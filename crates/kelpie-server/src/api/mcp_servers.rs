@@ -110,8 +110,8 @@ async fn create_server<R: Runtime + 'static>(
 
     tracing::info!(server_id = %server.id, server_name = %server.server_name, "Created MCP server");
 
-    // TigerStyle: Connect to MCP server and register tools at creation time
-    // This keeps the client connected for tool execution
+    // TigerStyle: Spawn async tool discovery in background to avoid blocking server creation
+    // This prevents timeouts when MCP server subprocess is slow to start
     // Convert server config to McpConfig
     use kelpie_tools::mcp::McpConfig;
     let mcp_config = match &server.config {
@@ -132,29 +132,53 @@ async fn create_server<R: Runtime + 'static>(
         }
     };
 
-    // Connect and register tools (keeps client connected)
-    match state
-        .tool_registry()
-        .connect_mcp_server(&server.server_name, mcp_config)
-        .await
-    {
-        Ok(tool_count) => {
-            tracing::info!(
-                server_id = %server.id,
-                server_name = %server.server_name,
-                tool_count = tool_count,
-                "Connected to MCP server and registered tools"
-            );
+    // Spawn background task for async tool discovery with timeout
+    // TigerStyle: Non-blocking tool discovery - server returns immediately
+    let state_clone = state.clone();
+    let server_name = server.server_name.clone();
+    let server_id = server.id.clone();
+
+    tokio::spawn(async move {
+        use std::time::Duration;
+
+        // TigerStyle: 30-second timeout prevents indefinite blocking
+        const TOOL_DISCOVERY_TIMEOUT_MS: u64 = 30_000;
+
+        let discovery_result = tokio::time::timeout(
+            Duration::from_millis(TOOL_DISCOVERY_TIMEOUT_MS),
+            state_clone
+                .tool_registry()
+                .connect_mcp_server(&server_name, mcp_config),
+        )
+        .await;
+
+        match discovery_result {
+            Ok(Ok(tool_count)) => {
+                tracing::info!(
+                    server_id = %server_id,
+                    server_name = %server_name,
+                    tool_count = tool_count,
+                    "Connected to MCP server and registered tools"
+                );
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    server_id = %server_id,
+                    server_name = %server_name,
+                    error = %e,
+                    "Failed to connect to MCP server or discover tools"
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    server_id = %server_id,
+                    server_name = %server_name,
+                    timeout_ms = TOOL_DISCOVERY_TIMEOUT_MS,
+                    "Tool discovery timed out - MCP server may be slow to start or unresponsive"
+                );
+            }
         }
-        Err(e) => {
-            tracing::warn!(
-                server_id = %server.id,
-                error = %e,
-                "Failed to connect to MCP server or discover tools"
-            );
-            // Don't fail server creation if connection/discovery fails
-        }
-    }
+    });
 
     Ok(Json(MCPServerResponse::from(server)))
 }
