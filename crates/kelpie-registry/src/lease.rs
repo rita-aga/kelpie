@@ -333,11 +333,7 @@ impl Lease {
 
     /// Get remaining time on the lease in milliseconds
     pub fn remaining_ms(&self, now_ms: u64) -> u64 {
-        if self.expiry_ms > now_ms {
-            self.expiry_ms - now_ms
-        } else {
-            0
-        }
+        self.expiry_ms.saturating_sub(now_ms)
     }
 
     /// Get the fencing token for this lease
@@ -376,6 +372,13 @@ pub trait LeaseManager: Send + Sync {
 
     /// Get all active leases held by a node.
     async fn get_leases_for_node(&self, node_id: &NodeId) -> Vec<Lease>;
+
+    /// Get the current fencing token for an actor (for validation)
+    ///
+    /// From TLA+ KelpieLease spec: `fencingTokens[actor]`
+    /// Returns the current token regardless of lease state.
+    /// Used to validate that operations come from the current lease holder.
+    async fn get_current_fencing_token(&self, actor_id: &ActorId) -> Option<FencingToken>;
 }
 
 // =============================================================================
@@ -649,6 +652,28 @@ impl LeaseManager for MemoryLeaseManager {
             .filter(|lease| lease.holder == *node_id && lease.is_valid(now_ms))
             .cloned()
             .collect()
+    }
+
+    /// Get the current fencing token for an actor
+    ///
+    /// From TLA+ spec: `fencingTokens[actor]`
+    /// Returns the current token regardless of lease state.
+    async fn get_current_fencing_token(&self, actor_id: &ActorId) -> Option<FencingToken> {
+        let key = actor_id.qualified_name();
+
+        // First check the fencing_tokens map (authoritative source)
+        let tokens = self.fencing_tokens.read().await;
+        if let Some(counter) = tokens.get(&key) {
+            let value = counter.load(Ordering::SeqCst);
+            if value > 0 {
+                return Some(FencingToken::new(value));
+            }
+        }
+        drop(tokens);
+
+        // Fall back to lease fencing token if no token counter exists
+        let leases = self.leases.read().await;
+        leases.get(&key).map(|lease| lease.fencing_token)
     }
 }
 
