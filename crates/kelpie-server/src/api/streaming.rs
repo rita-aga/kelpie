@@ -122,6 +122,9 @@ pub async fn send_message_stream<R: Runtime + 'static>(
         content: content.clone(),
         tool_call_id: request.tool_call_id.clone(),
         tool_calls: vec![],
+        tool_call: None,
+        tool_return: None,
+        status: None,
         created_at: Utc::now(),
     };
 
@@ -335,6 +338,9 @@ async fn generate_response_events<R: Runtime + 'static>(
                 content: final_content,
                 tool_call_id: None,
                 tool_calls: vec![],
+                tool_call: None,
+                tool_return: None,
+                status: None,
                 created_at: Utc::now(),
             };
             if let Err(e) = state.add_message(agent_id, assistant_message) {
@@ -477,6 +483,9 @@ async fn generate_streaming_response_events<R: Runtime + 'static>(
                                         content: content_buf.clone(),
                                         tool_call_id: None,
                                         tool_calls: vec![],
+                                        tool_call: None,
+                                        tool_return: None,
+                                        status: None,
                                         created_at: Utc::now(),
                                     };
 

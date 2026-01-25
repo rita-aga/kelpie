@@ -593,9 +593,21 @@ pub struct Message {
     pub content: String,
     /// Tool call ID if this is a tool response
     pub tool_call_id: Option<String>,
-    /// Tool calls made by assistant (OpenAI/Letta spec - plural array)
-    #[serde(default)]
+    /// Tool calls made by assistant (OpenAI format - plural array)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCall>,
+    /// Single tool call (Letta SDK format - singular)
+    /// Used for tool_call_message types to match Letta SDK expectations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call: Option<LettaToolCall>,
+    /// Tool return result (Letta SDK format)
+    /// Used for tool_return_message types
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_return: Option<String>,
+    /// Tool execution status ("success" or "error")
+    /// Used for tool_return_message types
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
     /// Creation timestamp
     #[serde(rename = "date")]
     pub created_at: DateTime<Utc>,
@@ -613,7 +625,7 @@ impl Message {
     }
 }
 
-/// Tool call in a message
+/// Tool call in a message (OpenAI format)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
     /// Tool call ID
@@ -622,6 +634,18 @@ pub struct ToolCall {
     pub name: String,
     /// Tool arguments as JSON
     pub arguments: serde_json::Value,
+}
+
+/// Tool call in Letta format (singular, with tool_call_id inside)
+/// Used for tool_call_message types to match Letta SDK expectations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LettaToolCall {
+    /// Tool name
+    pub name: String,
+    /// Tool arguments as JSON string (Letta SDK expects string, not object)
+    pub arguments: String,
+    /// Tool call ID
+    pub tool_call_id: String,
 }
 
 /// Tool that requires client-side execution

@@ -243,6 +243,9 @@ pub async fn handle_message_request<R: Runtime + 'static>(
         content: content.clone(),
         tool_call_id: request.tool_call_id.clone(),
         tool_calls: vec![],
+        tool_call: None,
+        tool_return: None,
+        status: None,
         created_at: Utc::now(),
     };
 
@@ -434,6 +437,7 @@ pub async fn handle_message_request<R: Runtime + 'static>(
 
                     for tool_call in &server_tools {
                         // Create tool_call message for this specific tool (Letta expects one message per tool call)
+                        // TigerStyle: Use both OpenAI format (tool_calls array) and Letta format (tool_call singular)
                         let tool_call_msg = Message {
                             id: Uuid::new_v4().to_string(),
                             agent_id: agent_id.clone(),
@@ -441,11 +445,21 @@ pub async fn handle_message_request<R: Runtime + 'static>(
                             role: MessageRole::Assistant,
                             content: response.content.clone(),
                             tool_call_id: None,
+                            // OpenAI format (kept for backwards compatibility)
                             tool_calls: vec![kelpie_server::models::ToolCall {
                                 id: tool_call.id.clone(),
                                 name: tool_call.name.clone(),
                                 arguments: tool_call.input.clone(),
                             }],
+                            // Letta SDK format (singular tool_call with tool_call_id inside)
+                            tool_call: Some(kelpie_server::models::LettaToolCall {
+                                name: tool_call.name.clone(),
+                                arguments: serde_json::to_string(&tool_call.input)
+                                    .unwrap_or_else(|_| "{}".to_string()),
+                                tool_call_id: tool_call.id.clone(),
+                            }),
+                            tool_return: None,
+                            status: None,
                             created_at: Utc::now(),
                         };
                         all_intermediate_messages.push(tool_call_msg);
@@ -467,6 +481,7 @@ pub async fn handle_message_request<R: Runtime + 'static>(
                         );
 
                         // Create tool_return message for this tool call
+                        // TigerStyle: Include both content and tool_return fields for compatibility
                         let tool_return_msg = Message {
                             id: Uuid::new_v4().to_string(),
                             agent_id: agent_id.clone(),
@@ -475,6 +490,17 @@ pub async fn handle_message_request<R: Runtime + 'static>(
                             content: exec_result.output.clone(),
                             tool_call_id: Some(tool_call.id.clone()),
                             tool_calls: vec![],
+                            tool_call: None,
+                            // Letta SDK format fields
+                            tool_return: Some(exec_result.output.clone()),
+                            status: Some(
+                                if exec_result.success {
+                                    "success"
+                                } else {
+                                    "error"
+                                }
+                                .to_string(),
+                            ),
                             created_at: Utc::now(),
                         };
                         all_intermediate_messages.push(tool_return_msg);
@@ -624,6 +650,9 @@ pub async fn handle_message_request<R: Runtime + 'static>(
         content: response_content,
         tool_call_id: None,
         tool_calls: vec![],
+        tool_call: None,
+        tool_return: None,
+        status: None,
         created_at: Utc::now(),
     };
 
@@ -794,6 +823,9 @@ async fn send_message_streaming<R: Runtime + 'static>(
         content: content.clone(),
         tool_call_id: request.tool_call_id.clone(),
         tool_calls: vec![],
+        tool_call: None,
+        tool_return: None,
+        status: None,
         created_at: Utc::now(),
     };
 
@@ -1139,6 +1171,9 @@ async fn generate_sse_events<R: Runtime + 'static>(
                 content: final_content,
                 tool_call_id: None,
                 tool_calls: vec![],
+                tool_call: None,
+                tool_return: None,
+                status: None,
                 created_at: Utc::now(),
             };
             if let Err(e) = state.add_message(agent_id, assistant_message) {
@@ -1297,6 +1332,9 @@ async fn generate_streaming_sse_events<R: Runtime + 'static>(
                                         content: content_buf.clone(),
                                         tool_call_id: None,
                                         tool_calls: vec![],
+                                        tool_call: None,
+                                        tool_return: None,
+                                        status: None,
                                         created_at: Utc::now(),
                                     };
 
