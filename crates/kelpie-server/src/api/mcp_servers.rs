@@ -3,6 +3,10 @@
 //! TigerStyle: RESTful MCP server management with explicit validation.
 //! Supports stdio, SSE, and streamable HTTP server types.
 
+// Allow tokio::spawn and tokio::time::timeout in production server code
+// This runs with real tokio runtime, not under DST
+#![allow(clippy::disallowed_methods)]
+
 use super::ApiError;
 use axum::{
     extract::{Path, State},

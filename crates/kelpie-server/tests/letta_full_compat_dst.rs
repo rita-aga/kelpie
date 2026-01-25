@@ -133,6 +133,9 @@ async fn test_dst_summarization_with_llm_faults() {
                         content: "Summarize this".to_string(),
                         tool_call_id: None,
                         tool_calls: vec![],
+                        tool_call: None,
+                        tool_return: None,
+                        status: None,
                         created_at: chrono::Utc::now(),
                     },
                 )
@@ -435,6 +438,9 @@ async fn test_dst_conversation_search_date_with_faults() {
                         content: "hello in range".to_string(),
                         tool_call_id: None,
                         tool_calls: vec![],
+                        tool_call: None,
+                        tool_return: None,
+                        status: None,
                         created_at: in_range_time,
                     },
                 )
@@ -453,6 +459,9 @@ async fn test_dst_conversation_search_date_with_faults() {
                         content: "hello old".to_string(),
                         tool_call_id: None,
                         tool_calls: vec![],
+                        tool_call: None,
+                        tool_return: None,
+                        status: None,
                         created_at: out_range_time,
                     },
                 )
@@ -603,6 +612,9 @@ async fn test_dst_export_with_message_read_fault() {
                         content: "export message".to_string(),
                         tool_call_id: None,
                         tool_calls: vec![],
+                        tool_call: None,
+                        tool_return: None,
+                        status: None,
                         created_at: chrono::Utc.with_ymd_and_hms(2025, 2, 1, 0, 0, 0).unwrap(),
                     },
                 )
