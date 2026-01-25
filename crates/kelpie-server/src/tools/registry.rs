@@ -12,6 +12,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
+/// Helper to compute elapsed time since start_ms using WallClockTime.
+/// WallClockTime is zero-sized, so this has no allocation cost.
+#[inline]
+fn elapsed_ms(start_ms: u64) -> u64 {
+    WallClockTime::new().monotonic_ms().saturating_sub(start_ms)
+}
+
 // =============================================================================
 // Constants (TigerStyle)
 // =============================================================================
@@ -459,7 +466,7 @@ impl UnifiedToolRegistry {
             None => {
                 return ToolExecutionResult::failure(
                     format!("Tool not found: {}", name),
-                    WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
+                    elapsed_ms(start_ms),
                 );
             }
         };
@@ -484,13 +491,13 @@ impl UnifiedToolRegistry {
             None => {
                 return ToolExecutionResult::failure(
                     format!("No handler for builtin tool: {}", name),
-                    WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
+                    elapsed_ms(start_ms),
                 );
             }
         };
 
         let output = handler(input).await;
-        let duration = WallClockTime::new().monotonic_ms().saturating_sub(start_ms);
+        let duration = elapsed_ms(start_ms);
 
         // Check if output looks like an error
         let success = !output.starts_with("Error:") && !output.starts_with("Failed:");
@@ -518,16 +525,10 @@ impl UnifiedToolRegistry {
                     Ok(result) => {
                         let output = serde_json::to_string_pretty(&result)
                             .unwrap_or_else(|_| result.to_string());
-                        return ToolExecutionResult::success(
-                            output,
-                            WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
-                        );
+                        return ToolExecutionResult::success(output, elapsed_ms(start_ms));
                     }
                     Err(e) => {
-                        return ToolExecutionResult::failure(
-                            e.to_string(),
-                            WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
-                        );
+                        return ToolExecutionResult::failure(e.to_string(), elapsed_ms(start_ms));
                     }
                 }
             }
@@ -541,7 +542,7 @@ impl UnifiedToolRegistry {
                 None => {
                     return ToolExecutionResult::failure(
                         format!("MCP server '{}' not connected", server),
-                        WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
+                        elapsed_ms(start_ms),
                     );
                 }
             }
@@ -561,7 +562,7 @@ impl UnifiedToolRegistry {
                             "MCP server '{}' is not connected and reconnection failed: {}",
                             server, e
                         ),
-                        WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
+                        elapsed_ms(start_ms),
                     );
                 }
             }
@@ -572,19 +573,16 @@ impl UnifiedToolRegistry {
             Ok(result) => {
                 // Extract content using robust helper function
                 match kelpie_tools::extract_tool_output(&result, name) {
-                    Ok(output) => ToolExecutionResult::success(
-                        output,
-                        WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
-                    ),
+                    Ok(output) => ToolExecutionResult::success(output, elapsed_ms(start_ms)),
                     Err(e) => ToolExecutionResult::failure(
                         format!("Failed to extract tool output: {}", e),
-                        WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
+                        elapsed_ms(start_ms),
                     ),
                 }
             }
             Err(e) => ToolExecutionResult::failure(
                 format!("MCP tool execution failed: {}", e),
-                WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
+                elapsed_ms(start_ms),
             ),
         }
     }
@@ -600,7 +598,7 @@ impl UnifiedToolRegistry {
         let Some(custom_tool) = self.custom_tools.read().await.get(name).cloned() else {
             return ToolExecutionResult::failure(
                 format!("Custom tool not found: {}", name),
-                WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
+                elapsed_ms(start_ms),
             );
         };
 
@@ -608,7 +606,7 @@ impl UnifiedToolRegistry {
         if runtime != "python" && runtime != "py" {
             return ToolExecutionResult::failure(
                 format!("Unsupported custom tool runtime: {}", custom_tool.runtime),
-                WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
+                elapsed_ms(start_ms),
             );
         }
 
@@ -646,7 +644,7 @@ impl UnifiedToolRegistry {
         if let Err(e) = sandbox.start().await {
             return ToolExecutionResult::failure(
                 format!("Failed to start sandbox: {}", e),
-                WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
+                elapsed_ms(start_ms),
             );
         }
 
@@ -667,7 +665,7 @@ impl UnifiedToolRegistry {
             if let Err(e) = install_output {
                 return ToolExecutionResult::failure(
                     format!("Failed to install tool requirements: {}", e),
-                    WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
+                    elapsed_ms(start_ms),
                 );
             }
         }
@@ -698,12 +696,12 @@ impl UnifiedToolRegistry {
             Err(e) => {
                 return ToolExecutionResult::failure(
                     format!("Custom tool execution failed: {}", e),
-                    WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
+                    elapsed_ms(start_ms),
                 )
             }
         };
 
-        let duration = WallClockTime::new().monotonic_ms().saturating_sub(start_ms);
+        let duration = elapsed_ms(start_ms);
         if output.is_success() {
             ToolExecutionResult::success(output.stdout_string(), duration)
         } else {

@@ -21,15 +21,24 @@ use tokio::sync::RwLock;
 ///
 /// This is a simpler synchronous trait for code that doesn't need async sleep.
 /// For full DST compatibility with sleep support, use `TimeProvider` instead.
+#[deprecated(
+    since = "0.2.0",
+    note = "Use TimeProvider from kelpie_core::io instead"
+)]
 pub trait Clock: Send + Sync {
     /// Get the current time in milliseconds since Unix epoch
     fn now_ms(&self) -> u64;
 }
 
 /// System clock implementation using WallClockTime
+#[deprecated(
+    since = "0.2.0",
+    note = "Use WallClockTime from kelpie_core::io instead"
+)]
 #[derive(Debug, Default)]
 pub struct SystemClock;
 
+#[allow(deprecated)]
 impl Clock for SystemClock {
     fn now_ms(&self) -> u64 {
         WallClockTime::new().now_ms()

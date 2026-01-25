@@ -77,6 +77,13 @@ impl ActivationStats {
         }
     }
 
+    /// Record an invocation (uses wall clock time)
+    ///
+    /// For DST compatibility, use `record_invocation_with_time` instead.
+    pub fn record_invocation(&mut self, duration_ms: u64, is_error: bool) {
+        self.record_invocation_with_time(duration_ms, is_error, &WallClockTime::new());
+    }
+
     /// Record an invocation with time provider (for DST)
     pub fn record_invocation_with_time(
         &mut self,
