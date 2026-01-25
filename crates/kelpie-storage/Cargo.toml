@@ -19,6 +19,8 @@ async-trait = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
 # Optional: FoundationDB backend
 foundationdb = { workspace = true, optional = true }

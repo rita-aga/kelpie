@@ -17,10 +17,16 @@
 //!
 //! On recovery: replay all pending entries
 //! ```
+//!
+//! # DST Support
+//!
+//! All WAL implementations accept a `TimeProvider` for deterministic simulation testing.
+//! In production, use `WallClockTime`. In DST, inject `SimClock`.
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::actor::ActorId;
+use kelpie_core::io::{TimeProvider, WallClockTime};
 use kelpie_core::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -169,6 +175,12 @@ impl WalEntry {
 // =============================================================================
 
 /// Write-Ahead Log trait for durable operation logging
+///
+/// # DST Support
+///
+/// Implementations store a `TimeProvider` internally (injected via constructor).
+/// This allows deterministic simulation testing by injecting `SimClock`.
+/// Methods no longer take `now_ms` parameters - time is obtained from the provider.
 #[async_trait]
 pub trait WriteAheadLog: Send + Sync {
     /// Durably append a new entry to the WAL
@@ -176,17 +188,17 @@ pub trait WriteAheadLog: Send + Sync {
     /// Returns the entry ID on success. The entry is guaranteed to be
     /// durable when this method returns.
     ///
+    /// Timestamp is obtained from the injected TimeProvider.
+    ///
     /// # Arguments
     /// * `operation` - Type of operation
     /// * `actor_id` - Target actor
     /// * `payload` - Serialized request data
-    /// * `now_ms` - Current timestamp in milliseconds
     async fn append(
         &self,
         operation: WalOperation,
         actor_id: &ActorId,
         payload: Bytes,
-        now_ms: u64,
     ) -> Result<WalEntryId>;
 
     /// Durably append a new entry with idempotency key
@@ -194,30 +206,32 @@ pub trait WriteAheadLog: Send + Sync {
     /// If an entry with the same idempotency key already exists (completed or pending),
     /// returns the existing entry ID without creating a duplicate.
     ///
+    /// Timestamp is obtained from the injected TimeProvider.
+    ///
     /// # Arguments
     /// * `operation` - Type of operation
     /// * `actor_id` - Target actor
     /// * `payload` - Serialized request data
-    /// * `now_ms` - Current timestamp in milliseconds
     /// * `idempotency_key` - Unique key for deduplication
     async fn append_with_idempotency(
         &self,
         operation: WalOperation,
         actor_id: &ActorId,
         payload: Bytes,
-        now_ms: u64,
         idempotency_key: String,
     ) -> Result<(WalEntryId, bool)>; // Returns (entry_id, is_new)
 
     /// Mark an entry as successfully completed
     ///
     /// The entry will not be replayed on recovery.
-    async fn complete(&self, entry_id: WalEntryId, now_ms: u64) -> Result<()>;
+    /// Completion timestamp is obtained from the injected TimeProvider.
+    async fn complete(&self, entry_id: WalEntryId) -> Result<()>;
 
     /// Mark an entry as failed
     ///
     /// Failed entries are not replayed on recovery.
-    async fn fail(&self, entry_id: WalEntryId, error: &str, now_ms: u64) -> Result<()>;
+    /// Failure timestamp is obtained from the injected TimeProvider.
+    async fn fail(&self, entry_id: WalEntryId, error: &str) -> Result<()>;
 
     /// Get all pending entries for replay
     ///
@@ -232,7 +246,7 @@ pub trait WriteAheadLog: Send + Sync {
 
     /// Cleanup old completed/failed entries
     ///
-    /// Removes entries older than `older_than_ms` that are not pending.
+    /// Removes entries completed before `older_than_ms` that are not pending.
     /// Returns the number of entries removed.
     async fn cleanup(&self, older_than_ms: u64) -> Result<u64>;
 
@@ -248,24 +262,59 @@ pub trait WriteAheadLog: Send + Sync {
 ///
 /// TigerStyle: This implementation is for testing only.
 /// Production should use KvWal or a file-based implementation.
-#[derive(Debug)]
+///
+/// # DST Support
+///
+/// Accepts a `TimeProvider` for deterministic simulation testing.
+/// Use `MemoryWal::new()` for production (uses WallClockTime).
+/// Use `MemoryWal::with_time_provider()` for DST (inject SimClock).
 pub struct MemoryWal {
     entries: RwLock<HashMap<WalEntryId, WalEntry>>,
     next_id: AtomicU64,
+    /// Time provider for timestamps (DST-injectable)
+    time: Arc<dyn TimeProvider>,
+}
+
+impl std::fmt::Debug for MemoryWal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryWal")
+            .field("next_id", &self.next_id.load(Ordering::SeqCst))
+            .field("time", &self.time)
+            .finish()
+    }
 }
 
 impl MemoryWal {
-    /// Create a new in-memory WAL
+    /// Create a new in-memory WAL with wall clock time (production)
     pub fn new() -> Self {
+        Self::with_time_provider(Arc::new(WallClockTime::new()))
+    }
+
+    /// Create a new in-memory WAL with custom time provider (DST)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // For DST testing with SimClock
+    /// let sim_clock = Arc::new(SimClock::new(1000));
+    /// let wal = MemoryWal::with_time_provider(sim_clock);
+    /// ```
+    pub fn with_time_provider(time: Arc<dyn TimeProvider>) -> Self {
         Self {
             entries: RwLock::new(HashMap::new()),
             next_id: AtomicU64::new(1),
+            time,
         }
     }
 
-    /// Create a new in-memory WAL wrapped in Arc
+    /// Create a new in-memory WAL wrapped in Arc (production)
     pub fn new_arc() -> Arc<Self> {
         Arc::new(Self::new())
+    }
+
+    /// Create a new in-memory WAL wrapped in Arc with custom time provider (DST)
+    pub fn new_arc_with_time_provider(time: Arc<dyn TimeProvider>) -> Arc<Self> {
+        Arc::new(Self::with_time_provider(time))
     }
 }
 
@@ -282,8 +331,8 @@ impl WriteAheadLog for MemoryWal {
         operation: WalOperation,
         actor_id: &ActorId,
         payload: Bytes,
-        now_ms: u64,
     ) -> Result<WalEntryId> {
+        let now_ms = self.time.now_ms();
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let entry = WalEntry::new(id, operation, actor_id, payload, now_ms);
 
@@ -298,7 +347,6 @@ impl WriteAheadLog for MemoryWal {
         operation: WalOperation,
         actor_id: &ActorId,
         payload: Bytes,
-        now_ms: u64,
         idempotency_key: String,
     ) -> Result<(WalEntryId, bool)> {
         let mut entries = self.entries.write().await;
@@ -311,6 +359,7 @@ impl WriteAheadLog for MemoryWal {
         }
 
         // Create new entry
+        let now_ms = self.time.now_ms();
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let entry = WalEntry::new_with_idempotency_key(
             id,
@@ -325,7 +374,8 @@ impl WriteAheadLog for MemoryWal {
         Ok((id, true)) // New entry created
     }
 
-    async fn complete(&self, entry_id: WalEntryId, now_ms: u64) -> Result<()> {
+    async fn complete(&self, entry_id: WalEntryId) -> Result<()> {
+        let now_ms = self.time.now_ms();
         let mut entries = self.entries.write().await;
 
         if let Some(entry) = entries.get_mut(&entry_id) {
@@ -344,7 +394,8 @@ impl WriteAheadLog for MemoryWal {
         }
     }
 
-    async fn fail(&self, entry_id: WalEntryId, error: &str, now_ms: u64) -> Result<()> {
+    async fn fail(&self, entry_id: WalEntryId, error: &str) -> Result<()> {
+        let now_ms = self.time.now_ms();
         let mut entries = self.entries.write().await;
 
         if let Some(entry) = entries.get_mut(&entry_id) {
@@ -443,27 +494,57 @@ const WAL_SYSTEM_ID: &str = "wal";
 /// Stores WAL entries in the same KV store as actor state.
 /// Uses atomic transactions for durability.
 /// Uses a special "_system:wal" actor ID to isolate WAL data.
+///
+/// # DST Support
+///
+/// Accepts a `TimeProvider` for deterministic simulation testing.
+/// Use `KvWal::new()` for production (uses WallClockTime).
+/// Use `KvWal::with_time_provider()` for DST (inject SimClock).
 pub struct KvWal {
     kv: Arc<dyn ActorKV>,
     /// System actor ID for WAL storage
     system_actor_id: ActorId,
+    /// Time provider for timestamps (DST-injectable)
+    time: Arc<dyn TimeProvider>,
 }
 
 impl KvWal {
-    /// Create a new KV-backed WAL
+    /// Create a new KV-backed WAL with wall clock time (production)
     pub fn new(kv: Arc<dyn ActorKV>) -> Self {
+        Self::with_time_provider(kv, Arc::new(WallClockTime::new()))
+    }
+
+    /// Create a new KV-backed WAL with custom time provider (DST)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // For DST testing with SimClock
+    /// let sim_clock = Arc::new(SimClock::new(1000));
+    /// let wal = KvWal::with_time_provider(kv, sim_clock);
+    /// ```
+    pub fn with_time_provider(kv: Arc<dyn ActorKV>, time: Arc<dyn TimeProvider>) -> Self {
         // Use a system actor ID for WAL storage
         let system_actor_id = ActorId::new(WAL_SYSTEM_NAMESPACE, WAL_SYSTEM_ID)
             .expect("WAL system actor ID must be valid");
         Self {
             kv,
             system_actor_id,
+            time,
         }
     }
 
-    /// Create a new KV-backed WAL wrapped in Arc
+    /// Create a new KV-backed WAL wrapped in Arc (production)
     pub fn new_arc(kv: Arc<dyn ActorKV>) -> Arc<Self> {
         Arc::new(Self::new(kv))
+    }
+
+    /// Create a new KV-backed WAL wrapped in Arc with custom time provider (DST)
+    pub fn new_arc_with_time_provider(
+        kv: Arc<dyn ActorKV>,
+        time: Arc<dyn TimeProvider>,
+    ) -> Arc<Self> {
+        Arc::new(Self::with_time_provider(kv, time))
     }
 
     /// Generate the key for a WAL entry
@@ -522,8 +603,8 @@ impl WriteAheadLog for KvWal {
         operation: WalOperation,
         actor_id: &ActorId,
         payload: Bytes,
-        now_ms: u64,
     ) -> Result<WalEntryId> {
+        let now_ms = self.time.now_ms();
         let id = self.next_id().await?;
         let entry = WalEntry::new(id, operation, actor_id, payload, now_ms);
 
@@ -546,7 +627,6 @@ impl WriteAheadLog for KvWal {
         operation: WalOperation,
         actor_id: &ActorId,
         payload: Bytes,
-        now_ms: u64,
         idempotency_key: String,
     ) -> Result<(WalEntryId, bool)> {
         // First, check if entry with this idempotency key already exists
@@ -555,6 +635,7 @@ impl WriteAheadLog for KvWal {
         }
 
         // Create new entry with idempotency key
+        let now_ms = self.time.now_ms();
         let id = self.next_id().await?;
         let entry = WalEntry::new_with_idempotency_key(
             id,
@@ -604,7 +685,8 @@ impl WriteAheadLog for KvWal {
         Ok(None)
     }
 
-    async fn complete(&self, entry_id: WalEntryId, now_ms: u64) -> Result<()> {
+    async fn complete(&self, entry_id: WalEntryId) -> Result<()> {
+        let now_ms = self.time.now_ms();
         let key = Self::entry_key(entry_id);
 
         let mut txn = self.kv.begin_transaction(&self.system_actor_id).await?;
@@ -644,7 +726,8 @@ impl WriteAheadLog for KvWal {
         Ok(())
     }
 
-    async fn fail(&self, entry_id: WalEntryId, error: &str, now_ms: u64) -> Result<()> {
+    async fn fail(&self, entry_id: WalEntryId, error: &str) -> Result<()> {
+        let now_ms = self.time.now_ms();
         let key = Self::entry_key(entry_id);
 
         let mut txn = self.kv.begin_transaction(&self.system_actor_id).await?;
@@ -777,20 +860,53 @@ impl WriteAheadLog for KvWal {
 mod tests {
     use super::*;
     use crate::MemoryKV;
+    use std::sync::atomic::AtomicU64;
 
     fn test_actor_id() -> ActorId {
         ActorId::new("test", "agent-1").unwrap()
     }
 
+    /// A controllable time provider for tests
+    ///
+    /// Allows setting specific timestamps for deterministic testing.
+    #[derive(Debug)]
+    struct TestClock {
+        current_ms: AtomicU64,
+    }
+
+    impl TestClock {
+        fn new(initial_ms: u64) -> Self {
+            Self {
+                current_ms: AtomicU64::new(initial_ms),
+            }
+        }
+
+        fn set(&self, ms: u64) {
+            self.current_ms.store(ms, Ordering::SeqCst);
+        }
+    }
+
+    #[async_trait]
+    impl TimeProvider for TestClock {
+        fn now_ms(&self) -> u64 {
+            self.current_ms.load(Ordering::SeqCst)
+        }
+
+        async fn sleep_ms(&self, _ms: u64) {
+            // In tests, we don't actually sleep
+        }
+    }
+
     #[tokio::test]
     async fn test_memory_wal_append_and_complete() {
-        let wal = MemoryWal::new();
+        let clock = Arc::new(TestClock::new(1000));
+        let wal = MemoryWal::with_time_provider(clock.clone());
         let actor_id = test_actor_id();
         let payload = Bytes::from("test payload");
 
         // Append
         let entry_id = wal
-            .append(WalOperation::CreateAgent, &actor_id, payload.clone(), 1000)
+            .append(WalOperation::CreateAgent, &actor_id, payload.clone())
             .await
             .unwrap();
 
@@ -801,9 +917,11 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].id, entry_id);
         assert!(pending[0].is_pending());
+        assert_eq!(pending[0].created_at_ms, 1000);
 
-        // Complete
-        wal.complete(entry_id, 2000).await.unwrap();
+        // Advance time and complete
+        clock.set(2000);
+        wal.complete(entry_id).await.unwrap();
 
         // Verify no longer pending
         let pending = wal.pending_entries().await.unwrap();
@@ -817,21 +935,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_memory_wal_append_and_fail() {
-        let wal = MemoryWal::new();
+        let clock = Arc::new(TestClock::new(1000));
+        let wal = MemoryWal::with_time_provider(clock.clone());
         let actor_id = test_actor_id();
 
         let entry_id = wal
-            .append(
-                WalOperation::SendMessage,
-                &actor_id,
-                Bytes::from("msg"),
-                1000,
-            )
+            .append(WalOperation::SendMessage, &actor_id, Bytes::from("msg"))
             .await
             .unwrap();
 
         // Fail
-        wal.fail(entry_id, "test error", 2000).await.unwrap();
+        clock.set(2000);
+        wal.fail(entry_id, "test error").await.unwrap();
 
         // Verify no longer pending
         let pending = wal.pending_entries().await.unwrap();
@@ -840,29 +955,36 @@ mod tests {
         // Verify entry is failed
         let entry = wal.get(entry_id).await.unwrap().unwrap();
         assert!(matches!(entry.status, WalStatus::Failed { .. }));
+        assert_eq!(entry.completed_at_ms, Some(2000));
     }
 
     #[tokio::test]
     async fn test_memory_wal_pending_entries_ordered() {
-        let wal = MemoryWal::new();
+        let clock = Arc::new(TestClock::new(1000));
+        let wal = MemoryWal::with_time_provider(clock.clone());
         let actor_id = test_actor_id();
 
         // Append multiple entries
         let id1 = wal
-            .append(WalOperation::CreateAgent, &actor_id, Bytes::new(), 1000)
+            .append(WalOperation::CreateAgent, &actor_id, Bytes::new())
             .await
             .unwrap();
+
+        clock.set(2000);
         let id2 = wal
-            .append(WalOperation::UpdateAgent, &actor_id, Bytes::new(), 2000)
+            .append(WalOperation::UpdateAgent, &actor_id, Bytes::new())
             .await
             .unwrap();
+
+        clock.set(3000);
         let id3 = wal
-            .append(WalOperation::SendMessage, &actor_id, Bytes::new(), 3000)
+            .append(WalOperation::SendMessage, &actor_id, Bytes::new())
             .await
             .unwrap();
 
         // Complete middle one
-        wal.complete(id2, 2500).await.unwrap();
+        clock.set(2500);
+        wal.complete(id2).await.unwrap();
 
         // Verify pending entries are ordered
         let pending = wal.pending_entries().await.unwrap();
@@ -873,25 +995,33 @@ mod tests {
 
     #[tokio::test]
     async fn test_memory_wal_cleanup() {
-        let wal = MemoryWal::new();
+        let clock = Arc::new(TestClock::new(1000));
+        let wal = MemoryWal::with_time_provider(clock.clone());
         let actor_id = test_actor_id();
 
         // Append and complete entries
         let id1 = wal
-            .append(WalOperation::CreateAgent, &actor_id, Bytes::new(), 1000)
-            .await
-            .unwrap();
-        let id2 = wal
-            .append(WalOperation::UpdateAgent, &actor_id, Bytes::new(), 2000)
-            .await
-            .unwrap();
-        let _id3 = wal
-            .append(WalOperation::SendMessage, &actor_id, Bytes::new(), 3000)
+            .append(WalOperation::CreateAgent, &actor_id, Bytes::new())
             .await
             .unwrap();
 
-        wal.complete(id1, 1500).await.unwrap();
-        wal.complete(id2, 2500).await.unwrap();
+        clock.set(2000);
+        let id2 = wal
+            .append(WalOperation::UpdateAgent, &actor_id, Bytes::new())
+            .await
+            .unwrap();
+
+        clock.set(3000);
+        let _id3 = wal
+            .append(WalOperation::SendMessage, &actor_id, Bytes::new())
+            .await
+            .unwrap();
+
+        clock.set(1500);
+        wal.complete(id1).await.unwrap();
+
+        clock.set(2500);
+        wal.complete(id2).await.unwrap();
         // id3 stays pending
 
         // Cleanup entries completed before 2000
@@ -906,17 +1036,13 @@ mod tests {
     #[tokio::test]
     async fn test_kv_wal_basic() {
         let kv = Arc::new(MemoryKV::new());
-        let wal = KvWal::new(kv);
+        let clock = Arc::new(TestClock::new(1000));
+        let wal = KvWal::with_time_provider(kv, clock.clone());
         let actor_id = test_actor_id();
 
         // Append
         let entry_id = wal
-            .append(
-                WalOperation::CreateAgent,
-                &actor_id,
-                Bytes::from("payload"),
-                1000,
-            )
+            .append(WalOperation::CreateAgent, &actor_id, Bytes::from("payload"))
             .await
             .unwrap();
 
@@ -927,7 +1053,8 @@ mod tests {
         assert_eq!(pending.len(), 1);
 
         // Complete
-        wal.complete(entry_id, 2000).await.unwrap();
+        clock.set(2000);
+        wal.complete(entry_id).await.unwrap();
 
         // Verify not pending
         let pending = wal.pending_entries().await.unwrap();
@@ -936,33 +1063,37 @@ mod tests {
 
     #[tokio::test]
     async fn test_pending_count() {
-        let wal = MemoryWal::new();
+        let clock = Arc::new(TestClock::new(1000));
+        let wal = MemoryWal::with_time_provider(clock.clone());
         let actor_id = test_actor_id();
 
         assert_eq!(wal.pending_count().await.unwrap(), 0);
 
         let id1 = wal
-            .append(WalOperation::CreateAgent, &actor_id, Bytes::new(), 1000)
+            .append(WalOperation::CreateAgent, &actor_id, Bytes::new())
             .await
             .unwrap();
 
         assert_eq!(wal.pending_count().await.unwrap(), 1);
 
+        clock.set(2000);
         let _id2 = wal
-            .append(WalOperation::UpdateAgent, &actor_id, Bytes::new(), 2000)
+            .append(WalOperation::UpdateAgent, &actor_id, Bytes::new())
             .await
             .unwrap();
 
         assert_eq!(wal.pending_count().await.unwrap(), 2);
 
-        wal.complete(id1, 1500).await.unwrap();
+        clock.set(1500);
+        wal.complete(id1).await.unwrap();
 
         assert_eq!(wal.pending_count().await.unwrap(), 1);
     }
 
     #[tokio::test]
     async fn test_memory_wal_idempotency() {
-        let wal = MemoryWal::new();
+        let clock = Arc::new(TestClock::new(1000));
+        let wal = MemoryWal::with_time_provider(clock.clone());
         let actor_id = test_actor_id();
         let idempotency_key = "msg-uuid-12345".to_string();
 
@@ -972,7 +1103,6 @@ mod tests {
                 WalOperation::SendMessage,
                 &actor_id,
                 Bytes::from("message payload"),
-                1000,
                 idempotency_key.clone(),
             )
             .await
@@ -982,12 +1112,12 @@ mod tests {
         assert_eq!(id1, 1);
 
         // Second append with same idempotency key - should return existing
+        clock.set(2000);
         let (id2, is_new2) = wal
             .append_with_idempotency(
                 WalOperation::SendMessage,
                 &actor_id,
                 Bytes::from("different payload"),
-                2000,
                 idempotency_key.clone(),
             )
             .await
@@ -1009,12 +1139,12 @@ mod tests {
         assert_eq!(found.idempotency_key, Some(idempotency_key));
 
         // Different idempotency key creates new entry
+        clock.set(3000);
         let (id3, is_new3) = wal
             .append_with_idempotency(
                 WalOperation::SendMessage,
                 &actor_id,
                 Bytes::from("another message"),
-                3000,
                 "msg-uuid-67890".to_string(),
             )
             .await
@@ -1027,7 +1157,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_memory_wal_idempotency_after_complete() {
-        let wal = MemoryWal::new();
+        let clock = Arc::new(TestClock::new(1000));
+        let wal = MemoryWal::with_time_provider(clock.clone());
         let actor_id = test_actor_id();
         let idempotency_key = "msg-uuid-complete".to_string();
 
@@ -1037,21 +1168,21 @@ mod tests {
                 WalOperation::SendMessage,
                 &actor_id,
                 Bytes::from("payload"),
-                1000,
                 idempotency_key.clone(),
             )
             .await
             .unwrap();
 
-        wal.complete(id1, 1500).await.unwrap();
+        clock.set(1500);
+        wal.complete(id1).await.unwrap();
 
         // Try to append again with same key - should still find completed entry
+        clock.set(2000);
         let (id2, is_new) = wal
             .append_with_idempotency(
                 WalOperation::SendMessage,
                 &actor_id,
                 Bytes::from("retry payload"),
-                2000,
                 idempotency_key.clone(),
             )
             .await
@@ -1064,7 +1195,8 @@ mod tests {
     #[tokio::test]
     async fn test_kv_wal_idempotency() {
         let kv = Arc::new(MemoryKV::new());
-        let wal = KvWal::new(kv);
+        let clock = Arc::new(TestClock::new(1000));
+        let wal = KvWal::with_time_provider(kv, clock.clone());
         let actor_id = test_actor_id();
         let idempotency_key = "kv-msg-uuid-12345".to_string();
 
@@ -1074,7 +1206,6 @@ mod tests {
                 WalOperation::SendMessage,
                 &actor_id,
                 Bytes::from("message payload"),
-                1000,
                 idempotency_key.clone(),
             )
             .await
@@ -1083,12 +1214,12 @@ mod tests {
         assert!(is_new1, "First append should create new entry");
 
         // Second append with same idempotency key - should return existing
+        clock.set(2000);
         let (id2, is_new2) = wal
             .append_with_idempotency(
                 WalOperation::SendMessage,
                 &actor_id,
                 Bytes::from("different payload"),
-                2000,
                 idempotency_key.clone(),
             )
             .await
@@ -1120,12 +1251,41 @@ mod tests {
 
         // Entry without idempotency key
         let actor_id = test_actor_id();
-        wal.append(WalOperation::CreateAgent, &actor_id, Bytes::new(), 1000)
+        wal.append(WalOperation::CreateAgent, &actor_id, Bytes::new())
             .await
             .unwrap();
 
         // Still not found
         let result = wal.find_by_idempotency_key("nonexistent").await.unwrap();
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_time_provider_injection_enables_dst() {
+        // This test demonstrates the DST pattern:
+        // 1. Create a controllable clock
+        // 2. Inject it into WAL
+        // 3. Control time externally
+        // 4. Verify timestamps are deterministic
+
+        let clock = Arc::new(TestClock::new(1000));
+        let wal = MemoryWal::with_time_provider(clock.clone());
+        let actor_id = test_actor_id();
+
+        // Time is 1000
+        let entry_id = wal
+            .append(WalOperation::CreateAgent, &actor_id, Bytes::new())
+            .await
+            .unwrap();
+
+        let entry = wal.get(entry_id).await.unwrap().unwrap();
+        assert_eq!(entry.created_at_ms, 1000, "Should use injected time");
+
+        // Advance to 5000
+        clock.set(5000);
+        wal.complete(entry_id).await.unwrap();
+
+        let entry = wal.get(entry_id).await.unwrap().unwrap();
+        assert_eq!(entry.completed_at_ms, Some(5000), "Should use updated time");
     }
 }

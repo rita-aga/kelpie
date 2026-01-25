@@ -781,12 +781,13 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
         update: serde_json::Value,
     ) -> Result<AgentState, StateError> {
         if let Some(service) = self.agent_service() {
-            let agent = service
-                .update_agent(id, update)
-                .await
-                .map_err(|e| StateError::Internal {
-                    message: format!("Service error: {}", e),
-                })?;
+            let agent =
+                service
+                    .update_agent(id, update)
+                    .await
+                    .map_err(|e| StateError::Internal {
+                        message: format!("Service error: {}", e),
+                    })?;
 
             // TigerStyle: Also update HashMap to keep list in sync (memory mode)
             if self.inner.storage.is_none() {
