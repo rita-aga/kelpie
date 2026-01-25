@@ -1,6 +1,6 @@
 # True DST Simulation Architecture
 
-**Status:** PHASE 2 COMPLETE
+**Status:** PHASE 3 COMPLETE
 **Created:** 2026-01-25
 **Issue:** To be created after plan approval
 **Branch:** feature/phase1-storage-time-provider
@@ -168,25 +168,33 @@ EFFORT                   │                    EFFORT
 **Goal:** Enable network partition testing of production code
 
 **Tasks:**
-1. [ ] Create NetworkProvider trait
-   ```rust
-   #[async_trait]
-   pub trait NetworkProvider: Send + Sync {
-       async fn connect(&self, addr: &str) -> Result<Box<dyn Connection>>;
-       async fn listen(&self, addr: &str) -> Result<Box<dyn Listener>>;
-   }
-   ```
+1. [x] Create SimRpcTransport (**COMPLETE** - 2026-01-24)
+   - Created `crates/kelpie-dst/src/transport.rs`
+   - `SimRpcTransport` implements `RpcTransport` trait
+   - Uses `SimNetwork` under the hood for partition simulation
+   - `SimRpcTransportBuilder` for creating multi-node clusters
+   - 4 unit tests in transport module
 
-2. [ ] Refactor kelpie-cluster/rpc.rs to use NetworkProvider
-   - 32 functions to update
-   - Production uses TokioNetworkProvider
-   - Tests use SimNetwork
+2. [x] Bridge SimNetwork to RpcTransport (**COMPLETE** - 2026-01-24)
+   - SimRpcTransport converts RpcMessage to/from Bytes
+   - Partitions created via SimNetwork block RpcTransport::send()
+   - Production Cluster code works unchanged
+   - No refactoring of TcpTransport needed (simpler approach)
 
-3. [ ] Create partition_tolerance tests with real cluster code
+3. [x] Create partition_tolerance tests with real cluster code (**COMPLETE** - 2026-01-24)
+   - Created `crates/kelpie-dst/tests/cluster_partition_dst.rs`
+   - 5 tests demonstrating production Cluster + partition testing:
+     - test_cluster_with_sim_transport
+     - test_partition_blocks_rpc_send
+     - test_one_way_partition_asymmetric
+     - test_multi_node_group_partition
+     - test_partition_determinism
+   - All 5 tests pass, proving the pattern works
 
-**Deliverable:** Network partition bugs in RPC catchable
-**Effort:** 5-6 days
-**Risk:** Medium (API changes)
+**Deliverable:** Network partition bugs in RPC catchable ✅
+**Total DST tests:** 21 production tests (8 WAL + 4 stress + 4 cluster + 5 partition)
+**Effort:** 1 day (simpler approach than originally planned)
+**Risk:** Low (no production code changes, just added DST infrastructure)
 
 ### Phase 4: FDB Abstraction (Week 6)
 **Goal:** Run CI without real FDB
@@ -257,6 +265,9 @@ After all phases:
 | Phase 2 | Add TimeProvider to Cluster and ClusterRpcHandler | Heartbeat timestamps and migration timing need DST control | Additional constructor parameter |
 | Phase 2 | Remove duplicate now_ms() helper functions | Use TimeProvider consistently | None - cleaner code |
 | Phase 2 | Create new cluster_production_dst.rs test file | Demonstrates pattern separately from existing mocks | Existing cluster_dst.rs still uses Cluster::new() |
+| Phase 3 | SimRpcTransport instead of NetworkProvider | Simpler approach: bridges SimNetwork to existing RpcTransport | No TcpTransport refactoring, achieves same DST value |
+| Phase 3 | Added kelpie-cluster to kelpie-dst dependencies | SimRpcTransport needs RpcTransport trait | Slightly larger kelpie-dst crate |
+| Phase 3 | Keep existing partition_tolerance_dst.rs tests | They test quorum logic with SimClusterNode mock | Both mock and production tests coexist |
 
 ## Risks & Mitigations
 

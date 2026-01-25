@@ -37,7 +37,7 @@ fn test_node(id: u32, clock: &SimClock) -> NodeInfo {
 fn test_config() -> ClusterConfig {
     ClusterConfig::for_testing()
         .with_heartbeat_interval(100) // 100ms heartbeat interval
-        .with_rpc_timeout(1000)       // 1s RPC timeout
+        .with_rpc_timeout(1000) // 1s RPC timeout
 }
 
 // =============================================================================
@@ -63,14 +63,8 @@ async fn test_cluster_lifecycle_with_sim_time() {
     let transport = Arc::new(MemoryTransport::new(node.id.clone(), addr, runtime.clone()));
 
     // Create production Cluster with injected SimClock
-    let cluster = Cluster::with_time_provider(
-        node,
-        config,
-        registry,
-        transport,
-        runtime,
-        clock.clone(),
-    );
+    let cluster =
+        Cluster::with_time_provider(node, config, registry, transport, runtime, clock.clone());
 
     // Precondition: initial state is Stopped
     assert_eq!(cluster.state().await, ClusterState::Stopped);
@@ -127,7 +121,10 @@ async fn test_heartbeat_timestamps_from_sim_clock() {
     // The heartbeat task uses time_provider.now_ms() for timestamps
     // We can verify this by checking the clock value matches expected
     let current_time = clock.now_ms();
-    assert_eq!(current_time, 946684800000, "SimClock should be at year 2000");
+    assert_eq!(
+        current_time, 946684800000,
+        "SimClock should be at year 2000"
+    );
 
     // Advance time by 10 years instantly
     clock.advance_ms(10 * 365 * 24 * 60 * 60 * 1000);
@@ -170,13 +167,19 @@ async fn test_cluster_determinism() {
     let run2 = run_sequence(1000).await;
 
     // Precondition: sequences should be identical
-    assert_eq!(run1, run2, "Same starting time should produce same timestamps");
+    assert_eq!(
+        run1, run2,
+        "Same starting time should produce same timestamps"
+    );
 
     // Run with different starting time
     let run3 = run_sequence(5000).await;
 
     // Postcondition: different start = different timestamps
-    assert_ne!(run1[0], run3[0], "Different starting time should produce different timestamps");
+    assert_ne!(
+        run1[0], run3[0],
+        "Different starting time should produce different timestamps"
+    );
 }
 
 /// Test cluster handler with simulated time.

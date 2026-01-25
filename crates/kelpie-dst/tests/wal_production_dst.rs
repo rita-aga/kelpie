@@ -11,6 +11,10 @@
 //!
 //! TigerStyle: DST-first testing with explicit time control, 2+ assertions per test.
 
+// Allow madsim::task::spawn for DST deterministic task scheduling
+// (clippy detects it as tokio::spawn because madsim wraps tokio)
+#![allow(clippy::disallowed_methods)]
+
 use bytes::Bytes;
 use kelpie_core::ActorId;
 use kelpie_dst::SimClock;

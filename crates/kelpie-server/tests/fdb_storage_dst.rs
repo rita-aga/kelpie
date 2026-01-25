@@ -342,6 +342,9 @@ async fn test_dst_fdb_session_checkpoint_with_conflicts() {
                     content: format!("Response {}", i),
                     tool_calls: vec![],
                     tool_call_id: None,
+                    tool_call: None,
+                    tool_return: None,
+                    status: None,
                     created_at: chrono::Utc::now(),
                 };
 
@@ -465,6 +468,9 @@ async fn test_dst_fdb_messages_with_high_fault_rate() {
                     content: format!("Message {}", i),
                     tool_calls: vec![],
                     tool_call_id: None,
+                    tool_call: None,
+                    tool_return: None,
+                    status: None,
                     created_at: chrono::Utc::now(),
                 };
 
@@ -717,6 +723,9 @@ async fn test_dst_fdb_crash_recovery() {
                     content: format!("Pre-crash message {}", i),
                     tool_calls: vec![],
                     tool_call_id: None,
+                    tool_call: None,
+                    tool_return: None,
+                    status: None,
                     created_at: chrono::Utc::now(),
                 };
 
@@ -938,6 +947,9 @@ async fn test_dst_fdb_delete_cascade() {
                 content: "Test message".to_string(),
                 tool_calls: vec![],
                 tool_call_id: None,
+                tool_call: None,
+                tool_return: None,
+                status: None,
                 created_at: chrono::Utc::now(),
             };
             let storage_ref = storage.clone();

@@ -103,6 +103,9 @@ fn test_message_write_fault_after_pause() {
                 content: tool_result.output.clone(),
                 tool_call_id: Some("call-1".to_string()),
                 tool_calls: vec![],
+                tool_call: None,
+                tool_return: None,
+                status: None,
                 created_at: chrono::Utc::now(),
             };
 
@@ -217,6 +220,9 @@ fn test_probabilistic_faults_during_pause_flow() {
                     content: tool_result.output,
                     tool_call_id: Some(format!("call-{}", i)),
                     tool_calls: vec![],
+                    tool_call: None,
+                    tool_return: None,
+                    status: None,
                     created_at: chrono::Utc::now(),
                 };
 
@@ -340,6 +346,9 @@ fn test_multiple_simultaneous_faults() {
                 content: "test".to_string(),
                 tool_call_id: None,
                 tool_calls: vec![],
+                tool_call: None,
+                tool_return: None,
+                status: None,
                 created_at: chrono::Utc::now(),
             };
             assert!(
@@ -394,6 +403,9 @@ fn test_fault_injection_determinism() {
                         content: format!("content-{}", i),
                         tool_call_id: None,
                         tool_calls: vec![],
+                        tool_call: None,
+                        tool_return: None,
+                        status: None,
                         created_at: chrono::Utc::now(),
                     };
                     results.push(state.add_message(&agent_id, message).is_ok());
