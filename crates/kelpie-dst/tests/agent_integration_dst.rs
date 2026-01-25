@@ -442,7 +442,9 @@ async fn test_agent_list_race_condition_issue_63() {
                 let all_agents = agent_env.list_agents();
 
                 // Verify the just-created agent is visible in the list
-                let found = all_agents.iter().any(|a| a.id == created_ids.last().unwrap().0);
+                let found = all_agents
+                    .iter()
+                    .any(|a| a.id == created_ids.last().unwrap().0);
                 assert!(
                     found,
                     "Agent {} should be visible immediately after creation",

@@ -54,9 +54,11 @@ pub use agent::{AgentTestConfig, AgentTestState, BlockTestState, SimAgentEnv};
 pub use clock::SimClock;
 pub use fault::{FaultConfig, FaultInjector, FaultInjectorBuilder, FaultType};
 pub use invariants::{
-    AtomicVisibility, ConsistentHolder, Durability, Invariant, InvariantChecker,
-    InvariantViolation, LeaseInfo, LeaseUniqueness, NodeInfo, NodeState, NodeStatus,
-    PlacementConsistency, SingleActivation, SystemState, WalEntry, WalEntryStatus,
+    AtomicVisibility, ConsistentHolder, Durability, FencingTokenMonotonic, Invariant,
+    InvariantChecker, InvariantCheckingSimulation, InvariantViolation, LeaseInfo, LeaseUniqueness,
+    NoSplitBrain, NodeInfo, NodeState, NodeStatus, PlacementConsistency, ReadYourWrites,
+    SingleActivation, Snapshot, SnapshotConsistency, SystemState, Transaction, TransactionState,
+    WalEntry, WalEntryStatus,
 };
 pub use kelpie_core::teleport::{Architecture, SnapshotKind, TeleportPackage, VmSnapshotBlob};
 pub use llm::{

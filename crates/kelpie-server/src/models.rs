@@ -1604,28 +1604,24 @@ mod tests {
         // Test that "memgpt" deserializes to AgentType::MemgptAgent
         let json = r#"{"agent_type": "memgpt"}"#;
         let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
-        let agent_type: AgentType =
-            serde_json::from_value(parsed["agent_type"].clone()).unwrap();
+        let agent_type: AgentType = serde_json::from_value(parsed["agent_type"].clone()).unwrap();
         assert_eq!(agent_type, AgentType::MemgptAgent);
 
         // Test that "letta_v1" deserializes to AgentType::LettaV1Agent
         let json = r#"{"agent_type": "letta_v1"}"#;
         let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
-        let agent_type: AgentType =
-            serde_json::from_value(parsed["agent_type"].clone()).unwrap();
+        let agent_type: AgentType = serde_json::from_value(parsed["agent_type"].clone()).unwrap();
         assert_eq!(agent_type, AgentType::LettaV1Agent);
 
         // Test that snake_case names still work (backward compatibility)
         let json = r#"{"agent_type": "memgpt_agent"}"#;
         let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
-        let agent_type: AgentType =
-            serde_json::from_value(parsed["agent_type"].clone()).unwrap();
+        let agent_type: AgentType = serde_json::from_value(parsed["agent_type"].clone()).unwrap();
         assert_eq!(agent_type, AgentType::MemgptAgent);
 
         let json = r#"{"agent_type": "letta_v1_agent"}"#;
         let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
-        let agent_type: AgentType =
-            serde_json::from_value(parsed["agent_type"].clone()).unwrap();
+        let agent_type: AgentType = serde_json::from_value(parsed["agent_type"].clone()).unwrap();
         assert_eq!(agent_type, AgentType::LettaV1Agent);
     }
 

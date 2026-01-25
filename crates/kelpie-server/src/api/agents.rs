@@ -423,7 +423,9 @@ async fn list_agents<R: Runtime + 'static>(
 
         (items, next_cursor, total)
     } else {
-        let (items, cursor) = state.list_agents_async(limit, pagination_cursor, name_filter).await?;
+        let (items, cursor) = state
+            .list_agents_async(limit, pagination_cursor, name_filter)
+            .await?;
         let total = state.agent_count()?;
         (items, cursor, total)
     };
