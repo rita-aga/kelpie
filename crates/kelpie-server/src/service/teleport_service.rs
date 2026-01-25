@@ -12,6 +12,7 @@ use crate::actor::{AgentActorState, RegisterRequest};
 use crate::storage::{AgentMetadata, Architecture, SnapshotKind, TeleportPackage, TeleportStorage};
 use bytes::Bytes;
 use kelpie_core::actor::ActorId;
+use kelpie_core::io::{TimeProvider, WallClockTime};
 use kelpie_core::{Error, Result};
 use kelpie_runtime::DispatcherHandle;
 use kelpie_vm::{VmConfig, VmFactory, VmInstance, VmSnapshot, VmSnapshotMetadata};
@@ -108,10 +109,7 @@ where
 
         // Step 2: Build teleport package
         let package_id = format!("teleport-{}-{}", agent_id, uuid::Uuid::new_v4());
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        let now_ms = WallClockTime::new().now_ms();
 
         let mut package =
             TeleportPackage::new(package_id.clone(), agent_id, self.storage.host_arch(), kind)

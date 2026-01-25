@@ -3,13 +3,15 @@
 //! TigerStyle: Deterministic testing of cluster membership, failure detection,
 //! actor placement, and migration under fault injection.
 
+use async_trait::async_trait;
 use kelpie_cluster::{Cluster, ClusterConfig, ClusterState, MemoryTransport, MigrationState};
 use kelpie_core::actor::ActorId;
 use kelpie_core::error::Error as CoreError;
+use kelpie_core::io::TimeProvider;
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
 use kelpie_registry::{
-    Clock, Heartbeat, HeartbeatConfig, HeartbeatTracker, MemoryRegistry, NodeId, NodeInfo,
-    NodeStatus, PlacementContext, PlacementDecision, PlacementStrategy, Registry,
+    Heartbeat, HeartbeatConfig, HeartbeatTracker, MemoryRegistry, NodeId, NodeInfo, NodeStatus,
+    PlacementContext, PlacementDecision, PlacementStrategy, Registry,
 };
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -37,9 +39,18 @@ impl TestClock {
     }
 }
 
-impl Clock for TestClock {
+#[async_trait]
+impl TimeProvider for TestClock {
     fn now_ms(&self) -> u64 {
         self.time_ms.load(Ordering::SeqCst)
+    }
+
+    async fn sleep_ms(&self, ms: u64) {
+        self.time_ms.fetch_add(ms, Ordering::SeqCst);
+    }
+
+    fn monotonic_ms(&self) -> u64 {
+        self.now_ms()
     }
 }
 
@@ -926,7 +937,6 @@ fn test_dst_cluster_stress_migrations() {
 // RPC Handler Tests (Phase 6)
 // =============================================================================
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_cluster::{ActorInvoker, ClusterRpcHandler, MigrationReceiver, RpcHandler, RpcMessage};
 use std::collections::HashMap;

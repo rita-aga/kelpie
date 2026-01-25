@@ -20,8 +20,10 @@ use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig, DispatcherHandl
 use kelpie_storage::memory::MemoryKV;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use uuid::Uuid;
+
+use kelpie_core::io::{TimeProvider, WallClockTime};
 
 #[cfg(feature = "dst")]
 use kelpie_dst::fault::FaultInjector;
@@ -83,6 +85,8 @@ struct AppStateInner<R: kelpie_core::Runtime> {
     dispatcher: Option<DispatcherHandle<R>>,
     /// Runtime for spawning tasks
     runtime: R,
+    /// Time provider for DST compatibility
+    time: Arc<dyn TimeProvider>,
     /// NEW Phase 5: Shutdown coordination channel
     shutdown_tx: Option<tokio::sync::broadcast::Sender<()>>,
 
@@ -111,8 +115,8 @@ struct AppStateInner<R: kelpie_core::Runtime> {
     agent_groups: RwLock<HashMap<String, crate::models::AgentGroup>>,
     /// Identities by ID
     identities: RwLock<HashMap<String, crate::models::Identity>>,
-    /// Server start time for uptime calculation
-    start_time: Instant,
+    /// Server start time for uptime calculation (monotonic ms)
+    start_time_ms: u64,
     /// LLM client (None if no API key configured)
     llm: Option<LlmClient>,
     /// Durable storage backend (None = in-memory only)
@@ -145,6 +149,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
         }
 
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
+        let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
 
         // Phase 6.4: Create AgentService and Dispatcher for production
         let (agent_service, dispatcher, shutdown_tx) = if let Some(ref llm_client) = llm {
@@ -190,6 +195,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 agent_service,
                 dispatcher,
                 runtime,
+                time: time.clone(),
                 shutdown_tx,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -203,7 +209,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
-                start_time: Instant::now(),
+                start_time_ms: time.monotonic_ms(),
                 llm,
                 storage: None,
                 prometheus_registry: registry.map(|r| Arc::new(r.clone())),
@@ -226,6 +232,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
         }
 
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
+        let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
 
         // Phase 6.4: Create AgentService and Dispatcher for production
         let (agent_service, dispatcher, shutdown_tx) = if let Some(ref llm_client) = llm {
@@ -271,6 +278,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 agent_service,
                 dispatcher,
                 runtime,
+                time: time.clone(),
                 shutdown_tx,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -284,7 +292,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
-                start_time: Instant::now(),
+                start_time_ms: time.monotonic_ms(),
                 llm,
                 storage: None,
                 #[cfg(feature = "dst")]
@@ -299,6 +307,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
     pub fn with_storage(runtime: R, storage: Arc<dyn AgentStorage>) -> Self {
         let llm = LlmClient::from_env();
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
+        let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
 
         // Phase 6.4: Create AgentService and Dispatcher for production
         let (agent_service, dispatcher, shutdown_tx) = if let Some(ref llm_client) = llm {
@@ -344,6 +353,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 agent_service,
                 dispatcher,
                 runtime,
+                time: time.clone(),
                 shutdown_tx,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -357,7 +367,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
-                start_time: Instant::now(),
+                start_time_ms: time.monotonic_ms(),
                 llm,
                 storage: Some(storage),
                 #[cfg(feature = "otel")]
@@ -377,6 +387,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
     ) -> Self {
         let llm = LlmClient::from_env();
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
+        let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
 
         // Phase 6.4: Create AgentService and Dispatcher for production (otel)
         let (agent_service, dispatcher, shutdown_tx) = if let Some(ref llm_client) = llm {
@@ -422,6 +433,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 agent_service,
                 dispatcher,
                 runtime,
+                time: time.clone(),
                 shutdown_tx,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -435,7 +447,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
-                start_time: Instant::now(),
+                start_time_ms: time.monotonic_ms(),
                 llm,
                 storage: Some(storage),
                 prometheus_registry: registry.map(Arc::new),
@@ -448,12 +460,14 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
     /// Create server state with an explicit LLM client (test helper)
     pub fn with_llm(runtime: R, llm: LlmClient) -> Self {
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
+        let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
 
         Self {
             inner: Arc::new(AppStateInner {
                 agent_service: None,
                 dispatcher: None,
                 runtime,
+                time: time.clone(),
                 shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -467,7 +481,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
-                start_time: Instant::now(),
+                start_time_ms: time.monotonic_ms(),
                 llm: Some(llm),
                 storage: None,
                 #[cfg(feature = "otel")]
@@ -482,12 +496,14 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
     #[cfg(feature = "dst")]
     pub fn with_fault_injector(runtime: R, fault_injector: Arc<FaultInjector>) -> Self {
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
+        let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
 
         Self {
             inner: Arc::new(AppStateInner {
                 agent_service: None,
                 dispatcher: None,
                 runtime,
+                time: time.clone(),
                 shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -501,7 +517,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
-                start_time: Instant::now(),
+                start_time_ms: time.monotonic_ms(),
                 llm: None,
                 storage: None,
                 #[cfg(feature = "otel")]
@@ -519,12 +535,14 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
         fault_injector: Arc<FaultInjector>,
     ) -> Self {
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
+        let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
 
         Self {
             inner: Arc::new(AppStateInner {
                 agent_service: None,
                 dispatcher: None,
                 runtime,
+                time: time.clone(),
                 shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -538,7 +556,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
-                start_time: Instant::now(),
+                start_time_ms: time.monotonic_ms(),
                 llm: None,
                 storage: Some(storage),
                 #[cfg(feature = "otel")]
@@ -566,12 +584,14 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
     ) -> Self {
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
         let (shutdown_tx, _rx) = tokio::sync::broadcast::channel(1);
+        let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
 
         Self {
             inner: Arc::new(AppStateInner {
                 agent_service: Some(agent_service),
                 dispatcher: Some(dispatcher),
                 runtime,
+                time: time.clone(),
                 shutdown_tx: Some(shutdown_tx),
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -585,7 +605,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
-                start_time: Instant::now(),
+                start_time_ms: time.monotonic_ms(),
                 llm: None,
                 storage: None,
                 #[cfg(feature = "otel")]
@@ -657,7 +677,8 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
 
     /// Get server uptime in seconds
     pub fn uptime_seconds(&self) -> u64 {
-        self.inner.start_time.elapsed().as_secs()
+        let now_ms = self.inner.time.monotonic_ms();
+        now_ms.saturating_sub(self.inner.start_time_ms) / 1000
     }
 
     /// Get reference to the Prometheus registry (if configured)

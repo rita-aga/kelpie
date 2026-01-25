@@ -21,6 +21,7 @@ use crate::storage::{AgentMetadata, AgentStorage};
 use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::actor::{Actor, ActorContext};
+use kelpie_core::io::{TimeProvider, WallClockTime};
 use kelpie_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -66,10 +67,7 @@ impl RegistryActor {
 
         // Update state metrics
         ctx.state.agent_count += 1;
-        ctx.state.last_updated_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        ctx.state.last_updated_ms = WallClockTime::new().now_ms();
 
         tracing::info!(
             agent_id = %request.metadata.id,
@@ -104,10 +102,7 @@ impl RegistryActor {
         if ctx.state.agent_count > 0 {
             ctx.state.agent_count -= 1;
         }
-        ctx.state.last_updated_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        ctx.state.last_updated_ms = WallClockTime::new().now_ms();
 
         tracing::info!(
             agent_id = %request.agent_id,

@@ -8,6 +8,7 @@ use bytes::Bytes;
 use kelpie_core::actor::{Actor, ActorId};
 use kelpie_core::constants::{ACTOR_CONCURRENT_COUNT_MAX, INVOCATION_PENDING_COUNT_MAX};
 use kelpie_core::error::{Error, Result};
+use kelpie_core::io::{TimeProvider, WallClockTime};
 use kelpie_core::metrics;
 use kelpie_registry::{NodeId, PlacementDecision, Registry};
 use kelpie_storage::ActorKV;
@@ -15,7 +16,6 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, instrument, warn};
 
@@ -231,6 +231,8 @@ where
     config: DispatcherConfig,
     /// Runtime for spawning tasks
     runtime: R,
+    /// Time provider for DST compatibility
+    time: Arc<dyn TimeProvider>,
     /// Active actors
     actors: HashMap<String, ActiveActor<A, S>>,
     /// Command receiver
@@ -254,11 +256,24 @@ where
     R: kelpie_core::Runtime,
 {
     /// Create a new dispatcher (local mode without registry)
+    ///
+    /// Uses production wall clock. For DST, use `with_time`.
     pub fn new(
         factory: Arc<dyn ActorFactory<A>>,
         kv: Arc<dyn ActorKV>,
         config: DispatcherConfig,
         runtime: R,
+    ) -> Self {
+        Self::with_time(factory, kv, config, runtime, Arc::new(WallClockTime::new()))
+    }
+
+    /// Create a new dispatcher with custom time provider (for DST)
+    pub fn with_time(
+        factory: Arc<dyn ActorFactory<A>>,
+        kv: Arc<dyn ActorKV>,
+        config: DispatcherConfig,
+        runtime: R,
+        time: Arc<dyn TimeProvider>,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(config.command_buffer_size);
 
@@ -267,6 +282,7 @@ where
             kv,
             config,
             runtime: runtime.clone(),
+            time,
             actors: HashMap::new(),
             command_rx,
             command_tx,
@@ -292,6 +308,27 @@ where
         registry: Arc<dyn Registry>,
         node_id: NodeId,
     ) -> Self {
+        Self::with_registry_and_time(
+            factory,
+            kv,
+            config,
+            runtime,
+            registry,
+            node_id,
+            Arc::new(WallClockTime::new()),
+        )
+    }
+
+    /// Create a new dispatcher with registry and custom time provider (for DST)
+    pub fn with_registry_and_time(
+        factory: Arc<dyn ActorFactory<A>>,
+        kv: Arc<dyn ActorKV>,
+        config: DispatcherConfig,
+        runtime: R,
+        registry: Arc<dyn Registry>,
+        node_id: NodeId,
+        time: Arc<dyn TimeProvider>,
+    ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(config.command_buffer_size);
 
         Self {
@@ -299,6 +336,7 @@ where
             kv,
             config,
             runtime: runtime.clone(),
+            time,
             actors: HashMap::new(),
             command_rx,
             command_tx,
@@ -374,7 +412,8 @@ where
         operation: &str,
         payload: Bytes,
     ) -> Result<Bytes> {
-        let start = Instant::now();
+        // Use time provider for DST determinism
+        let start_ms = self.time.monotonic_ms();
         let key = actor_id.qualified_name();
 
         // Check if actor is locally active
@@ -396,7 +435,8 @@ where
                                 .await;
 
                             // Record metrics for forwarded request
-                            let duration = start.elapsed().as_secs_f64();
+                            let duration_ms = self.time.monotonic_ms().saturating_sub(start_ms);
+                            let duration = duration_ms as f64 / 1000.0;
                             let status = if result.is_ok() {
                                 "forwarded"
                             } else {
@@ -434,10 +474,13 @@ where
         })?;
 
         // Process the invocation
-        let result = active.process_invocation(operation, payload).await;
+        let result = active
+            .process_invocation_with_time(operation, payload, self.time.clone())
+            .await;
 
         // Record metrics
-        let duration = start.elapsed().as_secs_f64();
+        let duration_ms = self.time.monotonic_ms().saturating_sub(start_ms);
+        let duration = duration_ms as f64 / 1000.0;
         let status = if result.is_ok() { "success" } else { "error" };
         metrics::record_invocation(operation, status, duration);
 

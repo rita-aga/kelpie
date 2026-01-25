@@ -52,6 +52,8 @@ pub use node::{NodeId, NodeInfo, NodeStatus, NODE_ID_LENGTH_BYTES_MAX};
 pub use placement::{
     validate_placement, ActorPlacement, PlacementContext, PlacementDecision, PlacementStrategy,
 };
+// Re-export deprecated items for backward compatibility
+#[allow(deprecated)]
 pub use registry::{Clock, MemoryRegistry, MockClock, Registry, SystemClock};
 
 #[cfg(test)]
