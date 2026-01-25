@@ -138,19 +138,25 @@ async fn create_server<R: Runtime + 'static>(
     let server_name = server.server_name.clone();
     let server_id = server.id.clone();
 
-    tokio::spawn(async move {
+    // TigerStyle: Use runtime abstraction for DST compatibility
+    // TigerStyle: Background task - intentionally don't await, let it complete independently
+    use kelpie_core::Runtime;
+    let runtime = kelpie_core::current_runtime();
+    std::mem::drop(runtime.spawn(async move {
         use std::time::Duration;
 
         // TigerStyle: 30-second timeout prevents indefinite blocking
         const TOOL_DISCOVERY_TIMEOUT_MS: u64 = 30_000;
 
-        let discovery_result = tokio::time::timeout(
-            Duration::from_millis(TOOL_DISCOVERY_TIMEOUT_MS),
-            state_clone
-                .tool_registry()
-                .connect_mcp_server(&server_name, mcp_config),
-        )
-        .await;
+        let runtime = kelpie_core::current_runtime();
+        let discovery_result = runtime
+            .timeout(
+                Duration::from_millis(TOOL_DISCOVERY_TIMEOUT_MS),
+                state_clone
+                    .tool_registry()
+                    .connect_mcp_server(&server_name, mcp_config),
+            )
+            .await;
 
         match discovery_result {
             Ok(Ok(tool_count)) => {
@@ -178,7 +184,7 @@ async fn create_server<R: Runtime + 'static>(
                 );
             }
         }
-    });
+    }));
 
     Ok(Json(MCPServerResponse::from(server)))
 }

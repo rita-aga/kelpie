@@ -114,7 +114,7 @@ fn test_dst_actor_deactivation() {
         active.process_invocation("increment", Bytes::new()).await?;
         active.deactivate().await?;
 
-        assert_eq!(active.activation_state(), ActivationState::Deactivated);
+        assert_eq!(active.activation_state(), ActivationState::Inactive);
 
         Ok(())
     });
@@ -265,7 +265,7 @@ fn test_dst_persistence_with_intermittent_failures() {
             let _deactivate_result = active.deactivate().await;
 
             // The deactivation should complete (logs error but continues)
-            assert_eq!(active.activation_state(), ActivationState::Deactivated);
+            assert_eq!(active.activation_state(), ActivationState::Inactive);
 
             // Log the results for debugging
             tracing::info!(

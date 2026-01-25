@@ -69,6 +69,46 @@ pub const HEARTBEAT_INTERVAL_MS: u64 = 1000;
 /// Heartbeat timeout before node is considered failed (5 sec)
 pub const HEARTBEAT_TIMEOUT_MS: u64 = 5000;
 
+// =============================================================================
+// Lease and Clock Skew Limits (TLA+ KelpieLease spec)
+// =============================================================================
+
+/// Maximum clock skew between nodes in milliseconds (2 sec)
+///
+/// From TLA+ KelpieLease spec: `ClockSkewSafety` invariant requires all node
+/// clocks to be within `MaxClockSkew` of the global reference clock.
+///
+/// This bound must be enforced by NTP or similar time synchronization.
+/// Leases account for this skew in expiry calculations.
+pub const CLOCK_SKEW_MS_MAX: u64 = 2000;
+
+/// Grace period before lease expiration in milliseconds (3 sec)
+///
+/// From TLA+ KelpieLease spec: `GracePeriodRespected` invariant ensures
+/// no new lease is granted while current lease is in grace period.
+///
+/// States: Active -> GracePeriod -> Expired
+/// - Active: clock < expiry - grace_period
+/// - GracePeriod: expiry - grace_period <= clock < expiry
+/// - Expired: clock >= expiry
+///
+/// The grace period gives the current holder time to renew before eviction.
+pub const LEASE_GRACE_PERIOD_MS: u64 = 3000;
+
+/// Default lease duration in milliseconds (10 sec)
+///
+/// From TLA+ KelpieLease spec: `LeaseDuration` constant.
+/// Lease expiry = acquisition_time + lease_duration.
+pub const LEASE_DURATION_MS_DEFAULT: u64 = 10_000;
+
+/// Maximum lease duration in milliseconds (5 min)
+pub const LEASE_DURATION_MS_MAX: u64 = 5 * 60 * 1000;
+
+/// Minimum lease duration in milliseconds (5 sec)
+///
+/// Must be > CLOCK_SKEW_MS_MAX + LEASE_GRACE_PERIOD_MS to be meaningful.
+pub const LEASE_DURATION_MS_MIN: u64 = 5000;
+
 /// Maximum rate of actor activations per second per node
 pub const ACTOR_ACTIVATION_RATE_PER_SEC_MAX: u64 = 100_000;
 
