@@ -9,13 +9,13 @@
 //!
 //! Related: docs/tla/KelpieLease.tla, GitHub Issue #22
 
+use async_trait::async_trait;
 use kelpie_core::actor::ActorId;
 use kelpie_core::error::Error as CoreError;
+use kelpie_core::io::TimeProvider;
 use kelpie_core::Runtime;
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
-use kelpie_registry::{
-    Clock, LeaseConfig, LeaseManager, MemoryLeaseManager, NodeId, RegistryError,
-};
+use kelpie_registry::{LeaseConfig, LeaseManager, MemoryLeaseManager, NodeId, RegistryError};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -44,9 +44,18 @@ impl TestClock {
     }
 }
 
-impl Clock for TestClock {
+#[async_trait]
+impl TimeProvider for TestClock {
     fn now_ms(&self) -> u64 {
         self.time_ms.load(Ordering::SeqCst)
+    }
+
+    async fn sleep_ms(&self, ms: u64) {
+        self.time_ms.fetch_add(ms, Ordering::SeqCst);
+    }
+
+    fn monotonic_ms(&self) -> u64 {
+        self.now_ms()
     }
 }
 

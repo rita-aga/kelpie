@@ -29,9 +29,9 @@
 
 use crate::error::{RegistryError, RegistryResult};
 use crate::node::NodeId;
-use crate::registry::Clock;
 use async_trait::async_trait;
 use kelpie_core::actor::ActorId;
+use kelpie_core::io::TimeProvider;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -214,30 +214,30 @@ pub trait LeaseManager: Send + Sync {
 pub struct MemoryLeaseManager {
     /// Lease configuration
     config: LeaseConfig,
-    /// Clock for time operations
-    clock: Arc<dyn Clock>,
+    /// Time provider for time operations (DST-compatible)
+    time: Arc<dyn TimeProvider>,
     /// Active leases by actor ID
     leases: RwLock<HashMap<String, Lease>>,
 }
 
 impl MemoryLeaseManager {
     /// Create a new memory lease manager
-    pub fn new(config: LeaseConfig, clock: Arc<dyn Clock>) -> Self {
+    pub fn new(config: LeaseConfig, time: Arc<dyn TimeProvider>) -> Self {
         Self {
             config,
-            clock,
+            time,
             leases: RwLock::new(HashMap::new()),
         }
     }
 
     /// Create with default config
-    pub fn with_clock(clock: Arc<dyn Clock>) -> Self {
-        Self::new(LeaseConfig::default(), clock)
+    pub fn with_time(time: Arc<dyn TimeProvider>) -> Self {
+        Self::new(LeaseConfig::default(), time)
     }
 
-    /// Get current time from clock
+    /// Get current time from time provider
     fn now_ms(&self) -> u64 {
-        self.clock.now_ms()
+        self.time.now_ms()
     }
 }
 
@@ -401,7 +401,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    /// Test clock with controllable time
+    /// Test clock with controllable time (implements TimeProvider)
     struct TestClock {
         time_ms: AtomicU64,
     }
@@ -418,9 +418,24 @@ mod tests {
         }
     }
 
-    impl Clock for TestClock {
+    impl std::fmt::Debug for TestClock {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "TestClock({})", self.time_ms.load(Ordering::SeqCst))
+        }
+    }
+
+    #[async_trait]
+    impl TimeProvider for TestClock {
         fn now_ms(&self) -> u64 {
             self.time_ms.load(Ordering::SeqCst)
+        }
+
+        async fn sleep_ms(&self, ms: u64) {
+            self.time_ms.fetch_add(ms, Ordering::SeqCst);
+        }
+
+        fn monotonic_ms(&self) -> u64 {
+            self.now_ms()
         }
     }
 

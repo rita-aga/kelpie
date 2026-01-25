@@ -6,10 +6,11 @@
 //! Supports Python, JavaScript, TypeScript, R, and Java execution.
 
 use crate::tools::{BuiltinToolHandler, UnifiedToolRegistry};
+use kelpie_core::io::{TimeProvider, WallClockTime};
 use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
 use serde_json::{json, Value};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 // =============================================================================
 // TigerStyle Constants
@@ -211,12 +212,13 @@ async fn execute_in_sandbox(
     let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
     // Execute command and measure time
-    let start_time = Instant::now();
+    let time = WallClockTime::new();
+    let start_ms = time.monotonic_ms();
     let output = sandbox
         .exec(command, &args_refs, exec_opts)
         .await
         .map_err(|e| format!("Sandbox execution failed: {}", e))?;
-    let execution_time_ms = start_time.elapsed().as_millis() as u64;
+    let execution_time_ms = time.monotonic_ms().saturating_sub(start_ms);
 
     // Build result
     let result = ExecutionResult {

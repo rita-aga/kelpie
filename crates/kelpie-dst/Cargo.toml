@@ -39,6 +39,7 @@ serde_json = { workspace = true }
 madsim = { version = "0.2", optional = true }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 kelpie-cluster = { workspace = true }
 kelpie-memory = { workspace = true }
 kelpie-registry = { workspace = true }

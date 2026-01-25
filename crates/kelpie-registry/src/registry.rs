@@ -8,9 +8,37 @@ use crate::node::{NodeId, NodeInfo, NodeStatus};
 use crate::placement::{ActorPlacement, PlacementContext, PlacementDecision, PlacementStrategy};
 use async_trait::async_trait;
 use kelpie_core::actor::ActorId;
+use kelpie_core::io::{RngProvider, StdRngProvider, TimeProvider, WallClockTime};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+// =============================================================================
+// Clock Abstraction (for backward compatibility)
+// =============================================================================
+
+/// Clock trait for time operations
+///
+/// This is a simpler synchronous trait for code that doesn't need async sleep.
+/// For full DST compatibility with sleep support, use `TimeProvider` instead.
+pub trait Clock: Send + Sync {
+    /// Get the current time in milliseconds since Unix epoch
+    fn now_ms(&self) -> u64;
+}
+
+/// System clock implementation using WallClockTime
+#[derive(Debug, Default)]
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now_ms(&self) -> u64 {
+        WallClockTime::new().now_ms()
+    }
+}
+
+// =============================================================================
+// Registry Trait
+// =============================================================================
 
 /// The registry trait for actor placement and node management
 ///
@@ -135,32 +163,15 @@ pub struct MemoryRegistry {
     placements: RwLock<HashMap<ActorId, ActorPlacement>>,
     /// Heartbeat tracker
     heartbeat_tracker: RwLock<HeartbeatTracker>,
-    /// Current timestamp source (for testing)
-    clock: Arc<dyn Clock>,
+    /// Time provider (for DST compatibility)
+    time: Arc<dyn TimeProvider>,
+    /// RNG provider (for DST compatibility)
+    rng: Arc<dyn RngProvider>,
     /// Round-robin index for placement strategy
     round_robin_index: std::sync::atomic::AtomicUsize,
 }
 
-/// Clock abstraction for testing
-pub trait Clock: Send + Sync {
-    /// Get the current time in milliseconds since Unix epoch
-    fn now_ms(&self) -> u64;
-}
-
-/// System clock implementation
-#[derive(Debug, Default)]
-pub struct SystemClock;
-
-impl Clock for SystemClock {
-    fn now_ms(&self) -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64
-    }
-}
-
-/// Mock clock for testing
+/// Mock clock for testing (implements TimeProvider)
 #[derive(Debug)]
 pub struct MockClock {
     time_ms: RwLock<u64>,
@@ -187,15 +198,25 @@ impl MockClock {
     }
 }
 
-impl Clock for MockClock {
+#[async_trait]
+impl TimeProvider for MockClock {
     fn now_ms(&self) -> u64 {
         // Use try_read for sync context, fallback to blocking
         self.time_ms.try_read().map(|t| *t).unwrap_or(0)
     }
+
+    async fn sleep_ms(&self, ms: u64) {
+        // In mock, just advance time
+        self.advance(ms).await;
+    }
+
+    fn monotonic_ms(&self) -> u64 {
+        self.now_ms()
+    }
 }
 
 impl MemoryRegistry {
-    /// Create a new in-memory registry
+    /// Create a new in-memory registry with production I/O providers
     pub fn new() -> Self {
         Self::with_config(HeartbeatConfig::default())
     }
@@ -206,18 +227,32 @@ impl MemoryRegistry {
             nodes: RwLock::new(HashMap::new()),
             placements: RwLock::new(HashMap::new()),
             heartbeat_tracker: RwLock::new(HeartbeatTracker::new(heartbeat_config)),
-            clock: Arc::new(SystemClock),
+            time: Arc::new(WallClockTime::new()),
+            rng: Arc::new(StdRngProvider::new()),
             round_robin_index: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
-    /// Create with a mock clock for testing
-    pub fn with_clock(clock: Arc<dyn Clock>) -> Self {
+    /// Create with custom I/O providers (for DST)
+    pub fn with_providers(time: Arc<dyn TimeProvider>, rng: Arc<dyn RngProvider>) -> Self {
         Self {
             nodes: RwLock::new(HashMap::new()),
             placements: RwLock::new(HashMap::new()),
             heartbeat_tracker: RwLock::new(HeartbeatTracker::new(HeartbeatConfig::default())),
-            clock,
+            time,
+            rng,
+            round_robin_index: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// Create with a mock clock for testing (convenience method)
+    pub fn with_clock(clock: Arc<dyn TimeProvider>) -> Self {
+        Self {
+            nodes: RwLock::new(HashMap::new()),
+            placements: RwLock::new(HashMap::new()),
+            heartbeat_tracker: RwLock::new(HeartbeatTracker::new(HeartbeatConfig::default())),
+            time: clock,
+            rng: Arc::new(StdRngProvider::new()),
             round_robin_index: std::sync::atomic::AtomicUsize::new(0),
         }
     }
@@ -226,7 +261,7 @@ impl MemoryRegistry {
     ///
     /// Returns list of nodes that transitioned to failed state.
     pub async fn check_heartbeat_timeouts(&self) -> Vec<NodeId> {
-        let now_ms = self.clock.now_ms();
+        let now_ms = self.time.now_ms();
         let mut tracker = self.heartbeat_tracker.write().await;
         let changes = tracker.check_all_timeouts(now_ms);
 
@@ -279,7 +314,8 @@ impl MemoryRegistry {
         if available.is_empty() {
             None
         } else {
-            let idx = rand::random::<usize>() % available.len();
+            // Use injected RNG provider for DST determinism
+            let idx = self.rng.gen_range(0, available.len() as u64) as usize;
             Some(available[idx].id.clone())
         }
     }
@@ -329,7 +365,7 @@ impl Registry for MemoryRegistry {
 
         // Register with heartbeat tracker
         let mut tracker = self.heartbeat_tracker.write().await;
-        tracker.register_node(info.id.clone(), self.clock.now_ms());
+        tracker.register_node(info.id.clone(), self.time.now_ms());
 
         nodes.insert(info.id.clone(), info);
         Ok(())
@@ -380,7 +416,7 @@ impl Registry for MemoryRegistry {
     }
 
     async fn receive_heartbeat(&self, heartbeat: Heartbeat) -> RegistryResult<()> {
-        let now_ms = self.clock.now_ms();
+        let now_ms = self.time.now_ms();
 
         // Update heartbeat tracker
         let mut tracker = self.heartbeat_tracker.write().await;
@@ -473,7 +509,7 @@ impl Registry for MemoryRegistry {
         match node {
             Some(info) if info.has_capacity() && info.status.can_accept_actors() => {
                 // Claim the actor using the registry's clock for DST compatibility
-                let now_ms = self.clock.now_ms();
+                let now_ms = self.time.now_ms();
                 let placement =
                     ActorPlacement::with_timestamp(actor_id.clone(), node_id.clone(), now_ms);
                 placements.insert(actor_id, placement);
@@ -527,7 +563,7 @@ impl Registry for MemoryRegistry {
         }
 
         // Update placement
-        let now_ms = self.clock.now_ms();
+        let now_ms = self.time.now_ms();
         placement.migrate_to(to_node.clone(), now_ms);
 
         // Update node counts

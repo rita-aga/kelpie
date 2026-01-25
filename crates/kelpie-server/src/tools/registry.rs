@@ -3,6 +3,7 @@
 //! TigerStyle: Single registry for all tool types with explicit source tracking.
 
 use crate::llm::ToolDefinition;
+use kelpie_core::io::{TimeProvider, WallClockTime};
 use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -447,7 +448,7 @@ impl UnifiedToolRegistry {
         input: &Value,
         context: Option<&ToolExecutionContext>,
     ) -> ToolExecutionResult {
-        let start = std::time::Instant::now();
+        let start_ms = WallClockTime::new().monotonic_ms();
 
         // TigerStyle: Preconditions
         assert!(!name.is_empty(), "tool name cannot be empty");
@@ -458,16 +459,16 @@ impl UnifiedToolRegistry {
             None => {
                 return ToolExecutionResult::failure(
                     format!("Tool not found: {}", name),
-                    start.elapsed().as_millis() as u64,
+                    WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
                 );
             }
         };
 
         // Route to appropriate handler based on source
         match &tool.source {
-            ToolSource::Builtin => self.execute_builtin(name, input, start).await,
-            ToolSource::Mcp { server } => self.execute_mcp(name, server, input, start).await,
-            ToolSource::Custom => self.execute_custom(name, input, context, start).await,
+            ToolSource::Builtin => self.execute_builtin(name, input, start_ms).await,
+            ToolSource::Mcp { server } => self.execute_mcp(name, server, input, start_ms).await,
+            ToolSource::Custom => self.execute_custom(name, input, context, start_ms).await,
         }
     }
 
@@ -476,20 +477,20 @@ impl UnifiedToolRegistry {
         &self,
         name: &str,
         input: &Value,
-        start: std::time::Instant,
+        start_ms: u64,
     ) -> ToolExecutionResult {
         let handler = match self.builtin_handlers.read().await.get(name) {
             Some(h) => h.clone(),
             None => {
                 return ToolExecutionResult::failure(
                     format!("No handler for builtin tool: {}", name),
-                    start.elapsed().as_millis() as u64,
+                    WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
                 );
             }
         };
 
         let output = handler(input).await;
-        let duration = start.elapsed().as_millis() as u64;
+        let duration = WallClockTime::new().monotonic_ms().saturating_sub(start_ms);
 
         // Check if output looks like an error
         let success = !output.starts_with("Error:") && !output.starts_with("Failed:");
@@ -507,7 +508,7 @@ impl UnifiedToolRegistry {
         name: &str,
         server: &str,
         input: &Value,
-        start: std::time::Instant,
+        start_ms: u64,
     ) -> ToolExecutionResult {
         // Check for simulated MCP client (DST mode)
         #[cfg(feature = "dst")]
@@ -519,13 +520,13 @@ impl UnifiedToolRegistry {
                             .unwrap_or_else(|_| result.to_string());
                         return ToolExecutionResult::success(
                             output,
-                            start.elapsed().as_millis() as u64,
+                            WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
                         );
                     }
                     Err(e) => {
                         return ToolExecutionResult::failure(
                             e.to_string(),
-                            start.elapsed().as_millis() as u64,
+                            WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
                         );
                     }
                 }
@@ -540,7 +541,7 @@ impl UnifiedToolRegistry {
                 None => {
                     return ToolExecutionResult::failure(
                         format!("MCP server '{}' not connected", server),
-                        start.elapsed().as_millis() as u64,
+                        WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
                     );
                 }
             }
@@ -560,7 +561,7 @@ impl UnifiedToolRegistry {
                             "MCP server '{}' is not connected and reconnection failed: {}",
                             server, e
                         ),
-                        start.elapsed().as_millis() as u64,
+                        WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
                     );
                 }
             }
@@ -571,18 +572,19 @@ impl UnifiedToolRegistry {
             Ok(result) => {
                 // Extract content using robust helper function
                 match kelpie_tools::extract_tool_output(&result, name) {
-                    Ok(output) => {
-                        ToolExecutionResult::success(output, start.elapsed().as_millis() as u64)
-                    }
+                    Ok(output) => ToolExecutionResult::success(
+                        output,
+                        WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
+                    ),
                     Err(e) => ToolExecutionResult::failure(
                         format!("Failed to extract tool output: {}", e),
-                        start.elapsed().as_millis() as u64,
+                        WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
                     ),
                 }
             }
             Err(e) => ToolExecutionResult::failure(
                 format!("MCP tool execution failed: {}", e),
-                start.elapsed().as_millis() as u64,
+                WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
             ),
         }
     }
@@ -593,12 +595,12 @@ impl UnifiedToolRegistry {
         name: &str,
         input: &Value,
         context: Option<&ToolExecutionContext>,
-        start: std::time::Instant,
+        start_ms: u64,
     ) -> ToolExecutionResult {
         let Some(custom_tool) = self.custom_tools.read().await.get(name).cloned() else {
             return ToolExecutionResult::failure(
                 format!("Custom tool not found: {}", name),
-                start.elapsed().as_millis() as u64,
+                WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
             );
         };
 
@@ -606,7 +608,7 @@ impl UnifiedToolRegistry {
         if runtime != "python" && runtime != "py" {
             return ToolExecutionResult::failure(
                 format!("Unsupported custom tool runtime: {}", custom_tool.runtime),
-                start.elapsed().as_millis() as u64,
+                WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
             );
         }
 
@@ -644,7 +646,7 @@ impl UnifiedToolRegistry {
         if let Err(e) = sandbox.start().await {
             return ToolExecutionResult::failure(
                 format!("Failed to start sandbox: {}", e),
-                start.elapsed().as_millis() as u64,
+                WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
             );
         }
 
@@ -665,7 +667,7 @@ impl UnifiedToolRegistry {
             if let Err(e) = install_output {
                 return ToolExecutionResult::failure(
                     format!("Failed to install tool requirements: {}", e),
-                    start.elapsed().as_millis() as u64,
+                    WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
                 );
             }
         }
@@ -696,12 +698,12 @@ impl UnifiedToolRegistry {
             Err(e) => {
                 return ToolExecutionResult::failure(
                     format!("Custom tool execution failed: {}", e),
-                    start.elapsed().as_millis() as u64,
+                    WallClockTime::new().monotonic_ms().saturating_sub(start_ms),
                 )
             }
         };
 
-        let duration = start.elapsed().as_millis() as u64;
+        let duration = WallClockTime::new().monotonic_ms().saturating_sub(start_ms);
         if output.is_success() {
             ToolExecutionResult::success(output.stdout_string(), duration)
         } else {
