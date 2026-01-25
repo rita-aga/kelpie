@@ -17,7 +17,9 @@ use uuid::Uuid;
 #[allow(clippy::enum_variant_names)] // Matches Letta's API naming
 pub enum AgentType {
     #[default]
+    #[serde(alias = "memgpt")]
     MemgptAgent,
+    #[serde(alias = "letta_v1")]
     LettaV1Agent,
     ReactAgent,
 }
@@ -1595,6 +1597,45 @@ mod tests {
         let from = Utc::now();
         let next = calculate_next_run(&ScheduleType::Once, "not-a-date", from);
         assert!(next.is_none());
+    }
+
+    #[test]
+    fn test_agent_type_letta_aliases() {
+        // Test that "memgpt" deserializes to AgentType::MemgptAgent
+        let json = r#"{"agent_type": "memgpt"}"#;
+        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
+        let agent_type: AgentType =
+            serde_json::from_value(parsed["agent_type"].clone()).unwrap();
+        assert_eq!(agent_type, AgentType::MemgptAgent);
+
+        // Test that "letta_v1" deserializes to AgentType::LettaV1Agent
+        let json = r#"{"agent_type": "letta_v1"}"#;
+        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
+        let agent_type: AgentType =
+            serde_json::from_value(parsed["agent_type"].clone()).unwrap();
+        assert_eq!(agent_type, AgentType::LettaV1Agent);
+
+        // Test that snake_case names still work (backward compatibility)
+        let json = r#"{"agent_type": "memgpt_agent"}"#;
+        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
+        let agent_type: AgentType =
+            serde_json::from_value(parsed["agent_type"].clone()).unwrap();
+        assert_eq!(agent_type, AgentType::MemgptAgent);
+
+        let json = r#"{"agent_type": "letta_v1_agent"}"#;
+        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
+        let agent_type: AgentType =
+            serde_json::from_value(parsed["agent_type"].clone()).unwrap();
+        assert_eq!(agent_type, AgentType::LettaV1Agent);
+    }
+
+    #[test]
+    fn test_create_agent_request_with_letta_alias() {
+        // Test that CreateAgentRequest accepts "memgpt" alias
+        let json = r#"{"name": "test", "agent_type": "memgpt"}"#;
+        let request: CreateAgentRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.agent_type, AgentType::MemgptAgent);
+        assert_eq!(request.name, "test");
     }
 
     #[test]
