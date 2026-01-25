@@ -546,37 +546,39 @@ impl UnifiedToolRegistry {
             }
         };
 
-        // Check if client is connected
+        // Check if client is connected, attempt reconnection if not
         if !client.is_connected().await {
-            return ToolExecutionResult::failure(
-                format!("MCP server '{}' is not connected", server),
-                start.elapsed().as_millis() as u64,
-            );
+            tracing::warn!(server = %server, "MCP server disconnected, attempting reconnect");
+
+            match client.reconnect().await {
+                Ok(()) => {
+                    tracing::info!(server = %server, "Successfully reconnected to MCP server");
+                }
+                Err(e) => {
+                    return ToolExecutionResult::failure(
+                        format!(
+                            "MCP server '{}' is not connected and reconnection failed: {}",
+                            server, e
+                        ),
+                        start.elapsed().as_millis() as u64,
+                    );
+                }
+            }
         }
 
         // Execute tool via MCP client
         match client.execute_tool(name, input.clone()).await {
             Ok(result) => {
-                // Extract content from MCP result
-                // MCP tools/call returns: {"content": [{"type": "text", "text": "..."}]}
-                let output = if let Some(content) = result.get("content").and_then(|c| c.as_array())
-                {
-                    // Concatenate all text content
-                    content
-                        .iter()
-                        .filter_map(|item| {
-                            item.get("text")
-                                .and_then(|t| t.as_str())
-                                .map(|s| s.to_string())
-                        })
-                        .collect::<Vec<String>>()
-                        .join("\n")
-                } else {
-                    // Fallback: serialize entire result
-                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string())
-                };
-
-                ToolExecutionResult::success(output, start.elapsed().as_millis() as u64)
+                // Extract content using robust helper function
+                match kelpie_tools::extract_tool_output(&result, name) {
+                    Ok(output) => {
+                        ToolExecutionResult::success(output, start.elapsed().as_millis() as u64)
+                    }
+                    Err(e) => ToolExecutionResult::failure(
+                        format!("Failed to extract tool output: {}", e),
+                        start.elapsed().as_millis() as u64,
+                    ),
+                }
             }
             Err(e) => ToolExecutionResult::failure(
                 format!("MCP tool execution failed: {}", e),
