@@ -37,8 +37,8 @@
 
 use bytes::Bytes;
 use kelpie_core::error::Error;
-use kelpie_core::Runtime;
 use kelpie_core::ActorId;
+use kelpie_core::Runtime;
 use kelpie_dst::{DeterministicRng, FaultConfig, FaultInjectorBuilder, FaultType, SimStorage};
 use kelpie_storage::ActorKV;
 use std::sync::Arc;
