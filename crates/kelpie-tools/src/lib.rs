@@ -36,7 +36,11 @@ mod traits;
 
 pub use builtin::{FilesystemTool, GitTool, ShellTool};
 pub use error::{ToolError, ToolResult};
-pub use mcp::{McpClient, McpConfig, McpTool, McpToolDefinition};
+pub use mcp::{
+    extract_tool_output, McpClient, McpConfig, McpTool, McpToolDefinition, ReconnectConfig,
+    MCP_HEALTH_CHECK_INTERVAL_MS, MCP_RECONNECT_ATTEMPTS_MAX, MCP_RECONNECT_BACKOFF_MULTIPLIER,
+    MCP_RECONNECT_DELAY_MS_INITIAL, MCP_RECONNECT_DELAY_MS_MAX, MCP_SSE_SHUTDOWN_TIMEOUT_MS,
+};
 pub use registry::ToolRegistry;
 #[cfg(feature = "dst")]
 pub use sim::{
