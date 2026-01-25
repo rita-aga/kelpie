@@ -37,6 +37,7 @@
 
 use bytes::Bytes;
 use kelpie_core::error::Error;
+use kelpie_core::Runtime;
 use kelpie_core::ActorId;
 use kelpie_dst::{DeterministicRng, FaultConfig, FaultInjectorBuilder, FaultType, SimStorage};
 use kelpie_storage::ActorKV;
@@ -541,7 +542,7 @@ async fn test_high_contention_stress() {
         let storage = storage.clone();
         let actor_id = actor_id.clone();
 
-        let handle = madsim::task::spawn(async move {
+        let handle = kelpie_core::current_runtime().spawn(async move {
             let mut txn = storage.begin_transaction(&actor_id).await.unwrap();
 
             // Each transaction reads and writes multiple keys
