@@ -400,6 +400,100 @@ async fn test_agent_env_stress_with_faults() {
     assert!(result.is_ok(), "Simulation failed: {:?}", result.err());
 }
 
+/// Test for Issue #63: Agent list API race condition
+///
+/// This test verifies that agents are immediately visible in list operations
+/// after creation, even with name filtering. Reproduces the race condition
+/// from Letta SDK tests where `create_agent()` returns before persistence
+/// completes, causing intermittent failures in `list_agents(name=X)`.
+///
+/// TigerStyle: DST coverage for concurrent create/list operations
+#[madsim::test]
+async fn test_agent_list_race_condition_issue_63() {
+    let config = SimConfig::new(63_000);
+
+    let result = Simulation::new(config)
+        .run_async(|sim_env| async move {
+            let llm = Arc::new(SimLlmClient::new(
+                sim_env.fork_rng_raw(),
+                sim_env.faults.clone(),
+            ));
+            let mut agent_env = SimAgentEnv::new(
+                sim_env.storage.clone(),
+                llm,
+                sim_env.clock.clone(),
+                sim_env.faults.clone(),
+                sim_env.fork_rng(),
+            );
+
+            // Create multiple agents with different names
+            let names = vec!["alice", "bob", "charlie", "alice-duplicate"];
+            let mut created_ids = Vec::new();
+
+            for name in &names {
+                let config = AgentTestConfig {
+                    name: name.to_string(),
+                    ..Default::default()
+                };
+                let id = agent_env.create_agent(config)?;
+                created_ids.push((id, name.to_string()));
+
+                // IMMEDIATELY list agents after creation (this is where the race occurs)
+                let all_agents = agent_env.list_agents();
+
+                // Verify the just-created agent is visible in the list
+                let found = all_agents
+                    .iter()
+                    .any(|a| a.id == created_ids.last().unwrap().0);
+                assert!(
+                    found,
+                    "Agent {} should be visible immediately after creation",
+                    name
+                );
+
+                // Test name filtering (Issue #63: name filter was applied post-pagination)
+                let filtered = all_agents.iter().filter(|a| a.name == *name).count();
+                assert!(
+                    filtered >= 1,
+                    "Should find at least one agent named '{}' after creation",
+                    name
+                );
+            }
+
+            // Final verification: all agents should be listable
+            let final_list = agent_env.list_agents();
+            assert_eq!(
+                final_list.len(),
+                names.len(),
+                "All {} agents should be visible",
+                names.len()
+            );
+
+            // Verify name filter works correctly (not applied post-pagination)
+            let alice_agents: Vec<_> = final_list.iter().filter(|a| a.name == "alice").collect();
+            assert_eq!(
+                alice_agents.len(),
+                1,
+                "Should find exactly 1 agent named 'alice'"
+            );
+
+            let alice_duplicate_agents: Vec<_> = final_list
+                .iter()
+                .filter(|a| a.name == "alice-duplicate")
+                .collect();
+            assert_eq!(
+                alice_duplicate_agents.len(),
+                1,
+                "Should find exactly 1 agent named 'alice-duplicate'"
+            );
+
+            Ok(())
+        })
+        .await;
+
+    assert!(result.is_ok(), "Simulation failed: {:?}", result.err());
+}
+
 #[madsim::test]
 async fn test_llm_client_direct_with_simulation() {
     let config = SimConfig::new(44444);

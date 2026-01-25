@@ -1301,8 +1301,8 @@ async fn generate_streaming_sse_events<R: Runtime + 'static>(
                                     };
 
                                     // TigerStyle: No silent failures - log and notify client
-                                    if let Err(e) =
-                                        state_ref.add_message(agent_id_ref, assistant_message.clone())
+                                    if let Err(e) = state_ref
+                                        .add_message(agent_id_ref, assistant_message.clone())
                                     {
                                         tracing::error!(
                                             agent_id = %agent_id_ref,
@@ -1812,7 +1812,10 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/v1/agents/{}/messages?stream_tokens=true", agent_id))
+                    .uri(format!(
+                        "/v1/agents/{}/messages?stream_tokens=true",
+                        agent_id
+                    ))
                     .header("content-type", "application/json")
                     .body(Body::from(serde_json::to_vec(&message).unwrap()))
                     .unwrap(),

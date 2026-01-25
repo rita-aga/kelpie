@@ -176,8 +176,9 @@ async fn create_agent<R: Runtime + 'static>(
     // Create agent via dual-mode method
     let mut created = state.create_agent_async(request).await?;
 
-    // TigerStyle: Persist agent metadata to storage for list operations
-    // This indexes the agent in FDB so list_agents_async can find it
+    // TigerStyle: Persist agent metadata to storage BEFORE returning
+    // This ensures the agent is visible to list operations immediately after creation
+    // Fix for race condition: persist must complete before returning
     state
         .persist_agent(&created)
         .await
@@ -385,8 +386,18 @@ async fn list_agents<R: Runtime + 'static>(
     // The `after` parameter is what the Letta SDK uses for pagination
     let pagination_cursor = query.cursor.as_deref().or(query.after.as_deref());
 
-    let (mut items, cursor, total) = if let Some(project_id) = query.project_id.as_deref() {
+    // TigerStyle: Apply name filter in storage query before pagination
+    // This ensures correct results when paginating filtered lists
+    let name_filter = query.name.as_deref();
+
+    let (items, cursor, total) = if let Some(project_id) = query.project_id.as_deref() {
         let mut agents = state.list_agents_by_project(project_id)?;
+
+        // Apply name filter BEFORE pagination
+        if let Some(name) = name_filter {
+            agents.retain(|agent| agent.name == name);
+        }
+
         agents.sort_by(|a, b| a.created_at.cmp(&b.created_at));
         let total = agents.len();
 
@@ -412,15 +423,12 @@ async fn list_agents<R: Runtime + 'static>(
 
         (items, next_cursor, total)
     } else {
-        let (items, cursor) = state.list_agents_async(limit, pagination_cursor).await?;
+        let (items, cursor) = state
+            .list_agents_async(limit, pagination_cursor, name_filter)
+            .await?;
         let total = state.agent_count()?;
         (items, cursor, total)
     };
-
-    // TigerStyle: Apply name filter if provided (Letta SDK compatibility)
-    if let Some(name_filter) = query.name.as_deref() {
-        items.retain(|agent| agent.name == name_filter);
-    }
 
     Ok(Json(ListResponse {
         items,

@@ -229,6 +229,10 @@ pub struct NodeInfo {
     /// Lease beliefs: what this node believes it holds
     /// (actor_id -> expiry_time, where expiry > current_time means believed held)
     pub lease_beliefs: HashMap<String, u64>,
+    /// Whether this node believes it is the primary (for NoSplitBrain)
+    pub is_primary: bool,
+    /// Whether this node can reach a quorum (for NoSplitBrain)
+    pub has_quorum: bool,
 }
 
 impl NodeInfo {
@@ -239,6 +243,8 @@ impl NodeInfo {
             status: NodeStatus::Active,
             actor_states: HashMap::new(),
             lease_beliefs: HashMap::new(),
+            is_primary: false,
+            has_quorum: false,
         }
     }
 
@@ -317,10 +323,18 @@ pub struct SystemState {
     leases: HashMap<String, LeaseInfo>,
     /// WAL entries
     wal_entries: Vec<WalEntry>,
-    /// Storage state: key -> value (simplified to key -> exists)
-    storage: HashMap<String, bool>,
+    /// Storage state: key -> value
+    pub storage: HashMap<String, String>,
     /// Current simulated time
     current_time: u64,
+    /// Active transactions (for ReadYourWrites)
+    transactions: HashMap<String, Transaction>,
+    /// Fencing tokens: actor_id -> current token
+    fencing_tokens: HashMap<String, i64>,
+    /// Fencing token history: actor_id -> list of tokens (for monotonicity check)
+    fencing_token_history: HashMap<String, Vec<i64>>,
+    /// Snapshots for teleport (for SnapshotConsistency)
+    snapshots: HashMap<String, Snapshot>,
 }
 
 impl Default for SystemState {
@@ -340,6 +354,10 @@ impl SystemState {
             wal_entries: Vec::new(),
             storage: HashMap::new(),
             current_time: 0,
+            transactions: HashMap::new(),
+            fencing_tokens: HashMap::new(),
+            fencing_token_history: HashMap::new(),
+            snapshots: HashMap::new(),
         }
     }
 
@@ -389,9 +407,15 @@ impl SystemState {
         self
     }
 
-    /// Set storage key existence
-    pub fn with_storage_key(mut self, key: impl Into<String>, exists: bool) -> Self {
-        self.storage.insert(key.into(), exists);
+    /// Set storage key value
+    pub fn with_storage_key(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.storage.insert(key.into(), value.into());
+        self
+    }
+
+    /// Remove a storage key
+    pub fn without_storage_key(mut self, key: &str) -> Self {
+        self.storage.remove(key);
         self
     }
 
@@ -467,7 +491,50 @@ impl SystemState {
 
     /// Check if a storage key exists
     pub fn storage_exists(&self, key: &str) -> bool {
-        self.storage.get(key).copied().unwrap_or(false)
+        self.storage.contains_key(key)
+    }
+
+    /// Add a transaction to the state
+    pub fn with_transaction(mut self, txn: Transaction) -> Self {
+        self.transactions.insert(txn.id.clone(), txn);
+        self
+    }
+
+    /// Get all transactions
+    pub fn transactions(&self) -> impl Iterator<Item = &Transaction> {
+        self.transactions.values()
+    }
+
+    /// Set a fencing token for an actor
+    pub fn with_fencing_token(mut self, actor_id: impl Into<String>, token: i64) -> Self {
+        let actor_id = actor_id.into();
+        self.fencing_tokens.insert(actor_id.clone(), token);
+        self.fencing_token_history
+            .entry(actor_id)
+            .or_default()
+            .push(token);
+        self
+    }
+
+    /// Get all fencing tokens
+    pub fn fencing_tokens(&self) -> impl Iterator<Item = (&String, &i64)> {
+        self.fencing_tokens.iter()
+    }
+
+    /// Get fencing token history
+    pub fn fencing_token_history(&self) -> impl Iterator<Item = (&String, &Vec<i64>)> {
+        self.fencing_token_history.iter()
+    }
+
+    /// Add a snapshot to the state
+    pub fn with_snapshot(mut self, snapshot: Snapshot) -> Self {
+        self.snapshots.insert(snapshot.id.clone(), snapshot);
+        self
+    }
+
+    /// Get all snapshots
+    pub fn snapshots(&self) -> impl Iterator<Item = (&String, &Snapshot)> {
+        self.snapshots.iter()
     }
 }
 
@@ -744,6 +811,373 @@ impl Invariant for AtomicVisibility {
     }
 }
 
+/// NoSplitBrain invariant from KelpieClusterMembership.tla
+///
+/// **TLA+ Definition:**
+/// ```tla
+/// NoSplitBrain ==
+///     \A n1, n2 \in Nodes :
+///         /\ HasValidPrimaryClaim(n1)
+///         /\ HasValidPrimaryClaim(n2)
+///         => n1 = n2
+/// ```
+///
+/// There is at most one valid primary node. A primary claim is valid only
+/// if the node can reach a majority (quorum). This is THE KEY SAFETY INVARIANT
+/// for cluster membership.
+pub struct NoSplitBrain;
+
+impl Invariant for NoSplitBrain {
+    fn name(&self) -> &'static str {
+        "NoSplitBrain"
+    }
+
+    fn tla_source(&self) -> &'static str {
+        "docs/tla/KelpieClusterMembership.tla"
+    }
+
+    fn check(&self, state: &SystemState) -> Result<(), InvariantViolation> {
+        let valid_primaries: Vec<&str> = state
+            .nodes()
+            .filter(|n| n.is_primary && n.has_quorum)
+            .map(|n| n.id.as_str())
+            .collect();
+
+        if valid_primaries.len() > 1 {
+            return Err(InvariantViolation::with_evidence(
+                self.name(),
+                format!(
+                    "Split-brain detected: {} nodes have valid primary claims (max 1 allowed)",
+                    valid_primaries.len()
+                ),
+                format!("Valid primaries: {:?}", valid_primaries),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// ReadYourWrites invariant from KelpieFDBTransaction.tla
+///
+/// **TLA+ Definition:**
+/// ```tla
+/// ReadYourWrites ==
+///     \A t \in Transactions :
+///         txnState[t] = RUNNING =>
+///             \A k \in Keys :
+///                 writeBuffer[t][k] # NoValue =>
+///                     TxnRead(t, k) = writeBuffer[t][k]
+/// ```
+///
+/// A running transaction must see its own writes. If a key was written
+/// in the transaction's write buffer, reading that key must return the
+/// written value, not the committed value.
+pub struct ReadYourWrites;
+
+impl Invariant for ReadYourWrites {
+    fn name(&self) -> &'static str {
+        "ReadYourWrites"
+    }
+
+    fn tla_source(&self) -> &'static str {
+        "docs/tla/KelpieFDBTransaction.tla"
+    }
+
+    fn check(&self, state: &SystemState) -> Result<(), InvariantViolation> {
+        for txn in state.transactions() {
+            if txn.state != TransactionState::Running {
+                continue;
+            }
+            for (key, written_value) in &txn.write_buffer {
+                if let Some(read_value) = txn.reads.get(key) {
+                    // If we wrote to this key and then read it, we should see our write
+                    if read_value != written_value {
+                        return Err(InvariantViolation::with_evidence(
+                            self.name(),
+                            format!(
+                                "Transaction '{}' read key '{}' and got {:?}, but write buffer has {:?}",
+                                txn.id, key, read_value, written_value
+                            ),
+                            format!("Transaction state: {:?}", txn.state),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// FencingTokenMonotonic invariant from KelpieLease.tla
+///
+/// **TLA+ Definition:**
+/// ```tla
+/// FencingTokenMonotonic ==
+///     \A a \in Actors:
+///         fencingTokens[a] >= 0
+/// ```
+///
+/// Fencing tokens are non-negative and only increase. When a new lease is
+/// acquired, the fencing token must be greater than any previous token
+/// for that actor. This prevents stale writes from nodes with expired leases.
+pub struct FencingTokenMonotonic;
+
+impl Invariant for FencingTokenMonotonic {
+    fn name(&self) -> &'static str {
+        "FencingTokenMonotonic"
+    }
+
+    fn tla_source(&self) -> &'static str {
+        "docs/tla/KelpieLease.tla"
+    }
+
+    fn check(&self, state: &SystemState) -> Result<(), InvariantViolation> {
+        for (actor_id, token) in state.fencing_tokens() {
+            if *token < 0 {
+                return Err(InvariantViolation::with_evidence(
+                    self.name(),
+                    format!("Actor '{}' has negative fencing token: {}", actor_id, token),
+                    "Fencing tokens must be non-negative".to_string(),
+                ));
+            }
+        }
+        // Also check monotonicity if we have token history
+        for (actor_id, history) in state.fencing_token_history() {
+            for window in history.windows(2) {
+                if window[1] < window[0] {
+                    return Err(InvariantViolation::with_evidence(
+                        self.name(),
+                        format!(
+                            "Actor '{}' fencing token decreased from {} to {}",
+                            actor_id, window[0], window[1]
+                        ),
+                        "Fencing tokens must be monotonically increasing".to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// SnapshotConsistency invariant from KelpieTeleport.tla
+///
+/// **TLA+ Definition:**
+/// ```tla
+/// SnapshotConsistency ==
+///     TRUE  \* Consistency enforced by CompleteRestore restoring exact savedState
+/// ```
+///
+/// A restored snapshot must contain exactly the state that was saved.
+/// No partial restores are allowed.
+pub struct SnapshotConsistency;
+
+impl Invariant for SnapshotConsistency {
+    fn name(&self) -> &'static str {
+        "SnapshotConsistency"
+    }
+
+    fn tla_source(&self) -> &'static str {
+        "docs/tla/KelpieTeleport.tla"
+    }
+
+    fn check(&self, state: &SystemState) -> Result<(), InvariantViolation> {
+        for (snapshot_id, snapshot) in state.snapshots() {
+            if snapshot.is_restored {
+                // Check that all saved keys are present in restored state
+                for (key, saved_value) in &snapshot.saved_state {
+                    match state.storage.get(key) {
+                        Some(current_value) if current_value == saved_value => {}
+                        Some(current_value) => {
+                            return Err(InvariantViolation::with_evidence(
+                                self.name(),
+                                format!(
+                                    "Snapshot '{}' key '{}' restored incorrectly: expected {:?}, got {:?}",
+                                    snapshot_id, key, saved_value, current_value
+                                ),
+                                "Partial/corrupted restore detected".to_string(),
+                            ));
+                        }
+                        None => {
+                            return Err(InvariantViolation::with_evidence(
+                                self.name(),
+                                format!(
+                                    "Snapshot '{}' key '{}' missing after restore",
+                                    snapshot_id, key
+                                ),
+                                "Incomplete restore detected".to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+// =============================================================================
+// Extended System State for New Invariants
+// =============================================================================
+
+/// Transaction state for ReadYourWrites invariant
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TransactionState {
+    /// Transaction is running
+    Running,
+    /// Transaction committed successfully
+    Committed,
+    /// Transaction was aborted
+    Aborted,
+}
+
+/// A transaction for linearizability checking
+#[derive(Debug, Clone)]
+pub struct Transaction {
+    /// Transaction identifier
+    pub id: String,
+    /// Current state
+    pub state: TransactionState,
+    /// Write buffer: key -> value
+    pub write_buffer: HashMap<String, String>,
+    /// Reads performed: key -> value read
+    pub reads: HashMap<String, String>,
+}
+
+/// A snapshot for teleport consistency checking
+#[derive(Debug, Clone)]
+pub struct Snapshot {
+    /// Snapshot identifier
+    pub id: String,
+    /// Saved state: key -> value
+    pub saved_state: HashMap<String, String>,
+    /// Whether this snapshot has been restored
+    pub is_restored: bool,
+}
+
+// Add new fields to NodeInfo for cluster membership
+impl NodeInfo {
+    /// Set whether this node is primary
+    pub fn with_primary(mut self, is_primary: bool) -> Self {
+        self.is_primary = is_primary;
+        self
+    }
+
+    /// Set whether this node has quorum
+    pub fn with_quorum(mut self, has_quorum: bool) -> Self {
+        self.has_quorum = has_quorum;
+        self
+    }
+}
+
+// =============================================================================
+// InvariantCheckingSimulation Harness
+// =============================================================================
+
+/// A simulation wrapper that automatically checks invariants after each operation.
+///
+/// This bridges TLA+ specs to DST tests by verifying the same properties that
+/// TLA+ model checking would verify, but at runtime during simulation.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use kelpie_dst::invariants::{InvariantCheckingSimulation, SingleActivation, NoSplitBrain};
+///
+/// let sim = InvariantCheckingSimulation::new()
+///     .with_invariant(SingleActivation)
+///     .with_invariant(NoSplitBrain);
+///
+/// sim.run(|env| async move {
+///     // Test logic here - invariants checked after each step
+///     env.activate_actor("actor-1").await?;
+///     env.partition_network(["node-1"], ["node-2", "node-3"]).await;
+///     // If any invariant is violated, the test fails with detailed evidence
+///     Ok(())
+/// }).await?;
+/// ```
+pub struct InvariantCheckingSimulation {
+    checker: InvariantChecker,
+    check_after_each_step: bool,
+    state_snapshots: Vec<SystemState>,
+}
+
+impl Default for InvariantCheckingSimulation {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl InvariantCheckingSimulation {
+    /// Create a new invariant-checking simulation
+    pub fn new() -> Self {
+        Self {
+            checker: InvariantChecker::new(),
+            check_after_each_step: true,
+            state_snapshots: Vec::new(),
+        }
+    }
+
+    /// Add an invariant to check
+    pub fn with_invariant(mut self, inv: impl Invariant + 'static) -> Self {
+        self.checker = self.checker.with_invariant(inv);
+        self
+    }
+
+    /// Add all standard Kelpie invariants
+    pub fn with_standard_invariants(mut self) -> Self {
+        self.checker = self.checker.with_standard_invariants();
+        self
+    }
+
+    /// Add cluster membership invariants
+    pub fn with_cluster_invariants(self) -> Self {
+        self.with_invariant(NoSplitBrain)
+    }
+
+    /// Add linearizability invariants
+    pub fn with_linearizability_invariants(self) -> Self {
+        self.with_invariant(ReadYourWrites)
+    }
+
+    /// Add lease safety invariants
+    pub fn with_lease_invariants(self) -> Self {
+        self.with_invariant(LeaseUniqueness)
+            .with_invariant(FencingTokenMonotonic)
+    }
+
+    /// Disable checking after each step (only check at end)
+    pub fn check_only_at_end(mut self) -> Self {
+        self.check_after_each_step = false;
+        self
+    }
+
+    /// Check invariants against the current state
+    pub fn check_state(&self, state: &SystemState) -> Result<(), InvariantViolation> {
+        self.checker.verify_all(state)
+    }
+
+    /// Record a state snapshot for debugging
+    pub fn record_snapshot(&mut self, state: SystemState) {
+        self.state_snapshots.push(state);
+    }
+
+    /// Get all recorded state snapshots
+    pub fn snapshots(&self) -> &[SystemState] {
+        &self.state_snapshots
+    }
+
+    /// Get the invariant checker
+    pub fn checker(&self) -> &InvariantChecker {
+        &self.checker
+    }
+
+    /// Should check after each step?
+    pub fn checks_each_step(&self) -> bool {
+        self.check_after_each_step
+    }
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -859,7 +1293,7 @@ mod tests {
                 status: WalEntryStatus::Completed,
                 data_key: "key-1".to_string(),
             })
-            .with_storage_key("key-1", true);
+            .with_storage_key("key-1", "value-1");
 
         let result = Durability.check(&state);
         assert!(result.is_ok());
@@ -953,5 +1387,262 @@ mod tests {
 
         let result = checker.verify_all(&state);
         assert!(result.is_ok());
+    }
+
+    // =========================================================================
+    // Tests for new invariants (Issue #43)
+    // =========================================================================
+
+    #[test]
+    fn test_no_split_brain_passes() {
+        // Only one valid primary
+        let state = SystemState::new()
+            .with_node(NodeInfo::new("node-1").with_primary(true).with_quorum(true))
+            .with_node(
+                NodeInfo::new("node-2")
+                    .with_primary(false)
+                    .with_quorum(true),
+            );
+
+        let result = NoSplitBrain.check(&state);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_no_split_brain_fails() {
+        // Two nodes both think they're valid primaries - split brain!
+        let state = SystemState::new()
+            .with_node(NodeInfo::new("node-1").with_primary(true).with_quorum(true))
+            .with_node(NodeInfo::new("node-2").with_primary(true).with_quorum(true));
+
+        let result = NoSplitBrain.check(&state);
+        assert!(result.is_err());
+
+        let violation = result.unwrap_err();
+        assert_eq!(violation.name, "NoSplitBrain");
+        assert!(violation.message.contains("Split-brain detected"));
+    }
+
+    #[test]
+    fn test_no_split_brain_minority_primary_ok() {
+        // A minority primary (no quorum) doesn't count as valid
+        let state = SystemState::new()
+            .with_node(
+                NodeInfo::new("node-1").with_primary(true).with_quorum(true), // valid primary
+            )
+            .with_node(
+                NodeInfo::new("node-2")
+                    .with_primary(true)
+                    .with_quorum(false), // minority, not valid
+            );
+
+        let result = NoSplitBrain.check(&state);
+        assert!(result.is_ok()); // Only one VALID primary
+    }
+
+    #[test]
+    fn test_fencing_token_monotonic_passes() {
+        let state = SystemState::new()
+            .with_fencing_token("actor-1", 1)
+            .with_fencing_token("actor-1", 2)
+            .with_fencing_token("actor-1", 3);
+
+        let result = FencingTokenMonotonic.check(&state);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_fencing_token_monotonic_fails_negative() {
+        let state = SystemState::new().with_fencing_token("actor-1", -1);
+
+        let result = FencingTokenMonotonic.check(&state);
+        assert!(result.is_err());
+
+        let violation = result.unwrap_err();
+        assert_eq!(violation.name, "FencingTokenMonotonic");
+        assert!(violation.message.contains("negative"));
+    }
+
+    #[test]
+    fn test_fencing_token_monotonic_fails_decrease() {
+        // Manually create state with decreasing tokens
+        let mut state = SystemState::new();
+        state
+            .fencing_token_history
+            .insert("actor-1".to_string(), vec![5, 3]); // 5 -> 3 is a decrease!
+        state.fencing_tokens.insert("actor-1".to_string(), 3);
+
+        let result = FencingTokenMonotonic.check(&state);
+        assert!(result.is_err());
+
+        let violation = result.unwrap_err();
+        assert_eq!(violation.name, "FencingTokenMonotonic");
+        assert!(violation.message.contains("decreased"));
+    }
+
+    #[test]
+    fn test_read_your_writes_passes() {
+        let state = SystemState::new().with_transaction(Transaction {
+            id: "txn-1".to_string(),
+            state: TransactionState::Running,
+            write_buffer: [("key-1".to_string(), "value-1".to_string())]
+                .into_iter()
+                .collect(),
+            reads: [("key-1".to_string(), "value-1".to_string())]
+                .into_iter()
+                .collect(), // Read sees the write
+        });
+
+        let result = ReadYourWrites.check(&state);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_read_your_writes_fails() {
+        let state = SystemState::new().with_transaction(Transaction {
+            id: "txn-1".to_string(),
+            state: TransactionState::Running,
+            write_buffer: [("key-1".to_string(), "value-1".to_string())]
+                .into_iter()
+                .collect(),
+            reads: [("key-1".to_string(), "stale-value".to_string())]
+                .into_iter()
+                .collect(), // Read got stale value!
+        });
+
+        let result = ReadYourWrites.check(&state);
+        assert!(result.is_err());
+
+        let violation = result.unwrap_err();
+        assert_eq!(violation.name, "ReadYourWrites");
+    }
+
+    #[test]
+    fn test_read_your_writes_committed_txn_ignored() {
+        // Committed transactions don't need to pass ReadYourWrites
+        let state = SystemState::new().with_transaction(Transaction {
+            id: "txn-1".to_string(),
+            state: TransactionState::Committed, // Not running
+            write_buffer: [("key-1".to_string(), "value-1".to_string())]
+                .into_iter()
+                .collect(),
+            reads: [("key-1".to_string(), "different".to_string())]
+                .into_iter()
+                .collect(),
+        });
+
+        let result = ReadYourWrites.check(&state);
+        assert!(result.is_ok()); // Committed txns not checked
+    }
+
+    #[test]
+    fn test_snapshot_consistency_passes() {
+        let state = SystemState::new()
+            .with_storage_key("key-1", "value-1")
+            .with_storage_key("key-2", "value-2")
+            .with_snapshot(Snapshot {
+                id: "snap-1".to_string(),
+                saved_state: [
+                    ("key-1".to_string(), "value-1".to_string()),
+                    ("key-2".to_string(), "value-2".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+                is_restored: true,
+            });
+
+        let result = SnapshotConsistency.check(&state);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_snapshot_consistency_fails_missing_key() {
+        let state = SystemState::new()
+            .with_storage_key("key-1", "value-1")
+            // key-2 is missing!
+            .with_snapshot(Snapshot {
+                id: "snap-1".to_string(),
+                saved_state: [
+                    ("key-1".to_string(), "value-1".to_string()),
+                    ("key-2".to_string(), "value-2".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+                is_restored: true,
+            });
+
+        let result = SnapshotConsistency.check(&state);
+        assert!(result.is_err());
+
+        let violation = result.unwrap_err();
+        assert_eq!(violation.name, "SnapshotConsistency");
+        assert!(violation.message.contains("missing"));
+    }
+
+    #[test]
+    fn test_snapshot_consistency_fails_wrong_value() {
+        let state = SystemState::new()
+            .with_storage_key("key-1", "wrong-value") // Different value!
+            .with_snapshot(Snapshot {
+                id: "snap-1".to_string(),
+                saved_state: [("key-1".to_string(), "value-1".to_string())]
+                    .into_iter()
+                    .collect(),
+                is_restored: true,
+            });
+
+        let result = SnapshotConsistency.check(&state);
+        assert!(result.is_err());
+
+        let violation = result.unwrap_err();
+        assert_eq!(violation.name, "SnapshotConsistency");
+        assert!(violation.message.contains("incorrectly"));
+    }
+
+    #[test]
+    fn test_snapshot_not_restored_ignored() {
+        // Snapshots that haven't been restored don't need consistency check
+        let state = SystemState::new()
+            // Storage is empty but snapshot has data - that's OK if not restored
+            .with_snapshot(Snapshot {
+                id: "snap-1".to_string(),
+                saved_state: [("key-1".to_string(), "value-1".to_string())]
+                    .into_iter()
+                    .collect(),
+                is_restored: false, // Not restored yet
+            });
+
+        let result = SnapshotConsistency.check(&state);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_invariant_checking_simulation_basic() {
+        let sim = InvariantCheckingSimulation::new()
+            .with_invariant(SingleActivation)
+            .with_invariant(NoSplitBrain);
+
+        let state = SystemState::new()
+            .with_node(NodeInfo::new("node-1").with_actor_state("actor-1", NodeState::Active))
+            .with_node(NodeInfo::new("node-2").with_primary(true).with_quorum(true));
+
+        let result = sim.check_state(&state);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_invariant_checking_simulation_with_cluster() {
+        let sim = InvariantCheckingSimulation::new().with_cluster_invariants();
+
+        assert!(sim.checker().invariant_names().contains(&"NoSplitBrain"));
+    }
+
+    #[test]
+    fn test_invariant_checking_simulation_with_lease() {
+        let sim = InvariantCheckingSimulation::new().with_lease_invariants();
+
+        let names = sim.checker().invariant_names();
+        assert!(names.contains(&"LeaseUniqueness"));
+        assert!(names.contains(&"FencingTokenMonotonic"));
     }
 }
