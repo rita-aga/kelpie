@@ -9,7 +9,9 @@ on:
 jobs:
   claude:
     # Only run if @claude is mentioned
-    if: contains(github.event.issue.body || github.event.comment.body, '@claude')
+    if: |
+      contains(github.event.issue.body || '', '@claude') ||
+      contains(github.event.comment.body || '', '@claude')
     runs-on: ubuntu-latest
     permissions:
       issues: write
