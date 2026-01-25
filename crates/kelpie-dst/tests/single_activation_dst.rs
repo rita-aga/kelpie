@@ -19,6 +19,9 @@ use futures::future::join_all;
 use kelpie_core::actor::ActorId;
 use kelpie_core::error::{Error, Result};
 use kelpie_core::Runtime; // Trait for spawn()
+use kelpie_dst::invariants::{
+    ConsistentHolder, InvariantChecker, NodeInfo, NodeState, SingleActivation, SystemState,
+};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
 use kelpie_storage::ActorKV;
 use std::collections::HashMap;
@@ -58,6 +61,36 @@ impl ActivationProtocol {
             state: Arc::new(RwLock::new(HashMap::new())),
             activation_counter: AtomicU64::new(0),
         }
+    }
+
+    /// Build SystemState for invariant checking
+    ///
+    /// This converts the internal ActivationProtocol state to the SystemState
+    /// representation expected by the invariant checker.
+    async fn to_system_state(
+        &self,
+        actor_key: &str,
+        node_states: &HashMap<String, NodeState>,
+    ) -> SystemState {
+        let state = self.state.read().await;
+        let holder_state = state.get(actor_key);
+
+        let mut system_state = SystemState::new();
+
+        // Add all nodes with their actor states
+        for (node_id, &node_state) in node_states {
+            let node_info = NodeInfo::new(node_id.clone()).with_actor_state(actor_key, node_state);
+            system_state = system_state.with_node(node_info);
+        }
+
+        // Set FDB holder (ground truth)
+        if let Some(hs) = holder_state {
+            system_state = system_state.with_fdb_holder(actor_key, hs.holder.clone());
+        } else {
+            system_state = system_state.with_fdb_holder(actor_key, None);
+        }
+
+        system_state
     }
 
     /// Attempt to claim an actor (implements TLA+ StartClaim + ReadFDB + CommitClaim)
@@ -181,6 +214,10 @@ impl ActivationProtocol {
 
 /// Test concurrent activation: exactly 1 winner
 ///
+/// VERIFIES TLA+ Invariants:
+/// - `SingleActivation` from KelpieSingleActivation.tla
+/// - `ConsistentHolder` from KelpieSingleActivation.tla
+///
 /// TLA+ Invariant: `Inv_SingleActivation == Cardinality({n \in Nodes : node_state[n] = "Active"}) <= 1`
 ///
 /// This test spawns N concurrent activation attempts for the SAME actor.
@@ -248,10 +285,34 @@ fn test_concurrent_activation_single_winner() {
             }
         }
 
+        // EXPLICIT INVARIANT CHECK: Build SystemState and verify
+        // Map node success/failure to TLA+ node states
+        let mut node_states = HashMap::new();
+        for node_id in 0..num_nodes {
+            let node_name = format!("node-{}", node_id);
+            let state = if results[node_id].is_ok() {
+                NodeState::Active // Successful claim = Active
+            } else {
+                NodeState::Idle // Failed claim = Idle
+            };
+            node_states.insert(node_name, state);
+        }
+
+        let system_state = protocol.to_system_state(actor_key, &node_states).await;
+
+        // Create invariant checker and verify
+        let checker = InvariantChecker::new()
+            .with_invariant(SingleActivation)
+            .with_invariant(ConsistentHolder);
+
+        checker.verify_all(&system_state).expect(
+            "TLA+ invariants violated! SingleActivation or ConsistentHolder failed.",
+        );
+
         tracing::info!(
             successes = successes.len(),
             failures = failures.len(),
-            "SingleActivation test passed"
+            "SingleActivation test passed with explicit invariant verification"
         );
 
         Ok(())
@@ -847,6 +908,8 @@ async fn try_claim_with_storage(
 
 /// Test that ConsistentHolder invariant holds
 ///
+/// VERIFIES TLA+ Invariant: `ConsistentHolder` from KelpieSingleActivation.tla
+///
 /// TLA+: `ConsistentHolder == \A n \in Nodes: node_state[n] = "Active" => fdb_holder = n`
 /// If a node believes it's active, the storage must confirm it.
 #[test]
@@ -861,7 +924,7 @@ fn test_consistent_holder_invariant() {
         let claim_result = protocol.try_claim(actor_key, "node-1").await;
         assert!(claim_result.is_ok());
 
-        // Verify the storage state matches
+        // Verify the storage state matches (old assertion)
         let state = protocol.state.read().await;
         let holder_state = state.get(actor_key).expect("state should exist");
 
@@ -871,6 +934,20 @@ fn test_consistent_holder_invariant() {
             "ConsistentHolder VIOLATED: expected holder node-1, got {:?}",
             holder_state.holder
         );
+        drop(state); // Release read lock
+
+        // EXPLICIT INVARIANT CHECK using the invariants module
+        let mut node_states = HashMap::new();
+        node_states.insert("node-1".to_string(), NodeState::Active);
+
+        let system_state = protocol.to_system_state(actor_key, &node_states).await;
+
+        // Verify ConsistentHolder invariant explicitly
+        ConsistentHolder
+            .check(&system_state)
+            .expect("TLA+ ConsistentHolder invariant violated!");
+
+        tracing::info!("ConsistentHolder invariant verified explicitly");
 
         Ok(())
     });

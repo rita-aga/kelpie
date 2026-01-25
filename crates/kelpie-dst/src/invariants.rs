@@ -745,6 +745,233 @@ impl Invariant for AtomicVisibility {
 }
 
 // =============================================================================
+// Linearizability Invariants (from KelpieLinearizability.tla)
+// =============================================================================
+
+/// Operation in the linearization history
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Operation {
+    /// Operation type
+    pub op_type: OpType,
+    /// Client that invoked this operation
+    pub client: String,
+    /// Actor this operation targets
+    pub actor: String,
+    /// Unique operation ID
+    pub id: u64,
+    /// Operation response
+    pub response: OpResponse,
+}
+
+/// Operation type
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OpType {
+    /// Claim actor ownership
+    Claim,
+    /// Release actor ownership
+    Release,
+    /// Read actor owner
+    Read,
+    /// Dispatch message to actor
+    Dispatch,
+}
+
+/// Operation response
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpResponse {
+    /// Operation succeeded
+    Ok,
+    /// Operation failed
+    Fail,
+    /// Read returned an owner (node ID)
+    Owner(String),
+    /// Read returned no owner
+    NoOwner,
+}
+
+impl SystemState {
+    /// Add an operation to the history
+    pub fn with_operation(mut self, op: Operation) -> Self {
+        // For now, we store operations in a way that tests can verify them
+        // In the future, we could add a history field to SystemState
+        self
+    }
+
+    /// Get operations from history (placeholder for future implementation)
+    pub fn operations(&self) -> Vec<Operation> {
+        // TODO: Store and retrieve operations
+        Vec::new()
+    }
+}
+
+/// ReadYourWrites invariant from KelpieLinearizability.tla
+///
+/// **TLA+ Definition:**
+/// ```tla
+/// ReadYourWrites ==
+///     \A i, j \in 1..Len(history):
+///         /\ i < j
+///         /\ history[i].client = history[j].client
+///         /\ history[i].type = "Claim"
+///         /\ history[i].response = "ok"
+///         /\ history[j].type = "Read"
+///         /\ history[j].actor = history[i].actor
+///         /\ ~\E k \in (i+1)..(j-1):
+///             /\ history[k].actor = history[i].actor
+///             /\ history[k].type = "Release"
+///             /\ history[k].response = "ok"
+///         => history[j].response # "no_owner"
+/// ```
+///
+/// If a client successfully claims an actor, then a subsequent read by the SAME client
+/// on that actor (with no intervening release) must see an owner (not "no_owner").
+/// This ensures clients see the effects of their own writes.
+pub struct ReadYourWrites {
+    /// Operation history to check
+    pub history: Vec<Operation>,
+}
+
+impl Invariant for ReadYourWrites {
+    fn name(&self) -> &'static str {
+        "ReadYourWrites"
+    }
+
+    fn tla_source(&self) -> &'static str {
+        "docs/tla/KelpieLinearizability.tla"
+    }
+
+    fn check(&self, _state: &SystemState) -> Result<(), InvariantViolation> {
+        // Check Read-Your-Writes property
+        for (i, op_i) in self.history.iter().enumerate() {
+            // Look for successful claims
+            if op_i.op_type != OpType::Claim || op_i.response != OpResponse::Ok {
+                continue;
+            }
+
+            // Check subsequent reads by the same client on the same actor
+            for (j, op_j) in self.history.iter().enumerate().skip(i + 1) {
+                if op_j.client != op_i.client || op_j.actor != op_i.actor {
+                    continue;
+                }
+                if op_j.op_type != OpType::Read {
+                    continue;
+                }
+
+                // Check for intervening release
+                let has_intervening_release = self.history[i + 1..j]
+                    .iter()
+                    .any(|op| {
+                        op.actor == op_i.actor
+                            && op.op_type == OpType::Release
+                            && op.response == OpResponse::Ok
+                    });
+
+                if !has_intervening_release && op_j.response == OpResponse::NoOwner {
+                    return Err(InvariantViolation::with_evidence(
+                        self.name(),
+                        format!(
+                            "Client '{}' claimed actor '{}' (op {}), but subsequent read (op {}) saw no owner",
+                            op_i.client, op_i.actor, op_i.id, op_j.id
+                        ),
+                        format!(
+                            "Claim at index {}, Read at index {}, no intervening release",
+                            i, j
+                        ),
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// MonotonicReads invariant from KelpieLinearizability.tla
+///
+/// **TLA+ Definition:**
+/// ```tla
+/// MonotonicReads ==
+///     \A i, j \in 1..Len(history):
+///         /\ i < j
+///         /\ history[i].client = history[j].client
+///         /\ history[i].type = "Read"
+///         /\ history[i].actor = history[j].actor
+///         /\ history[j].type = "Read"
+///         /\ history[i].response # "no_owner"
+///         /\ ~\E k \in (i+1)..(j-1):
+///             /\ history[k].actor = history[i].actor
+///             /\ history[k].type = "Release"
+///             /\ history[k].response = "ok"
+///         => history[j].response # "no_owner"
+/// ```
+///
+/// For a single client, once they read an owner on an actor, their subsequent reads
+/// on the same actor don't regress to "no_owner" unless there's an intervening successful release.
+pub struct MonotonicReads {
+    /// Operation history to check
+    pub history: Vec<Operation>,
+}
+
+impl Invariant for MonotonicReads {
+    fn name(&self) -> &'static str {
+        "MonotonicReads"
+    }
+
+    fn tla_source(&self) -> &'static str {
+        "docs/tla/KelpieLinearizability.tla"
+    }
+
+    fn check(&self, _state: &SystemState) -> Result<(), InvariantViolation> {
+        // Check MonotonicReads property
+        for (i, op_i) in self.history.iter().enumerate() {
+            // Look for reads that saw an owner
+            if op_i.op_type != OpType::Read {
+                continue;
+            }
+            if matches!(op_i.response, OpResponse::NoOwner | OpResponse::Fail) {
+                continue;
+            }
+
+            // Check subsequent reads by the same client on the same actor
+            for (j, op_j) in self.history.iter().enumerate().skip(i + 1) {
+                if op_j.client != op_i.client || op_j.actor != op_i.actor {
+                    continue;
+                }
+                if op_j.op_type != OpType::Read {
+                    continue;
+                }
+
+                // Check for intervening release
+                let has_intervening_release = self.history[i + 1..j]
+                    .iter()
+                    .any(|op| {
+                        op.actor == op_i.actor
+                            && op.op_type == OpType::Release
+                            && op.response == OpResponse::Ok
+                    });
+
+                if !has_intervening_release && op_j.response == OpResponse::NoOwner {
+                    return Err(InvariantViolation::with_evidence(
+                        self.name(),
+                        format!(
+                            "Client '{}' read owner {:?} for actor '{}' (op {}), \
+                             but subsequent read (op {}) saw no owner",
+                            op_i.client, op_i.response, op_i.actor, op_i.id, op_j.id
+                        ),
+                        format!(
+                            "First read at index {}, Second read at index {}, no intervening release",
+                            i, j
+                        ),
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -952,6 +1179,185 @@ mod tests {
         let state = SystemState::new();
 
         let result = checker.verify_all(&state);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_read_your_writes_passes() {
+        let history = vec![
+            Operation {
+                op_type: OpType::Claim,
+                client: "client-1".to_string(),
+                actor: "actor-1".to_string(),
+                id: 1,
+                response: OpResponse::Ok,
+            },
+            Operation {
+                op_type: OpType::Read,
+                client: "client-1".to_string(),
+                actor: "actor-1".to_string(),
+                id: 2,
+                response: OpResponse::Owner("node-1".to_string()),
+            },
+        ];
+
+        let inv = ReadYourWrites { history };
+        let state = SystemState::new();
+
+        let result = inv.check(&state);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_read_your_writes_fails() {
+        let history = vec![
+            Operation {
+                op_type: OpType::Claim,
+                client: "client-1".to_string(),
+                actor: "actor-1".to_string(),
+                id: 1,
+                response: OpResponse::Ok,
+            },
+            Operation {
+                op_type: OpType::Read,
+                client: "client-1".to_string(),
+                actor: "actor-1".to_string(),
+                id: 2,
+                response: OpResponse::NoOwner, // Violation!
+            },
+        ];
+
+        let inv = ReadYourWrites { history };
+        let state = SystemState::new();
+
+        let result = inv.check(&state);
+        assert!(result.is_err());
+
+        let violation = result.unwrap_err();
+        assert_eq!(violation.name, "ReadYourWrites");
+        assert!(violation.message.contains("no owner"));
+    }
+
+    #[test]
+    fn test_read_your_writes_with_intervening_release() {
+        // With an intervening release, seeing NoOwner is OK
+        let history = vec![
+            Operation {
+                op_type: OpType::Claim,
+                client: "client-1".to_string(),
+                actor: "actor-1".to_string(),
+                id: 1,
+                response: OpResponse::Ok,
+            },
+            Operation {
+                op_type: OpType::Release,
+                client: "client-1".to_string(),
+                actor: "actor-1".to_string(),
+                id: 2,
+                response: OpResponse::Ok,
+            },
+            Operation {
+                op_type: OpType::Read,
+                client: "client-1".to_string(),
+                actor: "actor-1".to_string(),
+                id: 3,
+                response: OpResponse::NoOwner, // OK because of release
+            },
+        ];
+
+        let inv = ReadYourWrites { history };
+        let state = SystemState::new();
+
+        let result = inv.check(&state);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_monotonic_reads_passes() {
+        let history = vec![
+            Operation {
+                op_type: OpType::Read,
+                client: "client-1".to_string(),
+                actor: "actor-1".to_string(),
+                id: 1,
+                response: OpResponse::Owner("node-1".to_string()),
+            },
+            Operation {
+                op_type: OpType::Read,
+                client: "client-1".to_string(),
+                actor: "actor-1".to_string(),
+                id: 2,
+                response: OpResponse::Owner("node-1".to_string()),
+            },
+        ];
+
+        let inv = MonotonicReads { history };
+        let state = SystemState::new();
+
+        let result = inv.check(&state);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_monotonic_reads_fails() {
+        let history = vec![
+            Operation {
+                op_type: OpType::Read,
+                client: "client-1".to_string(),
+                actor: "actor-1".to_string(),
+                id: 1,
+                response: OpResponse::Owner("node-1".to_string()),
+            },
+            Operation {
+                op_type: OpType::Read,
+                client: "client-1".to_string(),
+                actor: "actor-1".to_string(),
+                id: 2,
+                response: OpResponse::NoOwner, // Violation - regressed!
+            },
+        ];
+
+        let inv = MonotonicReads { history };
+        let state = SystemState::new();
+
+        let result = inv.check(&state);
+        assert!(result.is_err());
+
+        let violation = result.unwrap_err();
+        assert_eq!(violation.name, "MonotonicReads");
+    }
+
+    #[test]
+    fn test_monotonic_reads_with_intervening_release() {
+        // With an intervening release, regression is OK
+        let history = vec![
+            Operation {
+                op_type: OpType::Read,
+                client: "client-1".to_string(),
+                actor: "actor-1".to_string(),
+                id: 1,
+                response: OpResponse::Owner("node-1".to_string()),
+            },
+            Operation {
+                op_type: OpType::Release,
+                client: "client-1".to_string(),
+                actor: "actor-1".to_string(),
+                id: 2,
+                response: OpResponse::Ok,
+            },
+            Operation {
+                op_type: OpType::Read,
+                client: "client-1".to_string(),
+                actor: "actor-1".to_string(),
+                id: 3,
+                response: OpResponse::NoOwner, // OK because of release
+            },
+        ];
+
+        let inv = MonotonicReads { history };
+        let state = SystemState::new();
+
+        let result = inv.check(&state);
         assert!(result.is_ok());
     }
 }

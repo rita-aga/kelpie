@@ -55,8 +55,9 @@ pub use clock::SimClock;
 pub use fault::{FaultConfig, FaultInjector, FaultInjectorBuilder, FaultType};
 pub use invariants::{
     AtomicVisibility, ConsistentHolder, Durability, Invariant, InvariantChecker,
-    InvariantViolation, LeaseInfo, LeaseUniqueness, NodeInfo, NodeState, NodeStatus,
-    PlacementConsistency, SingleActivation, SystemState, WalEntry, WalEntryStatus,
+    InvariantViolation, LeaseInfo, LeaseUniqueness, MonotonicReads, NodeInfo, NodeState,
+    NodeStatus, OpResponse, OpType, Operation, PlacementConsistency, ReadYourWrites,
+    SingleActivation, SystemState, WalEntry, WalEntryStatus,
 };
 pub use kelpie_core::teleport::{Architecture, SnapshotKind, TeleportPackage, VmSnapshotBlob};
 pub use llm::{
