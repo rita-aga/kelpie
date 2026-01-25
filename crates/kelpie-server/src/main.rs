@@ -45,6 +45,8 @@ struct Cli {
     verbose: u8,
 
     /// FoundationDB cluster file path (enables FDB storage)
+    /// Requires --features fdb to be enabled at compile time.
+    #[cfg(feature = "fdb")]
     #[arg(long)]
     fdb_cluster_file: Option<String>,
 }
@@ -88,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
     let runtime = TokioRuntime;
 
     // Initialize storage backend (if configured)
+    #[cfg(feature = "fdb")]
     let storage = if let Some(ref cluster_file) = cli.fdb_cluster_file {
         use kelpie_server::storage::FdbAgentRegistry;
         use kelpie_storage::FdbKV;
@@ -102,6 +105,12 @@ async fn main() -> anyhow::Result<()> {
         Some(Arc::new(registry) as Arc<dyn kelpie_server::storage::AgentStorage>)
     } else {
         tracing::info!("Running in-memory mode (no persistence)");
+        None
+    };
+
+    #[cfg(not(feature = "fdb"))]
+    let storage: Option<Arc<dyn kelpie_server::storage::AgentStorage>> = {
+        tracing::info!("Running in-memory mode (no persistence, FDB feature not enabled)");
         None
     };
 
