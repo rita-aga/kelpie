@@ -6,6 +6,7 @@ use crate::rpc::{RpcHandler, RpcMessage};
 use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::actor::ActorId;
+use kelpie_core::io::{TimeProvider, WallClockTime};
 use kelpie_registry::{NodeId, PlacementDecision, Registry};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -64,15 +65,46 @@ pub struct ClusterRpcHandler<R: Registry> {
     migration_receiver: Arc<dyn MigrationReceiver>,
     /// Pending migrations (actor_id -> state waiting to be activated)
     pending_migrations: RwLock<HashMap<ActorId, PendingMigration>>,
+    /// Time provider for timestamps (DST-injectable)
+    time_provider: Arc<dyn TimeProvider>,
 }
 
 impl<R: Registry> ClusterRpcHandler<R> {
-    /// Create a new cluster RPC handler
+    /// Create a new cluster RPC handler with default wall clock time
+    ///
+    /// Use `with_time_provider()` for DST with SimClock injection.
     pub fn new(
         local_node_id: NodeId,
         registry: Arc<R>,
         invoker: Arc<dyn ActorInvoker>,
         migration_receiver: Arc<dyn MigrationReceiver>,
+    ) -> Self {
+        Self::with_time_provider(
+            local_node_id,
+            registry,
+            invoker,
+            migration_receiver,
+            Arc::new(WallClockTime::new()),
+        )
+    }
+
+    /// Create a new cluster RPC handler with custom time provider
+    ///
+    /// # DST Support
+    ///
+    /// Use this constructor in DST tests to inject SimClock:
+    /// ```ignore
+    /// let clock = Arc::new(SimClock::from_millis(0));
+    /// let handler = ClusterRpcHandler::with_time_provider(
+    ///     node_id, registry, invoker, receiver, clock
+    /// );
+    /// ```
+    pub fn with_time_provider(
+        local_node_id: NodeId,
+        registry: Arc<R>,
+        invoker: Arc<dyn ActorInvoker>,
+        migration_receiver: Arc<dyn MigrationReceiver>,
+        time_provider: Arc<dyn TimeProvider>,
     ) -> Self {
         Self {
             local_node_id,
@@ -80,6 +112,7 @@ impl<R: Registry> ClusterRpcHandler<R> {
             invoker,
             migration_receiver,
             pending_migrations: RwLock::new(HashMap::new()),
+            time_provider,
         }
     }
 
@@ -183,7 +216,7 @@ impl<R: Registry> ClusterRpcHandler<R> {
                     actor_id: actor_id.clone(),
                     from_node,
                     state: None,
-                    started_at_ms: now_ms(),
+                    started_at_ms: self.time_provider.now_ms(),
                 };
 
                 let mut pending_migrations = self.pending_migrations.write().await;
@@ -434,14 +467,6 @@ impl<R: Registry + 'static> RpcHandler for ClusterRpcHandler<R> {
             }
         }
     }
-}
-
-/// Get current time in milliseconds
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
 }
 
 #[cfg(test)]

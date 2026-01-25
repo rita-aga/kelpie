@@ -9,6 +9,7 @@ use crate::rpc::{RpcMessage, RpcTransport};
 use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::actor::ActorId;
+use kelpie_core::io::{TimeProvider, WallClockTime};
 use kelpie_core::runtime::{JoinHandle, Runtime};
 use kelpie_registry::{Heartbeat, NodeId, NodeInfo, NodeStatus, PlacementDecision, Registry};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -67,6 +68,8 @@ pub struct Cluster<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime
     transport: Arc<T>,
     /// Runtime for task spawning and time
     runtime: RT,
+    /// Time provider for timestamps (DST-injectable)
+    time_provider: Arc<dyn TimeProvider>,
     /// Migration coordinator
     migration: Arc<MigrationCoordinator<R, T>>,
     /// Actor state provider for migration
@@ -87,13 +90,44 @@ pub struct Cluster<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime
 }
 
 impl<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> Cluster<R, T, RT> {
-    /// Create a new cluster instance
+    /// Create a new cluster instance with default wall clock time
+    ///
+    /// Use `with_time_provider()` for DST with SimClock injection.
     pub fn new(
         local_node: NodeInfo,
         config: ClusterConfig,
         registry: Arc<R>,
         transport: Arc<T>,
         runtime: RT,
+    ) -> Self {
+        Self::with_time_provider(
+            local_node,
+            config,
+            registry,
+            transport,
+            runtime,
+            Arc::new(WallClockTime::new()),
+        )
+    }
+
+    /// Create a new cluster instance with custom time provider
+    ///
+    /// # DST Support
+    ///
+    /// Use this constructor in DST tests to inject SimClock:
+    /// ```ignore
+    /// let clock = Arc::new(SimClock::from_millis(0));
+    /// let cluster = Cluster::with_time_provider(
+    ///     node, config, registry, transport, runtime, clock
+    /// );
+    /// ```
+    pub fn with_time_provider(
+        local_node: NodeInfo,
+        config: ClusterConfig,
+        registry: Arc<R>,
+        transport: Arc<T>,
+        runtime: RT,
+        time_provider: Arc<dyn TimeProvider>,
     ) -> Self {
         let migration = Arc::new(MigrationCoordinator::new(
             local_node.id.clone(),
@@ -110,6 +144,7 @@ impl<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> Cl
             registry,
             transport,
             runtime,
+            time_provider,
             migration,
             state_provider: None,
             state: RwLock::new(ClusterState::Stopped),
@@ -305,6 +340,7 @@ impl<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> Cl
         let mut shutdown_rx = self.shutdown_rx.clone();
         let sequence = Arc::new(AtomicU64::new(0));
         let runtime = self.runtime.clone();
+        let time_provider = self.time_provider.clone();
 
         let task = self.runtime.spawn(async move {
             loop {
@@ -336,7 +372,7 @@ impl<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> Cl
 
                         let heartbeat = Heartbeat::new(
                             node_id.clone(),
-                            now_ms(),
+                            time_provider.now_ms(),
                             NodeStatus::Active,
                             actor_count,
                             1_000_000 - actor_count, // Available capacity
@@ -539,7 +575,7 @@ impl<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> Cl
                     self.local_node.id.clone(),
                     target_node.id.clone(),
                     state,
-                    now_ms(),
+                    self.time_provider.now_ms(),
                 )
                 .await
             {
@@ -623,14 +659,6 @@ impl<R: Registry + 'static, T: RpcTransport + 'static, RT: Runtime + 'static> Cl
             .list_nodes_by_status(NodeStatus::Active)
             .await?)
     }
-}
-
-/// Get current time in milliseconds
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 # True DST Simulation Architecture
 
-**Status:** PHASE 1 COMPLETE
+**Status:** PHASE 2 COMPLETE
 **Created:** 2026-01-25
 **Issue:** To be created after plan approval
 **Branch:** feature/phase1-storage-time-provider
@@ -140,14 +140,27 @@ EFFORT                   │                    EFFORT
 **Goal:** Enable cluster timing tests
 
 **Tasks:**
-1. [ ] Add TimeProvider to kelpie-cluster (80 functions)
-   - Focus on gossip.rs, heartbeat timing
-   - Inject via ClusterConfig
+1. [x] Add TimeProvider to kelpie-cluster (**COMPLETE** - 2026-01-24)
+   - Added `time_provider: Arc<dyn TimeProvider>` field to `Cluster` struct
+   - Added `with_time_provider()` constructor for DST injection
+   - Updated heartbeat task to use `time_provider.now_ms()` instead of `SystemTime::now()`
+   - Updated migration logic to use `time_provider.now_ms()`
+   - Removed duplicate `now_ms()` helper functions
 
-2. [ ] Update cluster_dst.rs to use production code
-   - Test real gossip protocol under simulated time
+2. [x] Add TimeProvider to ClusterRpcHandler (**COMPLETE** - 2026-01-24)
+   - Added `time_provider` field and `with_time_provider()` constructor
+   - Updated pending migration timestamps to use injected time
 
-**Deliverable:** Gossip/heartbeat bugs catchable in DST
+3. [x] Create reference DST test using real cluster code (**COMPLETE** - 2026-01-24)
+   - Created `crates/kelpie-dst/tests/cluster_production_dst.rs`
+   - 4 tests demonstrating the pattern:
+     - test_cluster_lifecycle_with_sim_time
+     - test_heartbeat_timestamps_from_sim_clock
+     - test_cluster_determinism
+     - test_handler_with_sim_time
+   - All 4 tests pass, proving the pattern works
+
+**Deliverable:** Gossip/heartbeat bugs catchable in DST ✅
 **Effort:** 3-4 days
 **Risk:** Low
 
@@ -241,6 +254,9 @@ After all phases:
 | Phase 1 | Create new test file instead of modifying fdb_transaction_dst | Cleaner separation, keeps SimStorage tests intact | Two test patterns coexist |
 | Phase 1 | Add stress tests for edge cases | Proven to catch real bugs (off-by-one in cleanup) | More test maintenance |
 | Phase 1 | Only test MemoryWal in kelpie-dst, not KvWal | KvWal needs KV backend, adds complexity | KvWal tested in kelpie-storage unit tests instead |
+| Phase 2 | Add TimeProvider to Cluster and ClusterRpcHandler | Heartbeat timestamps and migration timing need DST control | Additional constructor parameter |
+| Phase 2 | Remove duplicate now_ms() helper functions | Use TimeProvider consistently | None - cleaner code |
+| Phase 2 | Create new cluster_production_dst.rs test file | Demonstrates pattern separately from existing mocks | Existing cluster_dst.rs still uses Cluster::new() |
 
 ## Risks & Mitigations
 
