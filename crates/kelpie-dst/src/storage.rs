@@ -12,16 +12,20 @@ use bytes::Bytes;
 use kelpie_core::{ActorId, Error, Result};
 use kelpie_storage::{ActorKV, ActorTransaction};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
 
 /// Simulated storage for DST
 ///
 /// Provides an in-memory key-value store with configurable fault injection.
+/// Includes OCC (Optimistic Concurrency Control) support for transaction conflict detection.
 #[derive(Debug, Clone)]
 pub struct SimStorage {
     /// Storage data
     data: Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>,
+    /// Per-key version tracking for OCC (Optimistic Concurrency Control)
+    /// Each key has a version that increments on every write, enabling conflict detection
+    versions: Arc<RwLock<HashMap<Vec<u8>, u64>>>,
     /// Fault injector
     fault_injector: Arc<FaultInjector>,
     /// RNG for deterministic behavior
@@ -33,10 +37,11 @@ pub struct SimStorage {
 }
 
 impl SimStorage {
-    /// Create new simulated storage
+    /// Create new simulated storage with OCC support
     pub fn new(rng: DeterministicRng, fault_injector: Arc<FaultInjector>) -> Self {
         Self {
             data: Arc::new(RwLock::new(HashMap::new())),
+            versions: Arc::new(RwLock::new(HashMap::new())),
             fault_injector,
             rng,
             size_limit_bytes: None,
@@ -48,6 +53,14 @@ impl SimStorage {
     pub fn with_size_limit(mut self, limit_bytes: usize) -> Self {
         self.size_limit_bytes = Some(limit_bytes);
         self
+    }
+
+    /// Get the current version of a key (for OCC conflict detection)
+    ///
+    /// Returns the version number, or 0 if the key doesn't exist yet.
+    pub async fn get_version(&self, key: &[u8]) -> u64 {
+        let versions = self.versions.read().await;
+        versions.get(key).copied().unwrap_or(0)
     }
 
     /// Read a value from storage
@@ -207,6 +220,7 @@ impl SimStorage {
         }
 
         let mut data = self.data.write().await;
+        let mut versions = self.versions.write().await;
 
         // Update size tracking
         let old_size = data.get(key).map(|v| v.len()).unwrap_or(0);
@@ -214,6 +228,10 @@ impl SimStorage {
         let size_delta = new_size as isize - old_size as isize;
 
         data.insert(key.to_vec(), value.to_vec());
+
+        // Increment version for OCC conflict detection
+        let new_version = versions.get(key).copied().unwrap_or(0) + 1;
+        versions.insert(key.to_vec(), new_version);
 
         if size_delta > 0 {
             self.current_size_bytes
@@ -244,11 +262,16 @@ impl SimStorage {
         }
 
         let mut data = self.data.write().await;
+        let mut versions = self.versions.write().await;
 
         if let Some(old_value) = data.remove(key) {
             self.current_size_bytes
                 .fetch_sub(old_value.len(), std::sync::atomic::Ordering::SeqCst);
         }
+
+        // Increment version on delete (deletion is a write operation)
+        let new_version = versions.get(key).copied().unwrap_or(0) + 1;
+        versions.insert(key.to_vec(), new_version);
 
         Ok(())
     }
@@ -278,7 +301,9 @@ impl SimStorage {
     /// Clear all data
     pub async fn clear(&self) {
         let mut data = self.data.write().await;
+        let mut versions = self.versions.write().await;
         data.clear();
+        versions.clear();
         self.current_size_bytes
             .store(0, std::sync::atomic::Ordering::SeqCst);
     }
@@ -438,6 +463,7 @@ impl ActorKV for SimStorage {
         Ok(Box::new(SimTransaction::new(
             actor_id.clone(),
             self.data.clone(),
+            self.versions.clone(),
             self.fault_injector.clone(),
         )))
     }
@@ -448,16 +474,27 @@ impl ActorKV for SimStorage {
 /// Buffers writes until commit. Supports CrashDuringTransaction fault injection
 /// to test application behavior when transactions fail mid-commit.
 ///
+/// Implements OCC (Optimistic Concurrency Control):
+/// - Tracks read-set with versions at read time
+/// - On commit: validates read-set (checks if any read key changed)
+/// - If conflict detected: aborts with TransactionConflict error
+/// - If no conflict: applies writes atomically and increments versions
+///
 /// TigerStyle: Explicit state, fault injection at commit boundary.
 pub struct SimTransaction {
     /// Actor this transaction operates on
     actor_id: ActorId,
     /// Reference to the underlying storage data
     data: Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>,
+    /// Reference to version tracking for OCC
+    versions: Arc<RwLock<HashMap<Vec<u8>, u64>>>,
     /// Fault injector for crash simulation
     fault_injector: Arc<FaultInjector>,
     /// Buffered writes: scoped_key -> Some(value) for set, None for delete
     write_buffer: HashMap<Vec<u8>, Option<Vec<u8>>>,
+    /// Read-set versions: scoped_key -> version at read time (for OCC conflict detection)
+    /// Uses Mutex for interior mutability since reads need to track versions
+    read_versions: Arc<Mutex<HashMap<Vec<u8>, u64>>>,
     /// Whether this transaction has been finalized (committed or aborted)
     finalized: bool,
 }
@@ -466,13 +503,16 @@ impl SimTransaction {
     fn new(
         actor_id: ActorId,
         data: Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>,
+        versions: Arc<RwLock<HashMap<Vec<u8>, u64>>>,
         fault_injector: Arc<FaultInjector>,
     ) -> Self {
         Self {
             actor_id,
             data,
+            versions,
             fault_injector,
             write_buffer: HashMap::new(),
+            read_versions: Arc::new(Mutex::new(HashMap::new())),
             finalized: false,
         }
     }
@@ -511,6 +551,14 @@ impl ActorTransaction for SimTransaction {
                 });
             }
         }
+
+        // Track version at read time (for OCC conflict detection)
+        let versions = self.versions.read().await;
+        let version = versions.get(&scoped_key).copied().unwrap_or(0);
+        self.read_versions
+            .lock()
+            .unwrap()
+            .insert(scoped_key.clone(), version);
 
         // Fall back to storage
         let data = self.data.read().await;
@@ -577,15 +625,44 @@ impl ActorTransaction for SimTransaction {
             }
         }
 
-        // Apply all buffered writes atomically
+        // OCC Conflict Detection: Validate read-set
+        // Check if any key we read has been modified since we read it
+        let read_versions_map = self.read_versions.lock().unwrap().clone();
+        let versions = self.versions.read().await;
+        for (key, read_version) in &read_versions_map {
+            let current_version = versions.get(key).copied().unwrap_or(0);
+            if current_version != *read_version {
+                // Conflict detected: key was modified by another transaction
+                return Err(Error::TransactionConflict {
+                    reason: format!(
+                        "key {:?} version changed from {} to {}",
+                        String::from_utf8_lossy(key),
+                        read_version,
+                        current_version
+                    ),
+                });
+            }
+        }
+        drop(versions); // Release read lock before acquiring write lock
+
+        // No conflict detected - proceed with atomic commit
         let mut data = self.data.write().await;
+        let mut versions = self.versions.write().await;
+
+        // Apply all buffered writes atomically and increment versions
         for (key, value) in self.write_buffer.drain() {
             match value {
                 Some(v) => {
-                    data.insert(key, v);
+                    data.insert(key.clone(), v);
+                    // Increment version on write
+                    let new_version = versions.get(&key).copied().unwrap_or(0) + 1;
+                    versions.insert(key, new_version);
                 }
                 None => {
                     data.remove(&key);
+                    // Increment version on delete
+                    let new_version = versions.get(&key).copied().unwrap_or(0) + 1;
+                    versions.insert(key, new_version);
                 }
             }
         }
