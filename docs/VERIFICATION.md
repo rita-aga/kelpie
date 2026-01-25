@@ -149,6 +149,7 @@ This ADR is formalized in [KelpieSingleActivation.tla](../tla/KelpieSingleActiva
 | ADR | TLA+ Spec | DST Tests | Status |
 |-----|-----------|-----------|--------|
 | ADR-001: Virtual Actor Model | KelpieSingleActivation.tla | single_activation_dst.rs | Complete |
+| ADR-002: FDB Integration | KelpieFDBTransaction.tla | fdb_transaction_dst.rs | Complete |
 | ADR-004: Linearizability | KelpieLease.tla, KelpieSingleActivation.tla | lease_dst.rs, single_activation_dst.rs | Complete |
 | ADR-022: WAL Design | KelpieWAL.tla | (pending) | TLA+ done, DST pending |
 | ADR-023: Actor Registry | KelpieRegistry.tla | cluster_dst.rs | Complete |
