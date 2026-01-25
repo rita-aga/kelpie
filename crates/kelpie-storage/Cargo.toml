@@ -9,7 +9,9 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-default = ["fdb"]
+# Note: FDB is NOT default because it requires FoundationDB client libraries at compile time.
+# Enable explicitly with --features fdb when FDB is installed.
+default = []
 fdb = ["foundationdb"]
 
 [dependencies]
