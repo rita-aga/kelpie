@@ -326,10 +326,13 @@ Next == IF UseSafeVersion THEN NextSafe ELSE NextBuggy
 Fairness ==
     /\ WF_vars(TickClock)
     /\ \A n \in Nodes: WF_vars(RecoverFromSuspicion(n))
+    /\ \A n \in Nodes: WF_vars(NodeRestart(n))
+    \* Use strong fairness for lease acquisition to ensure progress
+    \* even when action is intermittently enabled (due to suspicion cycles)
     /\ \A n \in Nodes, a \in Actors:
         IF UseSafeVersion
-        THEN WF_vars(AcquireLeaseSafe(n, a))
-        ELSE WF_vars(AcquireLeaseNoCheck(n, a))
+        THEN SF_vars(AcquireLeaseSafe(n, a))
+        ELSE SF_vars(AcquireLeaseNoCheck(n, a))
 
 \* ============================================================================
 \* Safety Invariants
