@@ -122,7 +122,17 @@ EFFORT                   │                    EFFORT
      - test_wal_idempotency_with_sim_time
    - All 8 tests pass, proving the pattern works
 
+4. [x] Add stress tests for edge case regression protection (**COMPLETE** - 2026-01-24)
+   - Created `crates/kelpie-dst/tests/wal_stress_dst.rs`
+   - 4 stress tests targeting edge cases:
+     - stress_boundary_timestamps: Tests timestamp 0 and large values
+     - stress_cleanup_at_exact_boundary: Tests cleanup threshold boundary (verified catches off-by-one bugs)
+     - stress_many_same_timestamp: 100 concurrent writes at same timestamp
+     - stress_rapid_lifecycle: Rapid create/complete/cleanup cycles
+   - Proven effectiveness: Introduced `<` vs `<=` bug, test caught it immediately
+
 **Deliverable:** Production storage code testable under simulated time ✅
+**Total DST tests:** 12 (8 reference + 4 stress)
 **Effort:** 4-5 days
 **Risk:** Low
 
@@ -229,6 +239,8 @@ After all phases:
 | Start | Skip FDB abstraction initially | Can test with MemoryStorage | Can't test FDB-specific bugs |
 | Phase 1 | Skip TimeProvider for memory/kv/fdb | No time ops in these modules | Less code change, same DST value |
 | Phase 1 | Create new test file instead of modifying fdb_transaction_dst | Cleaner separation, keeps SimStorage tests intact | Two test patterns coexist |
+| Phase 1 | Add stress tests for edge cases | Proven to catch real bugs (off-by-one in cleanup) | More test maintenance |
+| Phase 1 | Only test MemoryWal in kelpie-dst, not KvWal | KvWal needs KV backend, adds complexity | KvWal tested in kelpie-storage unit tests instead |
 
 ## Risks & Mitigations
 
