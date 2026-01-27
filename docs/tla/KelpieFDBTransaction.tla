@@ -140,12 +140,22 @@ Abort(t) ==
 --------------------------------------------------------------------------------
 (* Next state relation *)
 
+\* All transactions have reached terminal state
+AllTerminated ==
+    \A t \in Transactions : txnState[t] \in {COMMITTED, ABORTED}
+
+\* Stutter step when all transactions are done (prevents deadlock)
+Terminated ==
+    /\ AllTerminated
+    /\ UNCHANGED vars
+
 Next ==
     \/ \E t \in Transactions : Begin(t)
     \/ \E t \in Transactions, k \in Keys : Read(t, k)
     \/ \E t \in Transactions, k \in Keys, v \in Values : Write(t, k, v)
     \/ \E t \in Transactions : Commit(t)
     \/ \E t \in Transactions : Abort(t)
+    \/ Terminated
 
 \* Fairness: every running transaction eventually commits or aborts
 Fairness ==
