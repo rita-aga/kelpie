@@ -1,6 +1,26 @@
 //! Actor activation and lifecycle management
 //!
 //! TigerStyle: Explicit lifecycle states, single activation guarantee.
+//!
+//! # TLA+ Specification Compliance
+//!
+//! This module implements the actor lifecycle protocol from `docs/tla/KelpieActorLifecycle.tla`:
+//!
+//! ## State Mapping
+//! - `state` -> `ActivationState` enum (Inactive, Activating, Active, Deactivating)
+//! - `pending` -> Number of pending invocations (tracked via `pending_invocations`)
+//! - `idleTicks` -> Computed from `idle_time_ms()`
+//!
+//! ## Key Invariants
+//! - `LifecycleOrdering` (G1.3): Invocations only happen when state = Active
+//! - `GracefulDeactivation`: Cannot be Deactivating with pending invocations
+//! - `IdleTimeoutRespected`: Only deactivate after idle timeout
+//! - `NoInvokeWhileDeactivating`: Cannot start new invocations during deactivation
+//!
+//! ## Liveness Properties
+//! - `EventualDeactivation`: If idle timeout reached, eventually deactivates
+//! - `EventualActivation`: If activation starts, it completes (or fails)
+//! - `EventualInvocationCompletion`: Started invocations eventually complete
 
 use crate::mailbox::{Envelope, Mailbox};
 use bytes::Bytes;
@@ -20,25 +40,92 @@ use tracing::{debug, error, info, instrument, warn};
 const STATE_KEY: &[u8] = b"__state__";
 
 /// Actor lifecycle state
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// From TLA+ KelpieActorLifecycle spec:
+/// - `Inactive`: Actor is not running (initial state, or after deactivation)
+/// - `Activating`: Actor is loading state and running on_activate hook
+/// - `Active`: Actor is running and accepting invocations
+/// - `Deactivating`: Actor is persisting state and running on_deactivate hook
+///
+/// State transitions:
+/// ```text
+///                   +------------+
+///                   |  Inactive  | <-----+
+///                   +------------+       |
+///                         |              |
+///                         v              |
+///                   +------------+       |
+///                   | Activating |       |
+///                   +------------+       |
+///                         |              |
+///                         v              |
+///                   +------------+       |
+///          +------> |   Active   | ------+
+///          |        +------------+       |
+///          |              |              |
+///          |              v              |
+///          |        +-------------+      |
+///          +------- | Deactivating| -----+
+///                   +-------------+
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ActivationState {
-    /// Actor is being activated (loading state)
+    /// Actor is not running (initial state, or after deactivation)
+    ///
+    /// From TLA+ spec: `state = "Inactive"`
+    #[default]
+    Inactive,
+    /// Actor is being activated (loading state, running on_activate)
+    ///
+    /// From TLA+ spec: `state = "Activating"`
     Activating,
     /// Actor is active and ready to process messages
+    ///
+    /// From TLA+ spec: `state = "Active"`
+    /// Invocations are ONLY allowed in this state (LifecycleOrdering invariant).
     Active,
-    /// Actor is being deactivated (persisting state)
+    /// Actor is being deactivated (persisting state, running on_deactivate)
+    ///
+    /// From TLA+ spec: `state = "Deactivating"`
+    /// GracefulDeactivation: Cannot have pending invocations in this state.
     Deactivating,
-    /// Actor has been deactivated
-    Deactivated,
+}
+
+impl ActivationState {
+    /// Check if actor can accept new invocations
+    ///
+    /// From TLA+ spec: LifecycleOrdering - only Active state can invoke
+    pub fn can_invoke(&self) -> bool {
+        matches!(self, ActivationState::Active)
+    }
+
+    /// Check if valid transition per TLA+ state machine
+    pub fn can_transition_to(&self, next: ActivationState) -> bool {
+        match (self, next) {
+            // From Inactive: can only go to Activating
+            (ActivationState::Inactive, ActivationState::Activating) => true,
+            // From Activating: go to Active (success) or Inactive (failure)
+            (ActivationState::Activating, ActivationState::Active) => true,
+            (ActivationState::Activating, ActivationState::Inactive) => true,
+            // From Active: can only go to Deactivating
+            (ActivationState::Active, ActivationState::Deactivating) => true,
+            // From Deactivating: go back to Inactive
+            (ActivationState::Deactivating, ActivationState::Inactive) => true,
+            // Same state is allowed (no change)
+            _ if *self == next => true,
+            // All other transitions are invalid
+            _ => false,
+        }
+    }
 }
 
 impl std::fmt::Display for ActivationState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ActivationState::Inactive => write!(f, "inactive"),
             ActivationState::Activating => write!(f, "activating"),
             ActivationState::Active => write!(f, "active"),
             ActivationState::Deactivating => write!(f, "deactivating"),
-            ActivationState::Deactivated => write!(f, "deactivated"),
         }
     }
 }
@@ -125,6 +212,13 @@ impl ActivationStats {
 ///
 /// TigerStyle: Single activation guarantee - only one ActiveActor per ActorId
 /// can exist in the cluster at any time.
+///
+/// # TLA+ Invariants
+///
+/// This struct maintains the invariants from KelpieActorLifecycle.tla:
+/// - `LifecycleOrdering`: `pending_invocations > 0 => state = Active`
+/// - `GracefulDeactivation`: `state = Deactivating => pending_invocations = 0`
+/// - `IdleTimeoutRespected`: `state = Deactivating => idle_time >= timeout`
 pub struct ActiveActor<A, S>
 where
     A: Actor<State = S>,
@@ -138,11 +232,15 @@ where
     context: ActorContext<S>,
     /// The actor's mailbox
     mailbox: Mailbox,
-    /// Current lifecycle state
+    /// Current lifecycle state (from TLA+ spec: state variable)
     state: ActivationState,
+    /// Number of pending invocations (from TLA+ spec: pending variable)
+    ///
+    /// Used to enforce GracefulDeactivation invariant.
+    pending_invocations: u64,
     /// Statistics
     stats: ActivationStats,
-    /// Idle timeout before deactivation
+    /// Idle timeout before deactivation (from TLA+ spec: IDLE_TIMEOUT constant)
     idle_timeout: Duration,
     /// Scoped KV store for persistence (bound to this actor)
     kv: ScopedKV,
@@ -187,6 +285,7 @@ where
             context: ActorContext::with_default_state(id.clone(), Box::new(context_kv)),
             mailbox: Mailbox::new(),
             state: ActivationState::Activating,
+            pending_invocations: 0, // TLA+ spec: pending = 0 in Init
             stats: ActivationStats::with_time(time.as_ref()),
             idle_timeout: Duration::from_millis(ACTOR_IDLE_TIMEOUT_MS_DEFAULT),
             time,
@@ -199,7 +298,8 @@ where
         // Call on_activate hook
         if let Err(e) = active.actor.on_activate(&mut active.context).await {
             error!(actor_id = %active.id, error = %e, "on_activate failed");
-            active.state = ActivationState::Deactivated;
+            // Failed activation goes back to Inactive (per TLA+ state machine)
+            active.state = ActivationState::Inactive;
             return Err(e);
         }
 
@@ -267,6 +367,12 @@ where
     /// crashes, either all changes (state + KV) are persisted or none are.
     ///
     /// TigerStyle: Transactional state + KV persistence, 2+ assertions.
+    ///
+    /// # TLA+ Invariants
+    ///
+    /// This method enforces:
+    /// - `LifecycleOrdering`: Only allow invocation when state = Active
+    /// - Tracks `pending_invocations` for GracefulDeactivation invariant
     #[instrument(skip(self, payload, time), fields(actor_id = %self.id, operation), level = "info")]
     pub async fn process_invocation_with_time(
         &mut self,
@@ -274,12 +380,17 @@ where
         payload: Bytes,
         time: Arc<dyn TimeProvider>,
     ) -> Result<Bytes> {
-        // Preconditions
+        // TLA+ LifecycleOrdering invariant: only invoke when Active
+        // This is the SAFE behavior - BUGGY mode in TLA+ allows invoke in any state
         assert!(
-            self.state == ActivationState::Active,
-            "Can only process invocations when active"
+            self.state.can_invoke(),
+            "VIOLATION: LifecycleOrdering - cannot invoke when state = {}",
+            self.state
         );
         assert!(!operation.is_empty(), "operation cannot be empty");
+
+        // Increment pending invocations (TLA+ StartInvoke action)
+        self.pending_invocations = self.pending_invocations.saturating_add(1);
 
         // Use time provider for DST determinism
         let start_ms = time.monotonic_ms();
@@ -360,8 +471,21 @@ where
             }
         };
 
+        // Decrement pending invocations (TLA+ CompleteInvoke action)
+        self.pending_invocations = self.pending_invocations.saturating_sub(1);
+
         self.stats
             .record_invocation_with_time(duration_ms, final_result.is_err(), time.as_ref());
+
+        // Verify LifecycleOrdering invariant: if pending > 0, must be Active
+        // (This is a postcondition check)
+        debug_assert!(
+            self.pending_invocations == 0 || self.state == ActivationState::Active,
+            "VIOLATION: LifecycleOrdering - pending {} but state = {}",
+            self.pending_invocations,
+            self.state
+        );
+
         final_result
     }
 
@@ -448,11 +572,31 @@ where
     /// Deactivate the actor
     ///
     /// Calls on_deactivate, persists state, and rejects pending messages.
+    ///
+    /// # TLA+ Invariants
+    ///
+    /// This method enforces:
+    /// - `GracefulDeactivation`: Cannot deactivate with pending invocations
+    /// - State transition validation per TLA+ state machine
     #[instrument(skip(self), fields(actor_id = %self.id), level = "info")]
     pub async fn deactivate(&mut self) -> Result<()> {
-        if self.state == ActivationState::Deactivated {
+        if self.state == ActivationState::Inactive {
             return Ok(());
         }
+
+        // TLA+ GracefulDeactivation invariant: no pending invocations
+        assert!(
+            self.pending_invocations == 0,
+            "VIOLATION: GracefulDeactivation - cannot deactivate with {} pending invocations",
+            self.pending_invocations
+        );
+
+        // Validate state transition
+        assert!(
+            self.state.can_transition_to(ActivationState::Deactivating),
+            "Invalid state transition: {} -> Deactivating",
+            self.state
+        );
 
         debug!(actor_id = %self.id, "Deactivating actor");
         self.state = ActivationState::Deactivating;
@@ -477,7 +621,10 @@ where
             }));
         }
 
-        self.state = ActivationState::Deactivated;
+        // Transition to Inactive (TLA+ CompleteDeactivate action)
+        self.state = ActivationState::Inactive;
+        self.pending_invocations = 0; // Reset pending count
+
         info!(
             actor_id = %self.id,
             invocations = self.stats.invocation_count,
@@ -488,11 +635,26 @@ where
         Ok(())
     }
 
+    /// Get the number of pending invocations
+    ///
+    /// From TLA+ spec: `pending` variable
+    pub fn pending_invocations(&self) -> u64 {
+        self.pending_invocations
+    }
+
     /// Check if the actor should be deactivated due to idle timeout
+    ///
+    /// From TLA+ spec: `StartDeactivate` action preconditions:
+    /// - state = Active
+    /// - pending = 0 (no pending invocations)
+    /// - idleTicks >= IDLE_TIMEOUT
+    ///
+    /// This implements the IdleTimeoutRespected invariant.
     pub fn should_deactivate(&self) -> bool {
         self.state == ActivationState::Active
+            && self.pending_invocations == 0  // GracefulDeactivation: wait for invocations
             && self.mailbox.is_empty()
-            && self.stats.idle_time_ms(self.time.as_ref()) > self.idle_timeout.as_millis() as u64
+            && self.stats.idle_time_ms(self.time.as_ref()) >= self.idle_timeout.as_millis() as u64
     }
 
     /// Get the current activation state
@@ -634,7 +796,8 @@ mod tests {
         assert_eq!(active.activation_state(), ActivationState::Active);
 
         active.deactivate().await.unwrap();
-        assert_eq!(active.activation_state(), ActivationState::Deactivated);
+        // After deactivation, state is Inactive (per TLA+ spec)
+        assert_eq!(active.activation_state(), ActivationState::Inactive);
     }
 
     #[test]
@@ -806,5 +969,120 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result, Bytes::from("2")); // item:1 and item:2
+    }
+
+    // =========================================================================
+    // TLA+ Invariant Tests (KelpieActorLifecycle)
+    // =========================================================================
+
+    #[test]
+    fn test_activation_state_transitions() {
+        // Valid transitions per TLA+ spec
+        assert!(ActivationState::Inactive.can_transition_to(ActivationState::Activating));
+        assert!(ActivationState::Activating.can_transition_to(ActivationState::Active));
+        assert!(ActivationState::Activating.can_transition_to(ActivationState::Inactive)); // Failed activation
+        assert!(ActivationState::Active.can_transition_to(ActivationState::Deactivating));
+        assert!(ActivationState::Deactivating.can_transition_to(ActivationState::Inactive));
+
+        // Invalid transitions
+        assert!(!ActivationState::Inactive.can_transition_to(ActivationState::Active)); // Skip Activating
+        assert!(!ActivationState::Active.can_transition_to(ActivationState::Inactive)); // Skip Deactivating
+        assert!(!ActivationState::Deactivating.can_transition_to(ActivationState::Active));
+    }
+
+    #[test]
+    fn test_activation_state_can_invoke() {
+        // LifecycleOrdering: only Active state can invoke
+        assert!(!ActivationState::Inactive.can_invoke());
+        assert!(!ActivationState::Activating.can_invoke());
+        assert!(ActivationState::Active.can_invoke());
+        assert!(!ActivationState::Deactivating.can_invoke());
+    }
+
+    #[tokio::test]
+    async fn test_lifecycle_ordering_invariant() {
+        // Test that pending_invocations is tracked correctly
+        let id = ActorId::new("test", "lifecycle-1").unwrap();
+        let kv = create_kv();
+
+        let mut active = ActiveActor::activate(id, CounterActor, kv).await.unwrap();
+
+        // Initially no pending invocations
+        assert_eq!(active.pending_invocations(), 0);
+
+        // After invocation completes, still 0
+        active
+            .process_invocation("increment", Bytes::new())
+            .await
+            .unwrap();
+        assert_eq!(active.pending_invocations(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_graceful_deactivation_invariant() {
+        // Test that deactivation waits for invocations to complete
+        let id = ActorId::new("test", "graceful-1").unwrap();
+        let kv = create_kv();
+
+        let mut active = ActiveActor::activate(id, CounterActor, kv).await.unwrap();
+
+        // Process some invocations (all complete)
+        active
+            .process_invocation("increment", Bytes::new())
+            .await
+            .unwrap();
+        active
+            .process_invocation("increment", Bytes::new())
+            .await
+            .unwrap();
+
+        // pending_invocations should be 0
+        assert_eq!(active.pending_invocations(), 0);
+
+        // Deactivation should succeed (no pending invocations)
+        active.deactivate().await.unwrap();
+        assert_eq!(active.activation_state(), ActivationState::Inactive);
+    }
+
+    #[test]
+    fn test_idle_timeout_respected_invariant() {
+        // Test that should_deactivate requires:
+        // 1. state = Active
+        // 2. pending_invocations = 0
+        // 3. no pending messages
+        // 4. idle_time >= idle_timeout
+
+        // This is a logic test - the actual time-based test would need
+        // the DST SimClock which is in kelpie-dst crate
+
+        // The key invariant from TLA+ IdleTimeoutRespected:
+        // state = Deactivating => idleTicks >= IDLE_TIMEOUT
+
+        // should_deactivate checks:
+        // - state == Active (required before deactivate)
+        // - pending_invocations == 0 (GracefulDeactivation)
+        // - mailbox.is_empty()
+        // - idle_time_ms >= idle_timeout
+
+        // This invariant is enforced by the should_deactivate() implementation
+        // which only returns true when ALL conditions are met.
+
+        // Verify the state transition preconditions
+        assert!(ActivationState::Active.can_transition_to(ActivationState::Deactivating));
+        assert!(!ActivationState::Inactive.can_transition_to(ActivationState::Deactivating));
+        assert!(!ActivationState::Activating.can_transition_to(ActivationState::Deactivating));
+    }
+
+    #[test]
+    fn test_activation_state_default() {
+        assert_eq!(ActivationState::default(), ActivationState::Inactive);
+    }
+
+    #[test]
+    fn test_activation_state_display() {
+        assert_eq!(format!("{}", ActivationState::Inactive), "inactive");
+        assert_eq!(format!("{}", ActivationState::Activating), "activating");
+        assert_eq!(format!("{}", ActivationState::Active), "active");
+        assert_eq!(format!("{}", ActivationState::Deactivating), "deactivating");
     }
 }

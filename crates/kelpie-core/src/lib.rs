@@ -23,6 +23,7 @@ pub mod constants;
 pub mod error;
 pub mod io;
 pub mod metrics;
+pub mod occ;
 pub mod runtime;
 pub mod telemetry;
 pub mod teleport;
@@ -35,6 +36,7 @@ pub use config::KelpieConfig;
 pub use constants::*;
 pub use error::{Error, Result};
 pub use io::{IoContext, RngProvider, StdRngProvider, TimeProvider, WallClockTime};
+pub use occ::{AtomicFencingToken, FencingError, FencingToken, OccResult, Version, Versioned};
 pub use runtime::{
     current_runtime, CurrentRuntime, Instant, JoinError, JoinHandle, Runtime, TokioRuntime,
 };

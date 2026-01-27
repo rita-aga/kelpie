@@ -228,8 +228,13 @@ impl SimAgentEnv {
     }
 
     /// Get list of all agent IDs (for testing)
-    pub fn list_agents(&self) -> Vec<String> {
+    pub fn list_agent_ids(&self) -> Vec<String> {
         self.agents.keys().cloned().collect()
+    }
+
+    /// Get list of all agents with their full state (for testing)
+    pub fn list_agents(&self) -> Vec<AgentTestState> {
+        self.agents.values().cloned().collect()
     }
 }
 

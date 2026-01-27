@@ -66,6 +66,27 @@ pub enum RegistryError {
     /// Lease has expired
     #[error("lease for actor {actor_id} expired at {expiry_ms}ms")]
     LeaseExpired { actor_id: String, expiry_ms: u64 },
+
+    /// Quorum lost - not enough active nodes for safe operation
+    ///
+    /// From TLA+ KelpieClusterMembership spec: `hasMajority == 2 * activeCount > clusterSize`
+    /// Operations requiring quorum cannot proceed without strict majority.
+    #[error("quorum lost: {active_nodes} active nodes out of {total_nodes} total, need {required} for quorum")]
+    QuorumLoss {
+        active_nodes: usize,
+        total_nodes: usize,
+        required: usize,
+    },
+
+    /// Version conflict during OCC write
+    ///
+    /// From TLA+ KelpieSingleActivation spec: write rejected because version changed
+    #[error("version conflict for actor {actor_id}: expected {expected}, found {found}")]
+    VersionConflict {
+        actor_id: String,
+        expected: u64,
+        found: u64,
+    },
 }
 
 impl RegistryError {

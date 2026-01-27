@@ -19,12 +19,14 @@
 //! 3. **DST-first** - All operations can have faults injected
 
 mod adapter;
+#[cfg(feature = "fdb")]
 mod fdb;
 mod teleport;
 mod traits;
 mod types;
 
 pub use adapter::KvAdapter;
+#[cfg(feature = "fdb")]
 pub use fdb::FdbAgentRegistry;
 pub use kelpie_core::teleport::{
     Architecture, SnapshotKind, TeleportPackage, TeleportStorage, TeleportStorageError,
