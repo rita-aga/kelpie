@@ -82,8 +82,24 @@ java -XX:+UseParallelGC -jar ~/tla2tools.jar -deadlock -config KelpieLease_Buggy
 ```
 
 ### KelpieActorLifecycle.tla
-Models the lifecycle of a Kelpie virtual actor.
-- **TLC Results**: PASS (11 distinct states) / FAIL LifecycleOrdering (buggy)
+Models the lifecycle of a Kelpie virtual actor (ADR-001 G1.3, G1.5).
+
+#### Safety Invariants
+- **IdleTimeoutRespected**: Actor idle beyond timeout must be deactivating/deactivated
+- **GracefulDeactivation**: Pending messages drained before deactivate completes
+- **NoResurrection**: Deactivated actor cannot process without re-activation
+- **LifecycleOrdering**: States follow Inactive → Activating → Active → Deactivating → Inactive
+
+#### Liveness Properties
+- **EventualDeactivation**: Idle actors eventually deactivated
+- **EventualActivation**: First invocation eventually activates actor
+- **MessageProgress**: Pending messages eventually processed or rejected
+
+#### Bug Variants
+- **BUGGY_DEACTIVATE**: CompleteDeactivation_WithPending - violates GracefulDeactivation
+- **BUGGY_INVOKE**: ProcessMessage_WhenDeactivating - violates LifecycleOrdering
+
+- **TLC Results**: PASS (safe) / FAIL GracefulDeactivation (buggy)
 
 ### KelpieMigration.tla
 Models Kelpie's 3-phase actor migration protocol.

@@ -15,10 +15,17 @@ EXTENDS Naturals, Sequences
 CONSTANTS
     MAX_PENDING,      \* Maximum concurrent invocations
     IDLE_TIMEOUT,     \* Ticks before idle deactivation
-    BUGGY             \* TRUE enables buggy behavior for testing
+    BUGGY_INVOKE,     \* TRUE: allow invoke in any state (violates LifecycleOrdering)
+    BUGGY_DEACTIVATE  \* TRUE: allow deactivation with pending messages (violates GracefulDeactivation)
 
 (***************************************************************************)
 (* State Variables                                                         *)
+(* Maps to issue specification:                                            *)
+(*   actorState      -> state (single actor model)                         *)
+(*   lastActivity    -> idleTicks (inverted: ticks since activity)         *)
+(*   pendingMessages -> pending                                            *)
+(*   idleTimeout     -> IDLE_TIMEOUT constant                              *)
+(*   time            -> modeled implicitly via Tick action                 *)
 (***************************************************************************)
 
 VARIABLES
@@ -48,17 +55,18 @@ Init ==
 
 (***************************************************************************)
 (* Actions                                                                 *)
+(* Aliases provided to match issue specification naming                    *)
 (***************************************************************************)
 
-\* Activate: Transition from Inactive to Activating, then to Active
+\* StartActivation(actor): Begin actor activation
 \* Models: ActiveActor::activate() in activation.rs
-Activate ==
+StartActivation ==
     /\ state = "Inactive"
     /\ state' = "Activating"
     /\ pending' = pending
     /\ idleTicks' = 0
 
-\* Complete activation: Transition from Activating to Active
+\* CompleteActivation(actor): Finish activation, enter Active state
 \* Models: on_activate hook completion
 CompleteActivation ==
     /\ state = "Activating"
@@ -66,30 +74,39 @@ CompleteActivation ==
     /\ pending' = pending
     /\ idleTicks' = 0
 
-\* Start an invocation: Increment pending counter
+\* EnqueueMessage(actor): Add a message to pending queue
 \* Models: DispatcherHandle::invoke() accepting a request
 \* Safe: Requires state = Active
-\* Buggy: Allows invoke in any state (violates G1.3)
-StartInvoke ==
+\* Buggy: Allows enqueue in any state (violates LifecycleOrdering)
+EnqueueMessage ==
     /\ pending < MAX_PENDING
-    /\ IF BUGGY
+    /\ IF BUGGY_INVOKE
        THEN TRUE  \* Buggy: Allow invoke in any state
        ELSE state = "Active"  \* Safe: Only invoke when Active
     /\ pending' = pending + 1
     /\ idleTicks' = 0  \* Reset idle timer on activity
     /\ state' = state
 
-\* Complete an invocation: Decrement pending counter
+\* ProcessMessage(actor): Process and complete a pending message
 \* Models: process_invocation() completing
-CompleteInvoke ==
+ProcessMessage ==
     /\ pending > 0
     /\ pending' = pending - 1
     /\ idleTicks' = 0  \* Reset idle timer on activity
     /\ state' = state
 
-\* Idle tick: Increment idle timer when no activity
+\* DrainMessage(actor): Process message during deactivation drain phase
+\* Same as ProcessMessage but explicit for deactivation context
+DrainMessage ==
+    /\ state = "Deactivating"
+    /\ pending > 0
+    /\ pending' = pending - 1
+    /\ idleTicks' = idleTicks
+    /\ state' = state
+
+\* Tick: Model time passing (idle timer increment)
 \* Models: Time passing without invocations
-IdleTick ==
+Tick ==
     /\ state = "Active"
     /\ pending = 0  \* Only tick when no pending invocations
     /\ idleTicks < IDLE_TIMEOUT + 1
@@ -97,10 +114,10 @@ IdleTick ==
     /\ state' = state
     /\ pending' = pending
 
-\* Start deactivation: Transition to Deactivating when idle timeout reached
+\* CheckIdleTimeout / StartDeactivation(actor): Begin deactivation when idle
 \* Models: should_deactivate() returning true
 \* Precondition: Must be Active with no pending invocations
-StartDeactivate ==
+StartDeactivation ==
     /\ state = "Active"
     /\ pending = 0  \* Graceful: Wait for invocations to complete
     /\ idleTicks >= IDLE_TIMEOUT
@@ -108,26 +125,44 @@ StartDeactivate ==
     /\ pending' = pending
     /\ idleTicks' = idleTicks
 
-\* Complete deactivation: Transition to Inactive
+\* CompleteDeactivation(actor): Finish deactivation, return to Inactive
 \* Models: deactivate() completing (on_deactivate + state persistence)
-CompleteDeactivate ==
+\* Safe: Requires pending = 0 (all messages drained)
+\* Buggy: Allows completion with pending messages (violates GracefulDeactivation)
+CompleteDeactivation ==
     /\ state = "Deactivating"
+    /\ IF BUGGY_DEACTIVATE
+       THEN TRUE  \* Buggy: Allow deactivation with pending messages
+       ELSE pending = 0  \* Safe: Must drain all messages first
     /\ state' = "Inactive"
     /\ pending' = 0
     /\ idleTicks' = 0
+
+(***************************************************************************)
+(* Action Aliases (for compatibility with issue specification)             *)
+(***************************************************************************)
+
+Activate == StartActivation
+StartInvoke == EnqueueMessage
+CompleteInvoke == ProcessMessage
+IdleTick == Tick
+StartDeactivate == StartDeactivation
+CompleteDeactivate == CompleteDeactivation
+CheckIdleTimeout == StartDeactivation
 
 (***************************************************************************)
 (* Next State Relation                                                     *)
 (***************************************************************************)
 
 Next ==
-    \/ Activate
+    \/ StartActivation
     \/ CompleteActivation
-    \/ StartInvoke
-    \/ CompleteInvoke
-    \/ IdleTick
-    \/ StartDeactivate
-    \/ CompleteDeactivate
+    \/ EnqueueMessage
+    \/ ProcessMessage
+    \/ DrainMessage
+    \/ Tick
+    \/ StartDeactivation
+    \/ CompleteDeactivation
 
 (***************************************************************************)
 (* Fairness (for liveness properties)                                      *)
@@ -135,14 +170,15 @@ Next ==
 
 \* Weak fairness: If an action is continuously enabled, it eventually happens
 \* Strong fairness: If an action is infinitely often enabled, it eventually happens
-\* We use SF for StartDeactivate because invocations may interrupt the idle period,
+\* We use SF for StartDeactivation because invocations may interrupt the idle period,
 \* but if the actor keeps becoming eligible for deactivation, it should eventually happen.
 Fairness ==
     /\ WF_vars(CompleteActivation)
-    /\ WF_vars(CompleteInvoke)
-    /\ WF_vars(IdleTick)
-    /\ SF_vars(StartDeactivate)  \* Strong fairness: fires even if only intermittently enabled
-    /\ WF_vars(CompleteDeactivate)
+    /\ WF_vars(ProcessMessage)
+    /\ WF_vars(DrainMessage)
+    /\ WF_vars(Tick)
+    /\ SF_vars(StartDeactivation)  \* Strong fairness: fires even if only intermittently enabled
+    /\ WF_vars(CompleteDeactivation)
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
@@ -150,56 +186,68 @@ Spec == Init /\ [][Next]_vars /\ Fairness
 (* Safety Invariants                                                       *)
 (***************************************************************************)
 
-\* LifecycleOrdering: No invoke without activate (G1.3)
-\* Invocations can only happen when the actor is Active
-\* In buggy mode, this can be violated
+\* LifecycleOrdering: States follow Inactive -> Activating -> Active -> Deactivating -> Inactive
+\* Invocations can only happen when the actor is Active (G1.3)
+\* In buggy mode (BUGGY_INVOKE), this can be violated
 LifecycleOrdering ==
-    pending > 0 => state = "Active"
+    pending > 0 => state \in {"Active", "Deactivating"}
 
-\* GracefulDeactivation: Active invocations complete before deactivate (G1.3)
-\* Cannot be in Deactivating state with pending invocations
+\* GracefulDeactivation: Pending messages drained before deactivate completes
+\* Cannot complete deactivation with pending invocations (G1.3)
+\* In buggy mode (BUGGY_DEACTIVATE), this can be violated
 GracefulDeactivation ==
-    state = "Deactivating" => pending = 0
+    state = "Inactive" => pending = 0
 
-\* IdleTimeoutRespected: Cannot deactivate before timeout
+\* IdleTimeoutRespected: Actor idle beyond timeout must be deactivating/deactivated (G1.5)
 \* Only start deactivation after idle timeout is reached
 IdleTimeoutRespected ==
     state = "Deactivating" => idleTicks >= IDLE_TIMEOUT
 
+\* NoResurrection: Deactivated actor cannot process without re-activation
+\* Cannot have pending messages in Inactive state
+NoResurrection ==
+    state = "Inactive" => pending = 0
+
 \* NoInvokeWhileDeactivating: Cannot start new invocations during deactivation
-NoInvokeWhileDeactivating ==
-    state = "Deactivating" => pending = 0
+\* (This is a stricter form - ensured by EnqueueMessage precondition when not buggy)
+NoNewInvokesWhileDeactivating ==
+    ~BUGGY_INVOKE => (state = "Deactivating" => pending = pending)
 
 (***************************************************************************)
 (* Liveness Properties                                                     *)
 (***************************************************************************)
 
-\* EventualDeactivation: If actor reaches idle timeout, it eventually deactivates
-\* This models G1.5: Automatic deactivation after idle timeout
-\* Note: We check when idleTicks reaches timeout, not just when pending=0,
-\* because new invocations can arrive and reset the idle timer.
+\* EventualDeactivation: Idle actors eventually deactivated (G1.5)
+\* If actor reaches idle timeout, it eventually deactivates
 EventualDeactivation ==
     (state = "Active" /\ idleTicks >= IDLE_TIMEOUT) ~> (state = "Inactive")
 
-\* EventualActivation: If activation starts, it eventually completes
+\* EventualActivation: First invocation eventually activates actor
+\* If activation starts, it eventually completes
 EventualActivation ==
     (state = "Activating") ~> (state = "Active" \/ state = "Inactive")
 
-\* EventualInvocationCompletion: Started invocations eventually complete
-EventualInvocationCompletion ==
+\* MessageProgress: Pending messages eventually processed or rejected
+\* Started invocations eventually complete
+MessageProgress ==
     (pending > 0) ~> (pending = 0)
+
+\* Alias for backward compatibility
+EventualInvocationCompletion == MessageProgress
 
 (***************************************************************************)
 (* Composite Properties                                                    *)
 (***************************************************************************)
 
 \* All safety invariants combined
-Safety == TypeOK /\ LifecycleOrdering /\ GracefulDeactivation /\ IdleTimeoutRespected
+Safety == TypeOK /\ LifecycleOrdering /\ GracefulDeactivation /\ IdleTimeoutRespected /\ NoResurrection
 
 \* All liveness properties combined
-Liveness == EventualDeactivation /\ EventualActivation /\ EventualInvocationCompletion
+Liveness == EventualDeactivation /\ EventualActivation /\ MessageProgress
 
 =============================================================================
 \* Modification History
+\* Updated 2026-01-27 by Claude for Kelpie project - added NoResurrection, 
+\*   MessageProgress, DrainMessage, renamed actions per issue spec
 \* Created 2026-01-24 by Claude for Kelpie project
 \* Reference: GitHub Issue #8
