@@ -94,7 +94,27 @@ Models actor state management and transaction semantics.
 - **TLC Results**: PASS (60 distinct states) / FAIL RollbackCorrectness (buggy)
 
 ### KelpieFDBTransaction.tla
-Models FoundationDB transaction semantics.
+Models FoundationDB transaction semantics (ADR-002 G2.4, ADR-004 G4.1).
+
+#### Safety Invariants
+| Invariant | Description |
+|-----------|-------------|
+| `TypeOK` | Type correctness of all variables |
+| `SerializableIsolation` | Committed transactions appear in some serial order |
+| `ConflictDetection` | Concurrent writes to same key cause at least one abort |
+| `AtomicCommit` | Transaction commit is all-or-nothing |
+| `ReadYourWrites` | Transaction sees its own uncommitted writes |
+| `SnapshotReads` | Reads see consistent snapshot from transaction start |
+
+#### Liveness Properties
+| Property | Description |
+|----------|-------------|
+| `EventualTermination` | Every started transaction eventually commits or aborts |
+| `EventualCommit` | Non-conflicting transactions eventually commit |
+
+#### Bug Variant
+The buggy config sets `EnableConflictDetection = FALSE`, which skips conflict checks and violates `SerializableIsolation` and `ConflictDetection`.
+
 - **TLC Results**: PASS (56,193 distinct states) / FAIL SerializableIsolation (buggy)
 
 ### KelpieTeleport.tla

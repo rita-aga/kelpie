@@ -235,6 +235,20 @@ ReadYourWrites ==
                 writeBuffer[t][k] # NoValue =>
                     TxnRead(t, k) = writeBuffer[t][k]
 
+\* Invariant 5: Snapshot Reads
+\* Reads within a transaction see a consistent snapshot from transaction start.
+\* All reads reflect the state at Begin time (stored in readSnapshot),
+\* not affected by concurrent commits from other transactions.
+SnapshotReads ==
+    \A t \in Transactions :
+        txnState[t] = RUNNING =>
+            \* The snapshot was taken at Begin and doesn't change during the transaction
+            \* (readSnapshot is immutable after Begin - verified by checking it's set)
+            \A k \in Keys :
+                readSnapshot[t][k] # NoValue =>
+                    \* If we haven't written to k, reads return the snapshot value
+                    (writeBuffer[t][k] = NoValue => TxnRead(t, k) = readSnapshot[t][k])
+
 \* Combined safety invariant
 Safety ==
     /\ TypeOK
@@ -242,6 +256,7 @@ Safety ==
     /\ ConflictDetection
     /\ AtomicCommit
     /\ ReadYourWrites
+    /\ SnapshotReads
 
 --------------------------------------------------------------------------------
 (* Liveness properties *)
