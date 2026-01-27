@@ -4,6 +4,7 @@
 (*                                                                         *)
 (* Models the lifecycle of a virtual actor in Kelpie, verifying:           *)
 (* - G1.3: Lifecycle ordering (activate -> invoke -> deactivate)           *)
+(* - G1.4: Single-threaded execution (one message at a time) - implicit    *)
 (* - G1.5: Automatic deactivation after idle timeout                       *)
 (*                                                                         *)
 (* Reference: ADR-001 Virtual Actor Model                                  *)
@@ -13,7 +14,7 @@
 EXTENDS Naturals, Sequences
 
 CONSTANTS
-    MAX_PENDING,      \* Maximum concurrent invocations
+    MAX_PENDING,      \* Maximum queued messages (processed one at a time per G1.4)
     IDLE_TIMEOUT,     \* Ticks before idle deactivation
     BUGGY_INVOKE,     \* TRUE: allow invoke in any state (violates LifecycleOrdering)
     BUGGY_DEACTIVATE  \* TRUE: allow deactivation with pending messages (violates GracefulDeactivation)
@@ -30,7 +31,8 @@ CONSTANTS
 
 VARIABLES
     state,            \* Actor lifecycle state: "Inactive", "Activating", "Active", "Deactivating"
-    pending,          \* Number of pending invocations (0..MAX_PENDING)
+    pending,          \* Message queue depth (0..MAX_PENDING). Messages are processed
+                      \* sequentially one at a time (G1.4 single-threaded execution).
     idleTicks         \* Ticks since last activity (for idle timeout)
 
 vars == <<state, pending, idleTicks>>
@@ -116,10 +118,12 @@ Tick ==
 
 \* CheckIdleTimeout / StartDeactivation(actor): Begin deactivation when idle
 \* Models: should_deactivate() returning true
-\* Precondition: Must be Active with no pending invocations
+\* Precondition: Must be Active with no pending invocations (unless buggy)
 StartDeactivation ==
     /\ state = "Active"
-    /\ pending = 0  \* Graceful: Wait for invocations to complete
+    /\ IF BUGGY_DEACTIVATE
+       THEN TRUE  \* Buggy: Allow deactivation with pending messages
+       ELSE pending = 0  \* Safe: Wait for invocations to complete
     /\ idleTicks >= IDLE_TIMEOUT
     /\ state' = "Deactivating"
     /\ pending' = pending
@@ -193,10 +197,10 @@ LifecycleOrdering ==
     pending > 0 => state \in {"Active", "Deactivating"}
 
 \* GracefulDeactivation: Pending messages drained before deactivate completes
-\* Cannot complete deactivation with pending invocations (G1.3)
+\* Cannot be in Deactivating state with pending > 0 when about to complete (G1.3)
 \* In buggy mode (BUGGY_DEACTIVATE), this can be violated
 GracefulDeactivation ==
-    state = "Inactive" => pending = 0
+    state = "Deactivating" => pending = 0
 
 \* IdleTimeoutRespected: Actor idle beyond timeout must be deactivating/deactivated (G1.5)
 \* Only start deactivation after idle timeout is reached
