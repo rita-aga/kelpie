@@ -376,11 +376,24 @@ impl AgentActor {
                     created_at: chrono::Utc::now(),
                 };
                 ctx.state.add_message(tool_call_msg);
+                // TigerStyle (Issue #75 fix): Use propagated call context for nested calls
+                // This ensures cycle detection and depth limiting work across agent boundaries
+                let (call_depth, mut call_chain) = match &request.call_context {
+                    Some(ctx_info) => (ctx_info.call_depth, ctx_info.call_chain.clone()),
+                    None => (0, vec![]), // Top-level call (from API)
+                };
+
+                // Add current agent to call chain for nested call detection
+                let current_agent_id = ctx.id.id().to_string();
+                if !call_chain.contains(&current_agent_id) {
+                    call_chain.push(current_agent_id.clone());
+                }
+
                 let context = ToolExecutionContext {
-                    agent_id: Some(ctx.id.id().to_string()),
+                    agent_id: Some(current_agent_id),
                     project_id: agent.project_id.clone(),
-                    call_depth: 0,      // Top-level call
-                    call_chain: vec![], // Empty chain at top level
+                    call_depth,
+                    call_chain,
                     dispatcher: self.dispatcher.as_ref().map(|d| {
                         Arc::new(super::dispatcher_adapter::DispatcherAdapter::new(d.clone()))
                             as Arc<dyn crate::tools::AgentDispatcher>
@@ -587,9 +600,30 @@ struct CoreMemoryAppend {
 }
 
 /// Request for full message handling (Phase 6.8)
+///
+/// TigerStyle (Issue #75 fix): Includes optional call context for nested agent calls.
+/// When Agent A calls Agent B, A's call context is propagated to B for:
+/// - Cycle detection (prevent A→B→A deadlock)
+/// - Depth tracking (limit nested calls)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandleMessageFullRequest {
     pub content: String,
+    /// Optional call context for nested agent-to-agent calls
+    /// None for top-level calls (from API), Some for nested calls (from call_agent tool)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_context: Option<CallContextInfo>,
+}
+
+/// Call context information propagated through agent-to-agent calls
+///
+/// TigerStyle: Explicit state for cycle detection and depth limiting.
+/// TLA+ invariants: NoDeadlock, DepthBounded (see KelpieMultiAgentInvocation.tla)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CallContextInfo {
+    /// Current call depth (0 = top level, increments with each nested call)
+    pub call_depth: u32,
+    /// Chain of agent IDs in the current call stack (for cycle detection)
+    pub call_chain: Vec<String>,
 }
 
 /// Response from full message handling (Phase 6.8)

@@ -390,17 +390,29 @@ trait TransportInner: Send + Sync {
 }
 
 /// Stdio transport - communicates via subprocess stdin/stdout
+///
+/// TigerStyle: Simplified architecture matching SSE pattern for race-free operation.
+/// Response routing is handled by inserting into pending map BEFORE sending request.
 struct StdioTransport {
-    /// Sender for requests
-    request_tx: mpsc::Sender<(McpRequest, oneshot::Sender<ToolResult<McpResponse>>)>,
-    /// Notification sender
-    notify_tx: mpsc::Sender<McpNotification>,
+    /// Pending response map - shared between request and response handling
+    pending: Arc<RwLock<HashMap<u64, oneshot::Sender<ToolResult<McpResponse>>>>>,
+    /// Writer channel for sending requests
+    writer_tx: mpsc::Sender<StdioWriteMessage>,
     /// Handle to the child process
     child_handle: RwLock<Option<Child>>,
 }
 
+/// Messages sent to the writer task
+enum StdioWriteMessage {
+    Request(McpRequest),
+    Notification(McpNotification),
+}
+
 impl StdioTransport {
     /// Create and start a new stdio transport
+    ///
+    /// TigerStyle: Simplified architecture - pending map is shared, not routed through channels.
+    /// This prevents the race condition where response arrives before pending entry exists.
     async fn new(
         command: &str,
         args: &[String],
@@ -438,64 +450,31 @@ impl StdioTransport {
                 reason: "failed to get stdout for MCP server".to_string(),
             })?;
 
-        // Create channels for communication
-        let (request_tx, request_rx) =
-            mpsc::channel::<(McpRequest, oneshot::Sender<ToolResult<McpResponse>>)>(32);
-        let (notify_tx, notify_rx) = mpsc::channel::<McpNotification>(32);
-        let (response_tx, response_rx) = mpsc::channel::<McpResponse>(32);
+        // Create shared pending map
+        let pending: Arc<RwLock<HashMap<u64, oneshot::Sender<ToolResult<McpResponse>>>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+
+        // Create writer channel
+        let (writer_tx, writer_rx) = mpsc::channel::<StdioWriteMessage>(32);
 
         // Spawn writer task
         let runtime = kelpie_core::current_runtime();
-        let _writer_handle =
-            kelpie_core::Runtime::spawn(&runtime, Self::writer_task(stdin, request_rx, notify_rx));
+        std::mem::drop(kelpie_core::Runtime::spawn(
+            &runtime,
+            Self::writer_task(stdin, writer_rx),
+        ));
 
-        // Spawn reader task
-        let runtime = kelpie_core::current_runtime();
-        let _reader_handle =
-            kelpie_core::Runtime::spawn(&runtime, Self::reader_task(stdout, response_tx));
-
-        // Spawn response router task
-        let pending: Arc<RwLock<HashMap<u64, oneshot::Sender<ToolResult<McpResponse>>>>> =
-            Arc::new(RwLock::new(HashMap::new()));
+        // Spawn reader task with direct access to pending map
         let pending_clone = pending.clone();
-
-        // Spawn response router task in background (fire-and-forget)
         let runtime = kelpie_core::current_runtime();
-        std::mem::drop(kelpie_core::Runtime::spawn(&runtime, async move {
-            let mut response_rx = response_rx;
-            while let Some(response) = response_rx.recv().await {
-                let id = response.id;
-                if let Some(sender) = pending_clone.write().await.remove(&id) {
-                    let _ = sender.send(Ok(response));
-                }
-            }
-        }));
-
-        // Store pending map in request channel handler
-        // We need to modify the request_tx to register pending requests
-        let (real_request_tx, mut real_request_rx) =
-            mpsc::channel::<(McpRequest, oneshot::Sender<ToolResult<McpResponse>>)>(32);
-        let pending_clone = pending.clone();
-
-        // Spawn request handler task in background (fire-and-forget)
-        let runtime = kelpie_core::current_runtime();
-        std::mem::drop(kelpie_core::Runtime::spawn(&runtime, async move {
-            while let Some((request, response_sender)) = real_request_rx.recv().await {
-                let id = request.id;
-                pending_clone.write().await.insert(id, response_sender);
-                if request_tx
-                    .send((request, oneshot::channel().0))
-                    .await
-                    .is_err()
-                {
-                    pending_clone.write().await.remove(&id);
-                }
-            }
-        }));
+        std::mem::drop(kelpie_core::Runtime::spawn(
+            &runtime,
+            Self::reader_task(stdout, pending_clone),
+        ));
 
         let transport = Self {
-            request_tx: real_request_tx,
-            notify_tx,
+            pending,
+            writer_tx,
             child_handle: RwLock::new(Some(child)),
         };
 
@@ -503,64 +482,50 @@ impl StdioTransport {
     }
 
     /// Writer task - sends messages to stdin
-    async fn writer_task(
-        mut stdin: ChildStdin,
-        mut request_rx: mpsc::Receiver<(McpRequest, oneshot::Sender<ToolResult<McpResponse>>)>,
-        mut notify_rx: mpsc::Receiver<McpNotification>,
-    ) {
-        loop {
-            tokio::select! {
-                Some((request, _)) = request_rx.recv() => {
-                    let json = match serde_json::to_string(&request) {
-                        Ok(j) => j,
-                        Err(e) => {
-                            error!(error = %e, "Failed to serialize request");
-                            continue;
-                        }
-                    };
-                    debug!(id = request.id, method = %request.method, "Sending request");
-                    if let Err(e) = stdin.write_all(json.as_bytes()).await {
-                        error!(error = %e, "Failed to write to stdin");
-                        break;
+    async fn writer_task(mut stdin: ChildStdin, mut writer_rx: mpsc::Receiver<StdioWriteMessage>) {
+        while let Some(msg) = writer_rx.recv().await {
+            let (json, debug_info) = match &msg {
+                StdioWriteMessage::Request(request) => match serde_json::to_string(request) {
+                    Ok(j) => (j, format!("request {} {}", request.id, request.method)),
+                    Err(e) => {
+                        error!(error = %e, "Failed to serialize request");
+                        continue;
                     }
-                    if let Err(e) = stdin.write_all(b"\n").await {
-                        error!(error = %e, "Failed to write newline to stdin");
-                        break;
-                    }
-                    if let Err(e) = stdin.flush().await {
-                        error!(error = %e, "Failed to flush stdin");
-                        break;
-                    }
-                }
-                Some(notification) = notify_rx.recv() => {
-                    let json = match serde_json::to_string(&notification) {
-                        Ok(j) => j,
+                },
+                StdioWriteMessage::Notification(notification) => {
+                    match serde_json::to_string(notification) {
+                        Ok(j) => (j, format!("notification {}", notification.method)),
                         Err(e) => {
                             error!(error = %e, "Failed to serialize notification");
                             continue;
                         }
-                    };
-                    debug!(method = %notification.method, "Sending notification");
-                    if let Err(e) = stdin.write_all(json.as_bytes()).await {
-                        error!(error = %e, "Failed to write notification to stdin");
-                        break;
-                    }
-                    if let Err(e) = stdin.write_all(b"\n").await {
-                        error!(error = %e, "Failed to write newline to stdin");
-                        break;
-                    }
-                    if let Err(e) = stdin.flush().await {
-                        error!(error = %e, "Failed to flush stdin");
-                        break;
                     }
                 }
-                else => break,
+            };
+
+            debug!("Sending {}", debug_info);
+            if let Err(e) = stdin.write_all(json.as_bytes()).await {
+                error!(error = %e, "Failed to write to stdin");
+                break;
+            }
+            if let Err(e) = stdin.write_all(b"\n").await {
+                error!(error = %e, "Failed to write newline to stdin");
+                break;
+            }
+            if let Err(e) = stdin.flush().await {
+                error!(error = %e, "Failed to flush stdin");
+                break;
             }
         }
     }
 
-    /// Reader task - reads messages from stdout
-    async fn reader_task(stdout: ChildStdout, response_tx: mpsc::Sender<McpResponse>) {
+    /// Reader task - reads messages from stdout and routes responses
+    ///
+    /// TigerStyle: Direct access to pending map for race-free response routing.
+    async fn reader_task(
+        stdout: ChildStdout,
+        pending: Arc<RwLock<HashMap<u64, oneshot::Sender<ToolResult<McpResponse>>>>>,
+    ) {
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
 
@@ -569,6 +534,13 @@ impl StdioTransport {
             match reader.read_line(&mut line).await {
                 Ok(0) => {
                     debug!("EOF on stdout");
+                    // Notify all pending requests that connection is closed
+                    let mut pending_guard = pending.write().await;
+                    for (id, sender) in pending_guard.drain() {
+                        let _ = sender.send(Err(ToolError::McpConnectionError {
+                            reason: format!("connection closed while waiting for response {}", id),
+                        }));
+                    }
                     break;
                 }
                 Ok(_) => {
@@ -577,11 +549,16 @@ impl StdioTransport {
                         continue;
                     }
 
+                    // Try to parse as response first
                     match serde_json::from_str::<McpResponse>(trimmed) {
                         Ok(response) => {
-                            debug!(id = response.id, "Received response");
-                            if response_tx.send(response).await.is_err() {
-                                break;
+                            let id = response.id;
+                            debug!(id = id, "Received response");
+                            // Route response to waiting caller
+                            if let Some(sender) = pending.write().await.remove(&id) {
+                                let _ = sender.send(Ok(response));
+                            } else {
+                                warn!(id = id, "Received response for unknown request");
                             }
                         }
                         Err(e) => {
@@ -600,6 +577,13 @@ impl StdioTransport {
                 }
                 Err(e) => {
                     error!(error = %e, "Failed to read from stdout");
+                    // Notify all pending requests of the error
+                    let mut pending_guard = pending.write().await;
+                    for (id, sender) in pending_guard.drain() {
+                        let _ = sender.send(Err(ToolError::McpConnectionError {
+                            reason: format!("read error while waiting for response {}: {}", id, e),
+                        }));
+                    }
                     break;
                 }
             }
@@ -611,30 +595,50 @@ impl StdioTransport {
 impl TransportInner for StdioTransport {
     async fn request(&self, request: McpRequest, timeout: Duration) -> ToolResult<McpResponse> {
         let (response_tx, response_rx) = oneshot::channel();
+        let id = request.id;
 
-        self.request_tx
-            .send((request.clone(), response_tx))
+        // TigerStyle: Insert into pending map BEFORE sending request
+        // This prevents race condition where response arrives before entry exists
+        self.pending.write().await.insert(id, response_tx);
+
+        // Send request via writer channel
+        if self
+            .writer_tx
+            .send(StdioWriteMessage::Request(request.clone()))
             .await
-            .map_err(|_| ToolError::McpConnectionError {
+            .is_err()
+        {
+            // Remove pending entry on send failure
+            self.pending.write().await.remove(&id);
+            return Err(ToolError::McpConnectionError {
                 reason: "transport channel closed".to_string(),
-            })?;
+            });
+        }
 
+        // Wait for response with timeout
         let runtime = kelpie_core::current_runtime();
         match kelpie_core::Runtime::timeout(&runtime, timeout, response_rx).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(ToolError::McpConnectionError {
-                reason: "response channel closed".to_string(),
-            }),
-            Err(_) => Err(ToolError::ExecutionTimeout {
-                tool: request.method,
-                timeout_ms: timeout.as_millis() as u64,
-            }),
+            Ok(Err(_)) => {
+                // Channel was closed (entry removed by reader task on error)
+                Err(ToolError::McpConnectionError {
+                    reason: "response channel closed".to_string(),
+                })
+            }
+            Err(_) => {
+                // Timeout - remove pending entry
+                self.pending.write().await.remove(&id);
+                Err(ToolError::ExecutionTimeout {
+                    tool: request.method,
+                    timeout_ms: timeout.as_millis() as u64,
+                })
+            }
         }
     }
 
     async fn notify(&self, notification: McpNotification) -> ToolResult<()> {
-        self.notify_tx
-            .send(notification)
+        self.writer_tx
+            .send(StdioWriteMessage::Notification(notification))
             .await
             .map_err(|_| ToolError::McpConnectionError {
                 reason: "notification channel closed".to_string(),
@@ -642,6 +646,9 @@ impl TransportInner for StdioTransport {
     }
 
     async fn close(&self) -> ToolResult<()> {
+        // Clear pending requests - they will receive errors when reader task exits
+        self.pending.write().await.clear();
+
         if let Some(mut child) = self.child_handle.write().await.take() {
             let _ = child.kill().await;
         }

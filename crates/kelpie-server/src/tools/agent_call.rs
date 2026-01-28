@@ -179,9 +179,27 @@ async fn execute_call_agent(input: &Value, ctx: &ToolExecutionContext) -> ToolEx
         }
     };
 
-    // Build the request payload
+    // Build the request payload with propagated call context (Issue #75 fix)
+    // TigerStyle: Create nested context with incremented depth and extended chain
+    use crate::actor::agent_actor::CallContextInfo;
+
+    let nested_context = CallContextInfo {
+        call_depth: ctx.call_depth + 1,
+        call_chain: {
+            let mut chain = ctx.call_chain.clone();
+            // Add current agent to chain if not already present
+            if let Some(ref current_id) = ctx.agent_id {
+                if !chain.contains(current_id) {
+                    chain.push(current_id.clone());
+                }
+            }
+            chain
+        },
+    };
+
     let request = HandleMessageFullRequest {
         content: message.clone(),
+        call_context: Some(nested_context),
     };
     let payload = match serde_json::to_vec(&request) {
         Ok(p) => Bytes::from(p),

@@ -123,6 +123,7 @@ async fn test_actor_writes_granular_keys_on_deactivate() {
             // 2. Send message (creates message history)
             let msg_request = kelpie_server::actor::HandleMessageFullRequest {
                 content: "Hello!".to_string(),
+                call_context: None, // Top-level call
             };
             let msg_payload = serde_json::to_vec(&msg_request).unwrap();
             actor

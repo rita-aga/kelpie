@@ -14,6 +14,7 @@ otel = ["kelpie-core/otel", "prometheus"]
 dst = ["kelpie-tools/dst", "dep:kelpie-dst"]
 fdb = ["dep:foundationdb", "kelpie-storage/fdb"]
 madsim = ["kelpie-core/madsim", "kelpie-dst?/madsim"]
+telegram = ["dep:teloxide"]
 
 [dependencies]
 # Core kelpie crates
@@ -76,6 +77,9 @@ kelpie-dst = { workspace = true, optional = true }
 
 # FoundationDB storage (optional, with fdb feature)
 foundationdb = { workspace = true, optional = true }
+
+# Telegram bot (optional, with telegram feature)
+teloxide = { workspace = true, optional = true }
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

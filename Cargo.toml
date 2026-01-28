@@ -103,6 +103,9 @@ foundationdb = { version = "0.10", features = ["fdb-7_3"] }
 # Formal verification
 stateright = "0.30"
 
+# Telegram bot
+teloxide = { version = "0.12", features = ["macros"] }
+
 # Testing
 proptest = "1.4"
 criterion = "0.5"

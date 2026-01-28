@@ -150,8 +150,11 @@ impl<R: kelpie_core::Runtime> AgentService<R> {
 
         let actor_id = ActorId::new("agents", agent_id)?;
 
-        // Build typed request
-        let request = HandleMessageFullRequest { content };
+        // Build typed request (no call context for top-level API calls)
+        let request = HandleMessageFullRequest {
+            content,
+            call_context: None,
+        };
 
         // Serialize request
         let payload = serde_json::to_vec(&request).map_err(|e| Error::Internal {

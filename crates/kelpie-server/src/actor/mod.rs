@@ -9,7 +9,9 @@ pub mod llm_trait;
 pub mod registry_actor;
 pub mod state;
 
-pub use agent_actor::{AgentActor, HandleMessageFullRequest, HandleMessageFullResponse};
+pub use agent_actor::{
+    AgentActor, CallContextInfo, HandleMessageFullRequest, HandleMessageFullResponse,
+};
 pub use dispatcher_adapter::{DispatcherAdapter, AGENT_ACTOR_NAMESPACE};
 pub use llm_trait::{LlmClient, LlmMessage, LlmResponse, LlmToolCall, RealLlmAdapter, StreamChunk};
 pub use registry_actor::{
