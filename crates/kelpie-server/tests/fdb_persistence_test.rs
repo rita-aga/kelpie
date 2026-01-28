@@ -450,6 +450,92 @@ async fn test_cascading_delete() {
 }
 
 // =============================================================================
+// Archival Memory Persistence Tests
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "requires running FDB cluster"]
+async fn test_archival_survives_restart() {
+    use kelpie_server::models::ArchivalEntry;
+
+    let storage = create_fdb_storage()
+        .await
+        .expect("Failed to connect to FDB");
+    let agent_id = unique_agent_id("archival-persist");
+
+    // Create agent first
+    let agent = AgentMetadata::new(
+        agent_id.clone(),
+        "Archival Test".to_string(),
+        AgentType::MemgptAgent,
+    );
+    storage
+        .save_agent(&agent)
+        .await
+        .expect("Failed to save agent");
+
+    // Save archival entries
+    let entry1 = ArchivalEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        content: "Important memory about user preferences".to_string(),
+        metadata: None,
+        created_at: Utc::now().to_rfc3339(),
+    };
+    let entry2 = ArchivalEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        content: "Another important memory".to_string(),
+        metadata: None,
+        created_at: Utc::now().to_rfc3339(),
+    };
+
+    storage
+        .save_archival_entry(&agent_id, &entry1)
+        .await
+        .expect("Failed to save entry1");
+    storage
+        .save_archival_entry(&agent_id, &entry2)
+        .await
+        .expect("Failed to save entry2");
+
+    // Drop storage (simulates restart)
+    drop(storage);
+
+    // Reconnect
+    let storage = create_fdb_storage()
+        .await
+        .expect("Failed to reconnect to FDB");
+
+    // Verify archival entries exist
+    let entries = storage
+        .load_archival_entries(&agent_id, 100)
+        .await
+        .expect("Failed to load archival entries");
+
+    assert_eq!(
+        entries.len(),
+        2,
+        "Should have 2 archival entries after restart"
+    );
+
+    // Verify search works
+    let search_results = storage
+        .search_archival_entries(&agent_id, Some("user preferences"), 100)
+        .await
+        .expect("Search failed");
+    assert_eq!(
+        search_results.len(),
+        1,
+        "Should find 1 entry matching 'user preferences'"
+    );
+
+    // Cleanup
+    storage
+        .delete_agent(&agent_id)
+        .await
+        .expect("Cleanup failed");
+}
+
+// =============================================================================
 // Concurrent Append Tests
 // =============================================================================
 
