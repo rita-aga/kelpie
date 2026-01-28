@@ -45,8 +45,94 @@ struct Cli {
     verbose: u8,
 
     /// FoundationDB cluster file path (enables FDB storage)
+    /// Can also be set via KELPIE_FDB_CLUSTER or FDB_CLUSTER_FILE env vars
     #[arg(long)]
     fdb_cluster_file: Option<String>,
+
+    /// Force in-memory mode (no persistence)
+    /// Disables FDB even if cluster file is configured or auto-detected
+    #[arg(long)]
+    memory_only: bool,
+}
+
+/// Storage backend detection result
+enum StorageBackend {
+    /// In-memory storage (no persistence)
+    Memory,
+    /// FoundationDB storage with cluster file path
+    Fdb(String),
+}
+
+/// Standard paths to check for FDB cluster file
+const FDB_CLUSTER_PATHS: &[&str] = &[
+    "/etc/foundationdb/fdb.cluster",
+    "/usr/local/etc/foundationdb/fdb.cluster",
+    "/opt/foundationdb/fdb.cluster",
+    "/var/foundationdb/fdb.cluster",
+];
+
+/// Detect the storage backend to use based on CLI flags, env vars, and auto-detection
+///
+/// Priority order:
+/// 1. --memory-only flag (explicit in-memory mode)
+/// 2. --fdb-cluster-file CLI argument
+/// 3. KELPIE_FDB_CLUSTER env var
+/// 4. FDB_CLUSTER_FILE env var (standard FDB env var)
+/// 5. Auto-detect from standard paths
+/// 6. Fall back to in-memory mode
+fn detect_storage_backend(cli: &Cli) -> StorageBackend {
+    // 1. Check explicit memory-only flag
+    if cli.memory_only {
+        tracing::info!("Storage: --memory-only flag set, using in-memory storage");
+        return StorageBackend::Memory;
+    }
+
+    // 2. Check CLI argument
+    if let Some(ref cluster_file) = cli.fdb_cluster_file {
+        tracing::info!(
+            "Storage: Using FDB cluster file from --fdb-cluster-file: {}",
+            cluster_file
+        );
+        return StorageBackend::Fdb(cluster_file.clone());
+    }
+
+    // 3. Check KELPIE_FDB_CLUSTER env var
+    if let Ok(cluster_file) = std::env::var("KELPIE_FDB_CLUSTER") {
+        if !cluster_file.is_empty() {
+            tracing::info!(
+                "Storage: Using FDB cluster file from KELPIE_FDB_CLUSTER: {}",
+                cluster_file
+            );
+            return StorageBackend::Fdb(cluster_file);
+        }
+    }
+
+    // 4. Check FDB_CLUSTER_FILE env var (standard FDB env var)
+    if let Ok(cluster_file) = std::env::var("FDB_CLUSTER_FILE") {
+        if !cluster_file.is_empty() {
+            tracing::info!(
+                "Storage: Using FDB cluster file from FDB_CLUSTER_FILE: {}",
+                cluster_file
+            );
+            return StorageBackend::Fdb(cluster_file);
+        }
+    }
+
+    // 5. Auto-detect from standard paths
+    for path in FDB_CLUSTER_PATHS {
+        if std::path::Path::new(path).exists() {
+            tracing::info!("Storage: Auto-detected FDB cluster file at: {}", path);
+            return StorageBackend::Fdb((*path).to_string());
+        }
+    }
+
+    // 6. Fall back to in-memory mode
+    tracing::info!("Storage: No FDB cluster file found, using in-memory storage");
+    tracing::info!("  To enable persistence, provide a cluster file via:");
+    tracing::info!("    --fdb-cluster-file <path>");
+    tracing::info!("    KELPIE_FDB_CLUSTER=<path>");
+    tracing::info!("    FDB_CLUSTER_FILE=<path>");
+    StorageBackend::Memory
 }
 
 #[tokio::main]
@@ -87,22 +173,27 @@ async fn main() -> anyhow::Result<()> {
     // Create runtime for dispatcher
     let runtime = TokioRuntime;
 
-    // Initialize storage backend (if configured)
-    let storage = if let Some(ref cluster_file) = cli.fdb_cluster_file {
-        use kelpie_server::storage::FdbAgentRegistry;
-        use kelpie_storage::FdbKV;
+    // Detect and initialize storage backend
+    let storage_backend = detect_storage_backend(&cli);
+    let storage = match storage_backend {
+        StorageBackend::Fdb(cluster_file) => {
+            use kelpie_server::storage::FdbAgentRegistry;
+            use kelpie_storage::FdbKV;
 
-        tracing::info!("Connecting to FoundationDB: {}", cluster_file);
-        let fdb_kv = FdbKV::connect(Some(cluster_file))
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to connect to FDB: {}", e))?;
+            tracing::info!("Connecting to FoundationDB: {}", cluster_file);
+            let fdb_kv = FdbKV::connect(Some(&cluster_file))
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to connect to FDB: {}", e))?;
 
-        let registry = FdbAgentRegistry::new(Arc::new(fdb_kv));
-        tracing::info!("FDB storage initialized");
-        Some(Arc::new(registry) as Arc<dyn kelpie_server::storage::AgentStorage>)
-    } else {
-        tracing::info!("Running in-memory mode (no persistence)");
-        None
+            let registry = FdbAgentRegistry::new(Arc::new(fdb_kv));
+            tracing::info!("FDB storage initialized - data will be persisted");
+            Some(Arc::new(registry) as Arc<dyn kelpie_server::storage::AgentStorage>)
+        }
+        StorageBackend::Memory => {
+            tracing::warn!("Running in-memory mode - data will NOT be persisted!");
+            tracing::warn!("Use --fdb-cluster-file or set KELPIE_FDB_CLUSTER for persistence");
+            None
+        }
     };
 
     // Create application state
