@@ -321,7 +321,7 @@ Before marking this spec as DONE, ALL of the following must be true:
 [x] No clippy warnings
 [x] No fmt issues
 [ ] Integration test passes (requires full dispatcher integration)
-[ ] Code committed and pushed
+[x] Code committed and pushed
 ```
 
 ---
