@@ -2499,6 +2499,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "foundationdb",
  "hostname",
  "kelpie-core",
  "kelpie-dst",

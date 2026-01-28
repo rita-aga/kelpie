@@ -6,8 +6,8 @@
 //!
 //! TigerStyle: Explicit state management, 2+ assertions per function.
 
-use crate::cluster_types::{ClusterNodeInfo, MigrationCandidate, MigrationQueue, MigrationResult};
 use crate::cluster_storage::ClusterStorageBackend;
+use crate::cluster_types::{ClusterNodeInfo, MigrationCandidate, MigrationQueue, MigrationResult};
 use crate::error::{RegistryError, RegistryResult};
 use crate::membership::{MembershipView, NodeState, PrimaryInfo};
 use crate::node::NodeId;
@@ -180,7 +180,10 @@ impl<S: ClusterStorageBackend> TestableClusterMembership<S> {
             *self.local_view.write().await = view;
 
             // Postconditions (TigerStyle)
-            assert!(*local_state == NodeState::Active, "first node must be Active");
+            assert!(
+                *local_state == NodeState::Active,
+                "first node must be Active"
+            );
             assert!(
                 *self.believes_primary.read().await,
                 "first node must be primary"
@@ -252,7 +255,10 @@ impl<S: ClusterStorageBackend> TestableClusterMembership<S> {
         *self.local_view.write().await = view.clone();
 
         // Postconditions (TigerStyle)
-        assert!(*local_state == NodeState::Active, "must be Active after complete_join");
+        assert!(
+            *local_state == NodeState::Active,
+            "must be Active after complete_join"
+        );
         assert!(
             view.contains(&self.local_node_id),
             "must be in membership view after complete_join"
@@ -364,7 +370,10 @@ impl<S: ClusterStorageBackend> TestableClusterMembership<S> {
         *self.local_view.write().await = MembershipView::empty();
 
         // Postconditions (TigerStyle)
-        assert!(*local_state == NodeState::Left, "must be Left after complete_leave");
+        assert!(
+            *local_state == NodeState::Left,
+            "must be Left after complete_leave"
+        );
         assert!(
             !*self.believes_primary.read().await,
             "must not be primary after complete_leave"
@@ -612,10 +621,7 @@ impl<S: ClusterStorageBackend> TestableClusterMembership<S> {
             self.storage.write_node(&node).await?;
 
             // Postcondition (TigerStyle)
-            assert!(
-                now_ms >= old_heartbeat,
-                "heartbeat time must not decrease"
-            );
+            assert!(now_ms >= old_heartbeat, "heartbeat time must not decrease");
         }
 
         Ok(())
@@ -783,7 +789,11 @@ impl<S: ClusterStorageBackend> TestableClusterMembership<S> {
     /// * Merged view
     #[instrument(skip(self, other_view))]
     pub async fn sync_views(&self, other_view: &MembershipView) -> RegistryResult<MembershipView> {
-        let my_view = self.storage.read_membership_view().await?.unwrap_or_default();
+        let my_view = self
+            .storage
+            .read_membership_view()
+            .await?
+            .unwrap_or_default();
         let now_ms = self.time_provider.now_ms();
 
         if my_view.view_number == other_view.view_number {
@@ -859,7 +869,11 @@ impl<S: ClusterStorageBackend> TestableClusterMembership<S> {
         );
 
         // Read current migration queue
-        let mut queue = self.storage.read_migration_queue().await?.unwrap_or_default();
+        let mut queue = self
+            .storage
+            .read_migration_queue()
+            .await?
+            .unwrap_or_default();
 
         // Add all actors to the queue
         let count = actor_ids.len();
@@ -901,7 +915,11 @@ impl<S: ClusterStorageBackend> TestableClusterMembership<S> {
         let now_ms = self.time_provider.now_ms();
 
         // Read migration queue
-        let mut queue = self.storage.read_migration_queue().await?.unwrap_or_default();
+        let mut queue = self
+            .storage
+            .read_migration_queue()
+            .await?
+            .unwrap_or_default();
 
         if queue.is_empty() {
             return Ok(Vec::new());
@@ -974,7 +992,10 @@ impl<S: ClusterStorageBackend> TestableClusterMembership<S> {
     }
 
     /// Get a cluster node by ID (for testing)
-    pub async fn get_cluster_node(&self, node_id: &NodeId) -> RegistryResult<Option<ClusterNodeInfo>> {
+    pub async fn get_cluster_node(
+        &self,
+        node_id: &NodeId,
+    ) -> RegistryResult<Option<ClusterNodeInfo>> {
         self.storage.get_node(node_id).await
     }
 
@@ -1061,13 +1082,19 @@ mod tests {
         let node1_id = test_node_id(1);
         let membership1 =
             TestableClusterMembership::new(storage.clone(), node1_id.clone(), clock.clone());
-        membership1.join("127.0.0.1:8080".to_string()).await.unwrap();
+        membership1
+            .join("127.0.0.1:8080".to_string())
+            .await
+            .unwrap();
 
         // Second node
         let node2_id = test_node_id(2);
         let membership2 =
             TestableClusterMembership::new(storage.clone(), node2_id.clone(), clock.clone());
-        membership2.join("127.0.0.1:8081".to_string()).await.unwrap();
+        membership2
+            .join("127.0.0.1:8081".to_string())
+            .await
+            .unwrap();
 
         // Should be Joining (not first)
         assert_eq!(membership2.local_state().await, NodeState::Joining);
@@ -1090,16 +1117,25 @@ mod tests {
 
         let membership1 =
             TestableClusterMembership::new(storage.clone(), node1_id.clone(), clock.clone());
-        membership1.join("127.0.0.1:8080".to_string()).await.unwrap();
+        membership1
+            .join("127.0.0.1:8080".to_string())
+            .await
+            .unwrap();
 
         let membership2 =
             TestableClusterMembership::new(storage.clone(), node2_id.clone(), clock.clone());
-        membership2.join("127.0.0.1:8081".to_string()).await.unwrap();
+        membership2
+            .join("127.0.0.1:8081".to_string())
+            .await
+            .unwrap();
         membership2.complete_join().await.unwrap();
 
         let membership3 =
             TestableClusterMembership::new(storage.clone(), node3_id.clone(), clock.clone());
-        membership3.join("127.0.0.1:8082".to_string()).await.unwrap();
+        membership3
+            .join("127.0.0.1:8082".to_string())
+            .await
+            .unwrap();
         membership3.complete_join().await.unwrap();
 
         // Node 1 is primary
@@ -1109,7 +1145,10 @@ mod tests {
         membership2.mark_reachable(&node1_id).await;
         membership2.mark_reachable(&node3_id).await;
         let result = membership2.try_become_primary().await.unwrap();
-        assert!(result.is_none(), "node 2 should not become primary when node 1 is valid");
+        assert!(
+            result.is_none(),
+            "node 2 should not become primary when node 1 is valid"
+        );
     }
 
     #[tokio::test]
@@ -1140,11 +1179,17 @@ mod tests {
 
         let membership1 =
             TestableClusterMembership::new(storage.clone(), node1_id.clone(), clock.clone());
-        membership1.join("127.0.0.1:8080".to_string()).await.unwrap();
+        membership1
+            .join("127.0.0.1:8080".to_string())
+            .await
+            .unwrap();
 
         let membership2 =
             TestableClusterMembership::new(storage.clone(), node2_id.clone(), clock.clone());
-        membership2.join("127.0.0.1:8081".to_string()).await.unwrap();
+        membership2
+            .join("127.0.0.1:8081".to_string())
+            .await
+            .unwrap();
         membership2.complete_join().await.unwrap();
 
         // Mark node 2 as failed
