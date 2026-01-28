@@ -469,6 +469,7 @@ pub async fn handle_message_request<R: Runtime + 'static>(
                             project_id: agent.project_id.clone(),
                             call_depth: 0,      // Top-level call
                             call_chain: vec![], // Empty chain at top level
+                            dispatcher: None,   // TODO: Wire dispatcher for agent-to-agent calls
                         };
                         let exec_result = state
                             .tool_registry()
@@ -1058,6 +1059,7 @@ async fn generate_sse_events<R: Runtime + 'static>(
                         project_id: agent.project_id.clone(),
                         call_depth: 0,      // Top-level call
                         call_chain: vec![], // Empty chain at top level
+                        dispatcher: None,   // TODO: Wire dispatcher for agent-to-agent calls
                     };
                     let exec_result = state
                         .tool_registry()

@@ -14,7 +14,12 @@
 //! - docs/adr/028-multi-agent-communication.md
 //! - docs/tla/KelpieMultiAgentInvocation.tla
 
-use crate::tools::{BuiltinToolHandler, ToolExecutionContext, UnifiedToolRegistry};
+use crate::actor::agent_actor::{HandleMessageFullRequest, HandleMessageFullResponse};
+use crate::tools::{
+    ContextAwareToolHandler, ToolExecutionContext, ToolExecutionResult, UnifiedToolRegistry,
+};
+use bytes::Bytes;
+use kelpie_core::io::TimeProvider;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -54,71 +59,14 @@ pub const AGENT_CALL_RESPONSE_SIZE_BYTES_MAX: usize = 1024 * 1024;
 /// - DepthBounded: Call depth limited to AGENT_CALL_DEPTH_MAX
 /// - SingleActivationDuringCall: Dispatcher ensures single activation
 pub async fn register_call_agent_tool(registry: &UnifiedToolRegistry) {
-    let handler: BuiltinToolHandler = Arc::new(|input: &Value| {
+    let handler: ContextAwareToolHandler = Arc::new(|input: &Value, ctx: &ToolExecutionContext| {
         let input = input.clone();
-        Box::pin(async move {
-            // Extract required parameters
-            let agent_id = match input.get("agent_id").and_then(|v| v.as_str()) {
-                Some(id) => id.to_string(),
-                None => return "Error: missing required parameter 'agent_id'".to_string(),
-            };
-
-            let message = match input.get("message").and_then(|v| v.as_str()) {
-                Some(m) => m.to_string(),
-                None => return "Error: missing required parameter 'message'".to_string(),
-            };
-
-            // Extract optional timeout (with bounds checking)
-            let timeout_ms = input
-                .get("timeout_ms")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(AGENT_CALL_TIMEOUT_MS_DEFAULT)
-                .min(AGENT_CALL_TIMEOUT_MS_MAX);
-
-            // Validate agent_id is not empty
-            if agent_id.trim().is_empty() {
-                return "Error: agent_id cannot be empty".to_string();
-            }
-
-            // Validate message is not empty
-            if message.trim().is_empty() {
-                return "Error: message cannot be empty".to_string();
-            }
-
-            // Validate message size
-            if message.len() > AGENT_CALL_MESSAGE_SIZE_BYTES_MAX {
-                return format!(
-                    "Error: message too large ({} bytes, max {} bytes)",
-                    message.len(),
-                    AGENT_CALL_MESSAGE_SIZE_BYTES_MAX
-                );
-            }
-
-            // NOTE: Actual invocation requires dispatcher access which is not available
-            // in the basic BuiltinToolHandler signature. This is a placeholder that
-            // will be replaced when the handler signature is extended to support context.
-            //
-            // The implementation follows the pattern:
-            // 1. Get call context (call_chain, call_depth) from ToolExecutionContext
-            // 2. Check for cycles: if agent_id in call_chain, return error
-            // 3. Check depth: if call_depth >= AGENT_CALL_DEPTH_MAX, return error
-            // 4. Build new call_chain with current agent appended
-            // 5. Create invocation request with HandleMessageFullRequest
-            // 6. Call dispatcher.invoke_with_timeout()
-            // 7. Return response or error
-
-            // For now, return a placeholder that indicates the tool is registered
-            // but requires dispatcher integration to fully function
-            format!(
-                "call_agent: would call agent '{}' with message '{}' (timeout: {}ms). \
-                Full implementation requires dispatcher integration.",
-                agent_id, message, timeout_ms
-            )
-        })
+        let ctx = ctx.clone();
+        Box::pin(async move { execute_call_agent(&input, &ctx).await })
     });
 
     registry
-        .register_builtin(
+        .register_context_aware_builtin(
             "call_agent",
             "Call another agent and wait for their response. Use this to delegate tasks or coordinate with other agents.",
             json!({
@@ -144,6 +92,181 @@ pub async fn register_call_agent_tool(registry: &UnifiedToolRegistry) {
         .await;
 
     tracing::info!("Registered agent communication tool: call_agent");
+}
+
+/// Execute the call_agent tool
+///
+/// TigerStyle: 2+ assertions, explicit error handling.
+async fn execute_call_agent(input: &Value, ctx: &ToolExecutionContext) -> ToolExecutionResult {
+    let start_ms = kelpie_core::io::WallClockTime::new().monotonic_ms();
+
+    // TigerStyle: Preconditions
+    assert!(
+        ctx.call_depth <= AGENT_CALL_DEPTH_MAX,
+        "call_depth invariant violated"
+    );
+
+    // Extract required parameters
+    let agent_id = match input.get("agent_id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => {
+            return ToolExecutionResult::failure(
+                "Error: missing required parameter 'agent_id'",
+                elapsed_ms(start_ms),
+            )
+        }
+    };
+
+    let message = match input.get("message").and_then(|v| v.as_str()) {
+        Some(m) => m.to_string(),
+        None => {
+            return ToolExecutionResult::failure(
+                "Error: missing required parameter 'message'",
+                elapsed_ms(start_ms),
+            )
+        }
+    };
+
+    // Extract optional timeout (with bounds checking)
+    let timeout_ms = input
+        .get("timeout_ms")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(AGENT_CALL_TIMEOUT_MS_DEFAULT)
+        .min(AGENT_CALL_TIMEOUT_MS_MAX);
+
+    // Validate agent_id is not empty
+    if agent_id.trim().is_empty() {
+        return ToolExecutionResult::failure(
+            "Error: agent_id cannot be empty",
+            elapsed_ms(start_ms),
+        );
+    }
+
+    // Validate message is not empty
+    if message.trim().is_empty() {
+        return ToolExecutionResult::failure(
+            "Error: message cannot be empty",
+            elapsed_ms(start_ms),
+        );
+    }
+
+    // Validate message size
+    if message.len() > AGENT_CALL_MESSAGE_SIZE_BYTES_MAX {
+        return ToolExecutionResult::failure(
+            format!(
+                "Error: message too large ({} bytes, max {} bytes)",
+                message.len(),
+                AGENT_CALL_MESSAGE_SIZE_BYTES_MAX
+            ),
+            elapsed_ms(start_ms),
+        );
+    }
+
+    // Validate call context (cycle detection + depth limit)
+    if let Err(reason) = validate_call_context(&agent_id, ctx) {
+        return ToolExecutionResult::failure(format!("Error: {}", reason), elapsed_ms(start_ms));
+    }
+
+    // Check for dispatcher
+    let dispatcher = match &ctx.dispatcher {
+        Some(d) => d.clone(),
+        None => {
+            // No dispatcher available - this is expected in tests without full setup
+            return ToolExecutionResult::failure(
+                "Error: agent-to-agent calls require dispatcher (not configured)",
+                elapsed_ms(start_ms),
+            );
+        }
+    };
+
+    // Build the request payload
+    let request = HandleMessageFullRequest {
+        content: message.clone(),
+    };
+    let payload = match serde_json::to_vec(&request) {
+        Ok(p) => Bytes::from(p),
+        Err(e) => {
+            return ToolExecutionResult::failure(
+                format!("Error: failed to serialize request: {}", e),
+                elapsed_ms(start_ms),
+            )
+        }
+    };
+
+    // Invoke the target agent
+    tracing::info!(
+        from_agent = ?ctx.agent_id,
+        to_agent = %agent_id,
+        call_depth = ctx.call_depth,
+        timeout_ms = timeout_ms,
+        "Invoking agent"
+    );
+
+    let result = dispatcher
+        .invoke_agent(&agent_id, "handle_message_full", payload, timeout_ms)
+        .await;
+
+    match result {
+        Ok(response_bytes) => {
+            // Parse the response
+            match serde_json::from_slice::<HandleMessageFullResponse>(&response_bytes) {
+                Ok(response) => {
+                    // Extract the last assistant message content
+                    let content = response
+                        .messages
+                        .iter()
+                        .rev()
+                        .find(|m| m.role == crate::models::MessageRole::Assistant)
+                        .map(|m| m.content.clone())
+                        .unwrap_or_else(|| "Agent returned no response".to_string());
+
+                    // TigerStyle: Postcondition - response should be reasonable size
+                    if content.len() > AGENT_CALL_RESPONSE_SIZE_BYTES_MAX {
+                        tracing::warn!(
+                            agent_id = %agent_id,
+                            response_size = content.len(),
+                            max_size = AGENT_CALL_RESPONSE_SIZE_BYTES_MAX,
+                            "Agent response truncated"
+                        );
+                        let truncated = &content[..AGENT_CALL_RESPONSE_SIZE_BYTES_MAX];
+                        return ToolExecutionResult::success(
+                            format!("{}... [truncated]", truncated),
+                            elapsed_ms(start_ms),
+                        );
+                    }
+
+                    ToolExecutionResult::success(content, elapsed_ms(start_ms))
+                }
+                Err(e) => ToolExecutionResult::failure(
+                    format!("Error: failed to parse agent response: {}", e),
+                    elapsed_ms(start_ms),
+                ),
+            }
+        }
+        Err(e) => {
+            let error_msg = e.to_string();
+            // Distinguish between timeout and other errors
+            if error_msg.contains("timeout") || error_msg.contains("Timeout") {
+                ToolExecutionResult::failure(
+                    format!("Error: agent call timed out after {}ms", timeout_ms),
+                    elapsed_ms(start_ms),
+                )
+            } else {
+                ToolExecutionResult::failure(
+                    format!("Error: agent call failed: {}", error_msg),
+                    elapsed_ms(start_ms),
+                )
+            }
+        }
+    }
+}
+
+/// Helper to compute elapsed time
+#[inline]
+fn elapsed_ms(start_ms: u64) -> u64 {
+    kelpie_core::io::WallClockTime::new()
+        .monotonic_ms()
+        .saturating_sub(start_ms)
 }
 
 /// Validate call context for cycle detection and depth limiting
@@ -218,6 +341,7 @@ pub fn create_nested_context(
         project_id: parent_context.project_id.clone(),
         call_depth: parent_context.call_depth + 1,
         call_chain: new_chain,
+        dispatcher: parent_context.dispatcher.clone(),
     };
 
     // Postcondition
@@ -245,6 +369,7 @@ mod tests {
             project_id: None,
             call_depth: 0,
             call_chain: vec!["agent-a".to_string()],
+            dispatcher: None,
         };
 
         // Agent B is not in chain, should succeed
@@ -258,6 +383,7 @@ mod tests {
             project_id: None,
             call_depth: 1,
             call_chain: vec!["agent-a".to_string(), "agent-b".to_string()],
+            dispatcher: None,
         };
 
         // Agent A is in chain, should fail
@@ -279,6 +405,7 @@ mod tests {
                 "d".to_string(),
                 "e".to_string(),
             ],
+            dispatcher: None,
         };
 
         // At max depth, should fail
@@ -294,6 +421,7 @@ mod tests {
             project_id: Some("project-1".to_string()),
             call_depth: 1,
             call_chain: vec!["agent-a".to_string()],
+            dispatcher: None,
         };
 
         let nested = create_nested_context(&parent, "agent-a");
@@ -374,21 +502,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_call_agent_timeout_clamped() {
+    async fn test_call_agent_no_dispatcher() {
         let registry = UnifiedToolRegistry::new();
         register_call_agent_tool(&registry).await;
 
-        // Request timeout larger than max - should be clamped
         let input = json!({
             "agent_id": "some-agent",
-            "message": "Hello",
-            "timeout_ms": 999_999_999
+            "message": "Hello"
         });
 
+        // Execute without dispatcher in context
         let result = registry.execute("call_agent", &input).await;
-        // Should use max timeout, not the requested one
-        assert!(result
-            .output
-            .contains(&format!("{}ms", AGENT_CALL_TIMEOUT_MS_MAX)));
+        assert!(result.output.contains("require dispatcher"));
     }
 }
