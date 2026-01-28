@@ -336,23 +336,57 @@ impl AgentStorage for FdbAgentRegistry {
             .await
             .map_err(Self::map_core_error)?;
 
-        // Delete per-agent data
+        // Delete per-agent data using a transaction for atomicity
         let agent_id = Self::agent_actor_id(id).map_err(Self::map_core_error)?;
 
+        let mut txn = self
+            .fdb
+            .begin_transaction(&agent_id)
+            .await
+            .map_err(Self::map_core_error)?;
+
         // Delete blocks
-        self.fdb
-            .delete(&agent_id, KEY_PREFIX_BLOCKS)
+        txn.delete(KEY_PREFIX_BLOCKS)
             .await
             .map_err(Self::map_core_error)?;
 
         // Delete message count
-        self.fdb
-            .delete(&agent_id, KEY_PREFIX_MESSAGE_COUNT)
+        txn.delete(KEY_PREFIX_MESSAGE_COUNT)
             .await
             .map_err(Self::map_core_error)?;
 
-        // TODO: Delete all sessions (need scan + delete loop)
-        // TODO: Delete all messages (need scan + delete loop)
+        // Commit initial deletes (blocks, count)
+        txn.commit().await.map_err(Self::map_core_error)?;
+
+        // Scan and delete all sessions
+        let session_kvs = self
+            .fdb
+            .scan_prefix(&agent_id, KEY_PREFIX_SESSION)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        for (session_key, _) in session_kvs {
+            self.fdb
+                .delete(&agent_id, &session_key)
+                .await
+                .map_err(Self::map_core_error)?;
+        }
+
+        // Scan and delete all messages
+        let message_kvs = self
+            .fdb
+            .scan_prefix(&agent_id, KEY_PREFIX_MESSAGE)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        for (message_key, _) in message_kvs {
+            self.fdb
+                .delete(&agent_id, &message_key)
+                .await
+                .map_err(Self::map_core_error)?;
+        }
+
+        tracing::info!(agent_id = %id, "Deleted agent with cascading deletes");
 
         Ok(())
     }
@@ -599,8 +633,16 @@ impl AgentStorage for FdbAgentRegistry {
 
         let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
 
-        // Get current message count
-        let count = match self.fdb.get(&actor_id, KEY_PREFIX_MESSAGE_COUNT).await {
+        // Use a transaction for atomic read-modify-write
+        // This prevents race conditions when concurrent appends occur
+        let mut txn = self
+            .fdb
+            .begin_transaction(&actor_id)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        // Get current message count within transaction
+        let count = match txn.get(KEY_PREFIX_MESSAGE_COUNT).await {
             Ok(Some(bytes)) => {
                 let count_str = String::from_utf8(bytes.to_vec()).map_err(|e| {
                     StorageError::DeserializationFailed {
@@ -617,25 +659,23 @@ impl AgentStorage for FdbAgentRegistry {
             Err(e) => return Err(Self::map_core_error(e)),
         };
 
-        // Store message at index
+        // Serialize message
         let message_key = format!("{}{}", String::from_utf8_lossy(KEY_PREFIX_MESSAGE), count);
         let message_value = Self::serialize_message(message)?;
 
-        self.fdb
-            .set(&actor_id, message_key.as_bytes(), &message_value)
+        // Store message at index (within transaction)
+        txn.set(message_key.as_bytes(), &message_value)
             .await
             .map_err(Self::map_core_error)?;
 
-        // Increment count
+        // Increment count (within transaction)
         let new_count = count + 1;
-        self.fdb
-            .set(
-                &actor_id,
-                KEY_PREFIX_MESSAGE_COUNT,
-                &Bytes::from(new_count.to_string()),
-            )
+        txn.set(KEY_PREFIX_MESSAGE_COUNT, new_count.to_string().as_bytes())
             .await
             .map_err(Self::map_core_error)?;
+
+        // Commit transaction - all operations are atomic
+        txn.commit().await.map_err(Self::map_core_error)?;
 
         Ok(())
     }
@@ -853,17 +893,63 @@ impl AgentStorage for FdbAgentRegistry {
         assert!(!session.agent_id.is_empty(), "agent id cannot be empty");
         assert!(!session.session_id.is_empty(), "session id cannot be empty");
 
-        // Save session
-        self.save_session(session).await?;
+        let actor_id = Self::agent_actor_id(&session.agent_id).map_err(Self::map_core_error)?;
 
-        // Append message if provided
+        // Use a transaction for atomic session + message checkpoint
+        // Both operations succeed or fail together
+        let mut txn = self
+            .fdb
+            .begin_transaction(&actor_id)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        // Serialize and store session
+        let session_key = format!(
+            "{}{}",
+            String::from_utf8_lossy(KEY_PREFIX_SESSION),
+            session.session_id
+        );
+        let session_value = Self::serialize_session(session)?;
+        txn.set(session_key.as_bytes(), &session_value)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        // Append message if provided (within same transaction)
         if let Some(msg) = message {
-            self.append_message(&session.agent_id, msg).await?;
+            // Get current message count
+            let count = match txn.get(KEY_PREFIX_MESSAGE_COUNT).await {
+                Ok(Some(bytes)) => {
+                    let count_str = String::from_utf8(bytes.to_vec()).map_err(|e| {
+                        StorageError::DeserializationFailed {
+                            reason: e.to_string(),
+                        }
+                    })?;
+                    count_str
+                        .parse::<u64>()
+                        .map_err(|e| StorageError::DeserializationFailed {
+                            reason: e.to_string(),
+                        })?
+                }
+                Ok(None) => 0,
+                Err(e) => return Err(Self::map_core_error(e)),
+            };
+
+            // Store message
+            let message_key = format!("{}{}", String::from_utf8_lossy(KEY_PREFIX_MESSAGE), count);
+            let message_value = Self::serialize_message(msg)?;
+            txn.set(message_key.as_bytes(), &message_value)
+                .await
+                .map_err(Self::map_core_error)?;
+
+            // Increment count
+            let new_count = count + 1;
+            txn.set(KEY_PREFIX_MESSAGE_COUNT, new_count.to_string().as_bytes())
+                .await
+                .map_err(Self::map_core_error)?;
         }
 
-        // TODO: Use FDB transaction for atomicity
-        // Currently these are separate operations
-        // Need to expose begin_transaction() on FdbKV
+        // Commit transaction - session and message are atomic
+        txn.commit().await.map_err(Self::map_core_error)?;
 
         Ok(())
     }
