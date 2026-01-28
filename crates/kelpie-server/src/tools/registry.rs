@@ -71,10 +71,18 @@ pub struct RegisteredTool {
 }
 
 /// Execution context for tool calls
-#[derive(Debug, Clone)]
+///
+/// TigerStyle: Extended for multi-agent communication (Issue #75)
+#[derive(Debug, Clone, Default)]
 pub struct ToolExecutionContext {
+    /// ID of the agent executing the tool
     pub agent_id: Option<String>,
+    /// Project ID for the agent
     pub project_id: Option<String>,
+    /// Current call depth for nested agent calls (0 = top level)
+    pub call_depth: u32,
+    /// Call chain for cycle detection (list of agent IDs in the call stack)
+    pub call_chain: Vec<String>,
 }
 
 /// Custom tool definition with source code

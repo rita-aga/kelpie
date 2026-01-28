@@ -467,6 +467,8 @@ pub async fn handle_message_request<R: Runtime + 'static>(
                         let context = crate::tools::ToolExecutionContext {
                             agent_id: Some(agent_id.clone()),
                             project_id: agent.project_id.clone(),
+                            call_depth: 0,      // Top-level call
+                            call_chain: vec![], // Empty chain at top level
                         };
                         let exec_result = state
                             .tool_registry()
@@ -1054,6 +1056,8 @@ async fn generate_sse_events<R: Runtime + 'static>(
                     let context = crate::tools::ToolExecutionContext {
                         agent_id: Some(agent_id.to_string()),
                         project_id: agent.project_id.clone(),
+                        call_depth: 0,      // Top-level call
+                        call_chain: vec![], // Empty chain at top level
                     };
                     let exec_result = state
                         .tool_registry()
