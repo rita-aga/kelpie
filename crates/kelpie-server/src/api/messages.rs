@@ -14,13 +14,16 @@ use axum::{
 use chrono::Utc;
 use futures::stream::{self, StreamExt};
 use kelpie_core::Runtime;
+use kelpie_server::actor::DispatcherAdapter;
 use kelpie_server::llm::{ChatMessage, ContentBlock};
 use kelpie_server::models::{
     ApprovalRequest, BatchMessagesRequest, BatchStatus, ClientTool, CreateMessageRequest, Message,
     MessageResponse, MessageRole, UsageStats,
 };
 use kelpie_server::state::AppState;
-use kelpie_server::tools::{parse_pause_signal, ToolSignal, AGENT_LOOP_ITERATIONS_MAX};
+use kelpie_server::tools::{
+    parse_pause_signal, AgentDispatcher, ToolSignal, AGENT_LOOP_ITERATIONS_MAX,
+};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::time::Duration;
@@ -467,6 +470,12 @@ pub async fn handle_message_request<R: Runtime + 'static>(
                         let context = crate::tools::ToolExecutionContext {
                             agent_id: Some(agent_id.clone()),
                             project_id: agent.project_id.clone(),
+                            call_depth: 0,      // Top-level call
+                            call_chain: vec![], // Empty chain at top level
+                            dispatcher: state.dispatcher().map(|d| {
+                                std::sync::Arc::new(DispatcherAdapter::new(d.clone()))
+                                    as std::sync::Arc<dyn AgentDispatcher>
+                            }),
                         };
                         let exec_result = state
                             .tool_registry()
@@ -1054,6 +1063,12 @@ async fn generate_sse_events<R: Runtime + 'static>(
                     let context = crate::tools::ToolExecutionContext {
                         agent_id: Some(agent_id.to_string()),
                         project_id: agent.project_id.clone(),
+                        call_depth: 0,      // Top-level call
+                        call_chain: vec![], // Empty chain at top level
+                        dispatcher: state.dispatcher().map(|d| {
+                            std::sync::Arc::new(DispatcherAdapter::new(d.clone()))
+                                as std::sync::Arc<dyn AgentDispatcher>
+                        }),
                     };
                     let exec_result = state
                         .tool_registry()

@@ -379,6 +379,12 @@ impl AgentActor {
                 let context = ToolExecutionContext {
                     agent_id: Some(ctx.id.id().to_string()),
                     project_id: agent.project_id.clone(),
+                    call_depth: 0,      // Top-level call
+                    call_chain: vec![], // Empty chain at top level
+                    dispatcher: self.dispatcher.as_ref().map(|d| {
+                        Arc::new(super::dispatcher_adapter::DispatcherAdapter::new(d.clone()))
+                            as Arc<dyn crate::tools::AgentDispatcher>
+                    }),
                 };
                 let exec_result = self
                     .tool_registry

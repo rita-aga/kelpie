@@ -73,6 +73,18 @@ pub enum FaultType {
     /// Agent loop panics during execution
     AgentLoopPanic,
 
+    // Multi-agent communication faults (Issue #75)
+    /// Called agent doesn't respond in time
+    AgentCallTimeout { timeout_ms: u64 },
+    /// Called agent refuses the call (e.g., busy, internal error)
+    AgentCallRejected { reason: String },
+    /// Target agent doesn't exist in the registry
+    AgentNotFound { agent_id: String },
+    /// Target agent is at max concurrent calls (backpressure)
+    AgentBusy { agent_id: String },
+    /// Network delay specific to agent-to-agent calls
+    AgentCallNetworkDelay { delay_ms: u64 },
+
     // Sandbox faults (for VM/container isolation)
     /// Sandbox VM fails to boot
     SandboxBootFail,
@@ -189,6 +201,12 @@ impl FaultType {
             FaultType::LlmFailure => "llm_failure",
             FaultType::LlmRateLimited => "llm_rate_limited",
             FaultType::AgentLoopPanic => "agent_loop_panic",
+            // Multi-agent communication faults
+            FaultType::AgentCallTimeout { .. } => "agent_call_timeout",
+            FaultType::AgentCallRejected { .. } => "agent_call_rejected",
+            FaultType::AgentNotFound { .. } => "agent_not_found",
+            FaultType::AgentBusy { .. } => "agent_busy",
+            FaultType::AgentCallNetworkDelay { .. } => "agent_call_network_delay",
             // Sandbox faults
             FaultType::SandboxBootFail => "sandbox_boot_fail",
             FaultType::SandboxCrash => "sandbox_crash",
@@ -546,6 +564,43 @@ impl FaultInjectorBuilder {
             ))
     }
 
+    /// Add multi-agent communication faults (Issue #75)
+    ///
+    /// These faults simulate failures in agent-to-agent communication:
+    /// - Timeout (called agent doesn't respond)
+    /// - Rejection (called agent refuses the call)
+    /// - Not found (target agent doesn't exist)
+    /// - Busy (target agent at max concurrent calls)
+    /// - Network delay (specific to agent calls)
+    pub fn with_multi_agent_faults(self, probability: f64) -> Self {
+        self.with_fault(FaultConfig::new(
+            FaultType::AgentCallTimeout { timeout_ms: 30_000 },
+            probability,
+        ))
+        .with_fault(FaultConfig::new(
+            FaultType::AgentCallRejected {
+                reason: "simulated_rejection".to_string(),
+            },
+            probability,
+        ))
+        .with_fault(FaultConfig::new(
+            FaultType::AgentNotFound {
+                agent_id: "simulated_missing".to_string(),
+            },
+            probability / 2.0,
+        ))
+        .with_fault(FaultConfig::new(
+            FaultType::AgentBusy {
+                agent_id: "simulated_busy".to_string(),
+            },
+            probability,
+        ))
+        .with_fault(FaultConfig::new(
+            FaultType::AgentCallNetworkDelay { delay_ms: 100 },
+            probability,
+        ))
+    }
+
     // =========================================================================
     // FoundationDB-Critical Fault Builders (Issue #36)
     // =========================================================================
@@ -816,5 +871,51 @@ mod tests {
             .build();
         let stats = injector.stats();
         assert_eq!(stats.len(), 4); // corruption, jitter, conn exhaustion, fd exhaustion
+    }
+
+    #[test]
+    fn test_multi_agent_fault_type_names() {
+        // Multi-agent communication faults (Issue #75)
+        assert_eq!(
+            FaultType::AgentCallTimeout { timeout_ms: 30_000 }.name(),
+            "agent_call_timeout"
+        );
+        assert_eq!(
+            FaultType::AgentCallRejected {
+                reason: "test".into()
+            }
+            .name(),
+            "agent_call_rejected"
+        );
+        assert_eq!(
+            FaultType::AgentNotFound {
+                agent_id: "test".into()
+            }
+            .name(),
+            "agent_not_found"
+        );
+        assert_eq!(
+            FaultType::AgentBusy {
+                agent_id: "test".into()
+            }
+            .name(),
+            "agent_busy"
+        );
+        assert_eq!(
+            FaultType::AgentCallNetworkDelay { delay_ms: 100 }.name(),
+            "agent_call_network_delay"
+        );
+    }
+
+    #[test]
+    fn test_fault_injector_builder_multi_agent_faults() {
+        let rng = DeterministicRng::new(42);
+
+        // Test multi-agent faults builder
+        let injector = FaultInjectorBuilder::new(rng.fork())
+            .with_multi_agent_faults(0.1)
+            .build();
+        let stats = injector.stats();
+        assert_eq!(stats.len(), 5); // timeout, rejected, not_found, busy, network_delay
     }
 }

@@ -700,6 +700,12 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
         self.inner.storage.as_ref().map(|s| s.as_ref())
     }
 
+    /// Get reference to the dispatcher handle (if configured)
+    /// TigerStyle: Needed for agent-to-agent communication (Issue #75)
+    pub fn dispatcher(&self) -> Option<&DispatcherHandle<R>> {
+        self.inner.dispatcher.as_ref()
+    }
+
     // =========================================================================
     // Dual-Mode Agent Operations (Phase 6.1)
     // =========================================================================

@@ -70,11 +70,58 @@ pub struct RegisteredTool {
     pub description: Option<String>,
 }
 
+/// Dispatcher trait for agent-to-agent communication (Issue #75)
+///
+/// TigerStyle: Trait abstraction allows DST testing with simulated dispatchers.
+#[async_trait::async_trait]
+pub trait AgentDispatcher: Send + Sync {
+    /// Invoke another agent by ID
+    ///
+    /// # Arguments
+    /// * `agent_id` - The ID of the agent to invoke (e.g., "helper-agent")
+    /// * `operation` - The operation to invoke (e.g., "handle_message_full")
+    /// * `payload` - The payload bytes (serialized request)
+    /// * `timeout_ms` - Timeout in milliseconds
+    ///
+    /// # Returns
+    /// The response bytes from the target agent
+    async fn invoke_agent(
+        &self,
+        agent_id: &str,
+        operation: &str,
+        payload: bytes::Bytes,
+        timeout_ms: u64,
+    ) -> kelpie_core::Result<bytes::Bytes>;
+}
+
 /// Execution context for tool calls
-#[derive(Debug, Clone)]
+///
+/// TigerStyle: Extended for multi-agent communication (Issue #75)
+#[derive(Clone, Default)]
 pub struct ToolExecutionContext {
+    /// ID of the agent executing the tool
     pub agent_id: Option<String>,
+    /// Project ID for the agent
     pub project_id: Option<String>,
+    /// Current call depth for nested agent calls (0 = top level)
+    pub call_depth: u32,
+    /// Call chain for cycle detection (list of agent IDs in the call stack)
+    pub call_chain: Vec<String>,
+    /// Dispatcher for invoking other agents (Issue #75)
+    /// None if agent-to-agent calls are not available
+    pub dispatcher: Option<Arc<dyn AgentDispatcher>>,
+}
+
+impl std::fmt::Debug for ToolExecutionContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolExecutionContext")
+            .field("agent_id", &self.agent_id)
+            .field("project_id", &self.project_id)
+            .field("call_depth", &self.call_depth)
+            .field("call_chain", &self.call_chain)
+            .field("dispatcher", &self.dispatcher.is_some())
+            .finish()
+    }
 }
 
 /// Custom tool definition with source code
@@ -159,12 +206,28 @@ pub type BuiltinToolHandler = Arc<
         + Sync,
 >;
 
+/// Handler function type for context-aware builtin tools (Issue #75)
+///
+/// TigerStyle: Separate type for tools that need execution context (e.g., call_agent).
+/// These handlers receive the full ToolExecutionContext for dispatcher access.
+pub type ContextAwareToolHandler = Arc<
+    dyn Fn(
+            &Value,
+            &ToolExecutionContext,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolExecutionResult> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// Unified tool registry combining all tool sources
 pub struct UnifiedToolRegistry {
     /// All registered tools by name
     tools: RwLock<HashMap<String, RegisteredTool>>,
     /// Builtin tool handlers
     builtin_handlers: RwLock<HashMap<String, BuiltinToolHandler>>,
+    /// Context-aware builtin tool handlers (Issue #75)
+    context_aware_handlers: RwLock<HashMap<String, ContextAwareToolHandler>>,
     /// MCP client pool (server_name -> client) for production
     mcp_clients: RwLock<HashMap<String, Arc<kelpie_tools::McpClient>>>,
     /// Simulated MCP client for DST testing
@@ -180,6 +243,7 @@ impl UnifiedToolRegistry {
         Self {
             tools: RwLock::new(HashMap::new()),
             builtin_handlers: RwLock::new(HashMap::new()),
+            context_aware_handlers: RwLock::new(HashMap::new()),
             mcp_clients: RwLock::new(HashMap::new()),
             #[cfg(feature = "dst")]
             sim_mcp_client: RwLock::new(None),
@@ -215,6 +279,46 @@ impl UnifiedToolRegistry {
 
         self.tools.write().await.insert(name.clone(), tool);
         self.builtin_handlers.write().await.insert(name, handler);
+    }
+
+    /// Register a context-aware builtin tool (Issue #75)
+    ///
+    /// Context-aware tools receive the full ToolExecutionContext, enabling:
+    /// - Agent-to-agent calls via dispatcher
+    /// - Call chain tracking for cycle detection
+    /// - Call depth enforcement
+    ///
+    /// TigerStyle: Separate registration method for context-aware tools.
+    pub async fn register_context_aware_builtin(
+        &self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: Value,
+        handler: ContextAwareToolHandler,
+    ) {
+        let name = name.into();
+        let description_str = description.into();
+
+        // TigerStyle: Preconditions
+        assert!(!name.is_empty(), "tool name cannot be empty");
+
+        let definition = ToolDefinition {
+            name: name.clone(),
+            description: description_str.clone(),
+            input_schema,
+        };
+
+        let tool = RegisteredTool {
+            definition,
+            source: ToolSource::Builtin,
+            description: Some(description_str),
+        };
+
+        self.tools.write().await.insert(name.clone(), tool);
+        self.context_aware_handlers
+            .write()
+            .await
+            .insert(name, handler);
     }
 
     /// Register an MCP tool
@@ -473,19 +577,32 @@ impl UnifiedToolRegistry {
 
         // Route to appropriate handler based on source
         match &tool.source {
-            ToolSource::Builtin => self.execute_builtin(name, input, start_ms).await,
+            ToolSource::Builtin => self.execute_builtin(name, input, context, start_ms).await,
             ToolSource::Mcp { server } => self.execute_mcp(name, server, input, start_ms).await,
             ToolSource::Custom => self.execute_custom(name, input, context, start_ms).await,
         }
     }
 
     /// Execute a builtin tool
+    ///
+    /// TigerStyle (Issue #75): Checks for context-aware handlers first.
+    /// Context-aware tools (like call_agent) need dispatcher access for inter-agent calls.
     async fn execute_builtin(
         &self,
         name: &str,
         input: &Value,
+        context: Option<&ToolExecutionContext>,
         start_ms: u64,
     ) -> ToolExecutionResult {
+        // First, check for context-aware handler (Issue #75)
+        if let Some(handler) = self.context_aware_handlers.read().await.get(name).cloned() {
+            // Context-aware tools require context; provide default if not supplied
+            let default_context = ToolExecutionContext::default();
+            let ctx = context.unwrap_or(&default_context);
+            return handler(input, ctx).await;
+        }
+
+        // Fall back to regular builtin handler
         let handler = match self.builtin_handlers.read().await.get(name) {
             Some(h) => h.clone(),
             None => {
