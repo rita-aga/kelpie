@@ -601,9 +601,19 @@ Implemented multi-agent communication foundation:
 - Call depth enforced (max 5 nested calls)
 - Timeouts bounded and configurable
 
-**What's remaining for PRODUCTION use:**
-- Wire dispatcher into ToolExecutionContext at call sites (agent_actor.rs, messages.rs)
-- Currently marked with TODO comments; requires refactoring to pass dispatcher through the call chain
+### 2026-01-28 Update: Dispatcher Wiring Complete
+
+**Final implementation:**
+- **agent_actor.rs**: `ToolExecutionContext.dispatcher` now wired from `self.dispatcher` via `DispatcherAdapter`
+- **messages.rs**: Both `send_message` locations wire dispatcher from `state.dispatcher()`
+- **state.rs**: Added `dispatcher()` getter to `AppState` for accessing the `DispatcherHandle`
+- All TODO comments removed from production code
+
+**Full Issue #75 implementation is now complete:**
+1. ✅ Design doc/ADR written (ADR-028)
+2. ✅ Basic agent-to-agent call works via call_agent tool + dispatcher
+3. ✅ Cycles, deadlocks, timeout handling implemented
+4. ✅ Dispatcher wired into all ToolExecutionContext call sites
 
 ---
 
