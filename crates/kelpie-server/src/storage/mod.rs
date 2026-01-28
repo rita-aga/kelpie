@@ -20,6 +20,7 @@
 
 mod adapter;
 mod fdb;
+mod sim;
 mod teleport;
 mod traits;
 mod types;
@@ -30,11 +31,7 @@ pub use kelpie_core::teleport::{
     Architecture, SnapshotKind, TeleportPackage, TeleportStorage, TeleportStorageError,
     TeleportStorageResult, TELEPORT_ID_LENGTH_BYTES_MAX,
 };
+pub use sim::SimStorage;
 pub use teleport::{LocalTeleportStorage, TELEPORT_PACKAGE_SIZE_BYTES_DEFAULT_MAX};
 pub use traits::{AgentStorage, StorageError};
 pub use types::{AgentMetadata, CustomToolRecord, PendingToolCall, SessionState};
-
-#[cfg(feature = "dst")]
-// Phase 1.2: Alias KvAdapter as SimStorage for backwards compatibility during migration
-// This effectively "deletes" the old duplicate SimStorage implementation
-pub type SimStorage = KvAdapter;

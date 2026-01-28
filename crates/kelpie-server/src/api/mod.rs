@@ -260,6 +260,10 @@ impl From<StateError> for ApiError {
                 // Service errors or other internal errors
                 ApiError::internal(message)
             }
+            StateError::StorageError { message } => {
+                // Storage layer errors (FDB, SimStorage, etc.)
+                ApiError::internal(format!("storage error: {}", message))
+            }
         }
     }
 }

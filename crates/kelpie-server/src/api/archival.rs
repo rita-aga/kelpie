@@ -154,7 +154,7 @@ mod tests {
     use kelpie_server::state::AppState;
     use tower::ServiceExt;
 
-    async fn test_app_with_agent() -> (Router, String) {
+    async fn test_app_with_agent() -> (Router, String, AppState<kelpie_core::TokioRuntime>) {
         let state = AppState::new(kelpie_core::TokioRuntime);
 
         // Create agent
@@ -183,12 +183,13 @@ mod tests {
         let agent: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let agent_id = agent["id"].as_str().unwrap().to_string();
 
-        (api::router(state), agent_id)
+        // Return router, agent_id, AND state for verification
+        (app, agent_id, state)
     }
 
     #[tokio::test]
     async fn test_search_archival_empty() {
-        let (app, agent_id) = test_app_with_agent().await;
+        let (app, agent_id, _state) = test_app_with_agent().await;
 
         let response = app
             .oneshot(
@@ -206,7 +207,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_archival() {
-        let (app, agent_id) = test_app_with_agent().await;
+        let (app, agent_id, _state) = test_app_with_agent().await;
 
         let body = serde_json::json!({
             "content": "This is a test archival entry",

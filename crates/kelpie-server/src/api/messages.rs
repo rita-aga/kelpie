@@ -249,8 +249,8 @@ pub async fn handle_message_request<R: Runtime + 'static>(
         created_at: Utc::now(),
     };
 
-    // Store user message
-    let stored_user_msg = state.add_message(&agent_id, user_message)?;
+    // Store user message (with storage persistence)
+    let stored_user_msg = state.add_message_async(&agent_id, user_message).await?;
 
     // Get agent for memory blocks and system prompt
     let agent = state
@@ -656,8 +656,10 @@ pub async fn handle_message_request<R: Runtime + 'static>(
         created_at: Utc::now(),
     };
 
-    // Store assistant message
-    let stored_assistant_msg = state.add_message(&agent_id, assistant_message)?;
+    // Store assistant message (with storage persistence)
+    let stored_assistant_msg = state
+        .add_message_async(&agent_id, assistant_message)
+        .await?;
 
     tracing::info!(
         agent_id = %agent_id,
@@ -829,8 +831,8 @@ async fn send_message_streaming<R: Runtime + 'static>(
         created_at: Utc::now(),
     };
 
-    // Store user message
-    let _stored_user_msg = state.add_message(&agent_id, user_message)?;
+    // Store user message (with storage persistence)
+    let _stored_user_msg = state.add_message_async(&agent_id, user_message).await?;
 
     // Create the SSE stream
     // Use token streaming if requested, otherwise use step streaming (batch mode)
@@ -1176,7 +1178,7 @@ async fn generate_sse_events<R: Runtime + 'static>(
                 status: None,
                 created_at: Utc::now(),
             };
-            if let Err(e) = state.add_message(agent_id, assistant_message) {
+            if let Err(e) = state.add_message_async(agent_id, assistant_message).await {
                 tracing::error!(agent_id = %agent_id, error = ?e, "failed to persist assistant message in streaming");
                 // Send error event to client so they know persistence failed
                 let error_event = SseMessage::AssistantMessage {

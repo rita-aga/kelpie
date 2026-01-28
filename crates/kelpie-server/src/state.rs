@@ -4,16 +4,16 @@
 //!
 //! DST Support: Optional fault injection for deterministic simulation testing.
 //!
-//! Storage Integration: Optional AgentStorage backend for persistence.
-//! When storage is configured, state is persisted to durable backend (FDB/Sim).
-//! In-memory HashMaps serve as hot cache, storage is source of truth.
+//! Storage Integration: AgentStorage backend is REQUIRED for all operations.
+//! Storage is the single source of truth - FDB for production, SimStorage for tests.
+//! In-memory HashMaps are deprecated and will be removed (Issue #74).
 
 use crate::actor::{AgentActor, RealLlmAdapter};
 use crate::llm::LlmClient;
 use crate::models::ArchivalEntry;
 use crate::models::{AgentGroup, AgentState, BatchStatus, Block, Job, Message, Project};
 use crate::service::AgentService;
-use crate::storage::{AgentStorage, StorageError};
+use crate::storage::{AgentStorage, SimStorage, StorageError};
 use crate::tools::UnifiedToolRegistry;
 use chrono::Utc;
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig, DispatcherHandle};
@@ -119,8 +119,8 @@ struct AppStateInner<R: kelpie_core::Runtime> {
     start_time_ms: u64,
     /// LLM client (None if no API key configured)
     llm: Option<LlmClient>,
-    /// Durable storage backend (None = in-memory only)
-    /// When present, state is persisted to storage (FDB/Sim)
+    /// Storage backend (always set - SimStorage for dev/tests, FDB for production)
+    /// Issue #74: Now always initialized - storage is single source of truth
     storage: Option<Arc<dyn AgentStorage>>,
     /// Prometheus metrics registry (None if metrics disabled or otel feature not enabled)
     #[cfg(feature = "otel")]
@@ -211,7 +211,8 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 identities: RwLock::new(HashMap::new()),
                 start_time_ms: time.monotonic_ms(),
                 llm,
-                storage: None,
+                // Issue #74: Always create storage - SimStorage for in-memory mode
+                storage: Some(Arc::new(SimStorage::new())),
                 prometheus_registry: registry.map(|r| Arc::new(r.clone())),
                 #[cfg(feature = "dst")]
                 fault_injector: None,
@@ -294,7 +295,8 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 identities: RwLock::new(HashMap::new()),
                 start_time_ms: time.monotonic_ms(),
                 llm,
-                storage: None,
+                // Issue #74: Always create storage - SimStorage for in-memory mode
+                storage: Some(Arc::new(SimStorage::new())),
                 #[cfg(feature = "dst")]
                 fault_injector: None,
             }),
@@ -483,7 +485,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 identities: RwLock::new(HashMap::new()),
                 start_time_ms: time.monotonic_ms(),
                 llm: Some(llm),
-                storage: None,
+                storage: Some(Arc::new(SimStorage::new())),
                 #[cfg(feature = "otel")]
                 prometheus_registry: None,
                 #[cfg(feature = "dst")]
@@ -519,7 +521,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 identities: RwLock::new(HashMap::new()),
                 start_time_ms: time.monotonic_ms(),
                 llm: None,
-                storage: None,
+                storage: Some(Arc::new(SimStorage::new())),
                 #[cfg(feature = "otel")]
                 prometheus_registry: None,
                 fault_injector: Some(fault_injector),
@@ -607,7 +609,8 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 identities: RwLock::new(HashMap::new()),
                 start_time_ms: time.monotonic_ms(),
                 llm: None,
-                storage: None,
+                // Issue #74: Always create storage - SimStorage for tests
+                storage: Some(Arc::new(SimStorage::new())),
                 #[cfg(feature = "otel")]
                 prometheus_registry: None,
                 #[cfg(feature = "dst")]
@@ -749,10 +752,9 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                     message: format!("Service error: {}", e),
                 })?;
 
-            // TigerStyle: Also store in HashMap for list operations in memory mode
-            // When no storage is configured, list_agents_async reads from HashMap.
-            // Without this, agents created via AgentService would not appear in list.
-            if self.inner.storage.is_none() {
+            // TigerStyle: Also store in HashMap for backward compatibility
+            // Methods like get_agent() still read from HashMap
+            {
                 let mut agents = self
                     .inner
                     .agents
@@ -761,14 +763,100 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 agents.insert(agent.id.clone(), agent.clone());
             }
 
+            // Initialize messages vec for this agent
+            {
+                let mut messages = self
+                    .inner
+                    .messages
+                    .write()
+                    .map_err(|_| StateError::LockPoisoned)?;
+                messages.insert(agent.id.clone(), Vec::new());
+            }
+
+            // Initialize archival vec for this agent
+            {
+                let mut archival = self
+                    .inner
+                    .archival
+                    .write()
+                    .map_err(|_| StateError::LockPoisoned)?;
+                archival.insert(agent.id.clone(), Vec::new());
+            }
+
             Ok(agent)
         } else {
-            // Fallback to HashMap for backward compatibility
-            // Use from_request to convert CreateAgentRequest to AgentState
+            // Fallback: write to storage directly (no AgentService)
+            // TigerStyle: Storage is the single source of truth
             #[allow(deprecated)]
             let agent = AgentState::from_request(request);
-            #[allow(deprecated)]
-            self.create_agent(agent)
+
+            // Write to storage if available
+            if let Some(storage) = &self.inner.storage {
+                use crate::storage::AgentMetadata;
+
+                // Convert AgentState to AgentMetadata (subset of fields)
+                let metadata = AgentMetadata {
+                    id: agent.id.clone(),
+                    name: agent.name.clone(),
+                    agent_type: agent.agent_type.clone(),
+                    model: agent.model.clone(),
+                    embedding: agent.embedding.clone(),
+                    system: agent.system.clone(),
+                    description: agent.description.clone(),
+                    tool_ids: agent.tool_ids.clone(),
+                    tags: agent.tags.clone(),
+                    metadata: agent.metadata.clone(),
+                    created_at: agent.created_at,
+                    updated_at: agent.updated_at,
+                };
+
+                storage
+                    .save_agent(&metadata)
+                    .await
+                    .map_err(|e| StateError::StorageError {
+                        message: format!("Failed to save agent: {}", e),
+                    })?;
+
+                // Also save blocks if present
+                if !agent.blocks.is_empty() {
+                    storage
+                        .save_blocks(&agent.id, &agent.blocks)
+                        .await
+                        .map_err(|e| StateError::StorageError {
+                            message: format!("Failed to save blocks: {}", e),
+                        })?;
+                }
+            }
+
+            // Also update HashMap for backward compatibility
+            let mut agents = self
+                .inner
+                .agents
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?;
+            agents.insert(agent.id.clone(), agent.clone());
+
+            // Initialize messages vec for this agent
+            {
+                let mut messages = self
+                    .inner
+                    .messages
+                    .write()
+                    .map_err(|_| StateError::LockPoisoned)?;
+                messages.insert(agent.id.clone(), Vec::new());
+            }
+
+            // Initialize archival vec for this agent
+            {
+                let mut archival = self
+                    .inner
+                    .archival
+                    .write()
+                    .map_err(|_| StateError::LockPoisoned)?;
+                archival.insert(agent.id.clone(), Vec::new());
+            }
+
+            Ok(agent)
         }
     }
 
@@ -1742,6 +1830,60 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 resource: "agent",
                 id: agent_id.to_string(),
             })?;
+
+        if agent_messages.len() >= MESSAGES_PER_AGENT_MAX {
+            return Err(StateError::LimitExceeded {
+                resource: "messages",
+                limit: MESSAGES_PER_AGENT_MAX,
+            });
+        }
+
+        let result = message.clone();
+        agent_messages.push(message);
+        Ok(result)
+    }
+
+    /// Add a message to an agent's history (async version with storage persistence)
+    ///
+    /// This is the preferred method for adding messages. It:
+    /// 1. Persists the message to durable storage (FDB or SimStorage)
+    /// 2. Also updates the in-memory HashMap for backward compatibility
+    ///
+    /// TigerStyle: Storage is the single source of truth. HashMap is a cache.
+    pub async fn add_message_async(
+        &self,
+        agent_id: &str,
+        message: Message,
+    ) -> Result<Message, StateError> {
+        // DST: Check for fault injection on message write
+        if self.should_inject_fault("message_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "message_write".to_string(),
+            });
+        }
+
+        // Step 1: Persist to storage FIRST (single source of truth)
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .append_message(agent_id, &message)
+                .await
+                .map_err(|e| StateError::StorageError {
+                    message: format!("Failed to persist message: {}", e),
+                })?;
+        }
+
+        // Step 2: Update in-memory HashMap (cache for backward compatibility)
+        let mut messages = self
+            .inner
+            .messages
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?;
+
+        // Initialize messages vec if agent doesn't exist in HashMap yet
+        // (agent might exist in storage but not in memory cache)
+        let agent_messages = messages
+            .entry(agent_id.to_string())
+            .or_insert_with(Vec::new);
 
         if agent_messages.len() >= MESSAGES_PER_AGENT_MAX {
             return Err(StateError::LimitExceeded {
@@ -3196,6 +3338,8 @@ pub enum StateError {
     FaultInjected { operation: String },
     /// Internal error (service errors, etc.)
     Internal { message: String },
+    /// Storage error (from AgentStorage operations)
+    StorageError { message: String },
 }
 
 impl std::fmt::Display for StateError {
@@ -3216,6 +3360,9 @@ impl std::fmt::Display for StateError {
             }
             StateError::Internal { message } => {
                 write!(f, "internal error: {}", message)
+            }
+            StateError::StorageError { message } => {
+                write!(f, "storage error: {}", message)
             }
         }
     }
