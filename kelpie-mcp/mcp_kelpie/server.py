@@ -22,7 +22,7 @@ from typing import Any
 # Load environment variables from .env file
 from dotenv import load_dotenv
 load_dotenv()  # Load from .env in current directory
-load_dotenv(Path(__file__).parent.parent.parent.parent / ".env")  # Also try project root
+load_dotenv(Path(__file__).parent.parent.parent / ".env")  # Also try project root (kelpie/.env)
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
