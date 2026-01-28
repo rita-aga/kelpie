@@ -9,7 +9,7 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
-use crate::models::{Block, Message};
+use crate::models::{ArchivalEntry, Block, Message};
 
 use super::types::{AgentMetadata, CustomToolRecord, SessionState};
 
@@ -273,6 +273,50 @@ pub trait AgentStorage: Send + Sync {
 
     /// Delete all messages for an agent
     async fn delete_messages(&self, agent_id: &str) -> Result<(), StorageError>;
+
+    // =========================================================================
+    // Archival Memory Operations
+    // =========================================================================
+
+    /// Save an archival entry (long-term memory)
+    async fn save_archival_entry(
+        &self,
+        agent_id: &str,
+        entry: &ArchivalEntry,
+    ) -> Result<(), StorageError>;
+
+    /// Load archival entries for an agent
+    async fn load_archival_entries(
+        &self,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ArchivalEntry>, StorageError>;
+
+    /// Get a specific archival entry by ID
+    async fn get_archival_entry(
+        &self,
+        agent_id: &str,
+        entry_id: &str,
+    ) -> Result<Option<ArchivalEntry>, StorageError>;
+
+    /// Delete an archival entry
+    async fn delete_archival_entry(
+        &self,
+        agent_id: &str,
+        entry_id: &str,
+    ) -> Result<(), StorageError>;
+
+    /// Delete all archival entries for an agent
+    async fn delete_archival_entries(&self, agent_id: &str) -> Result<(), StorageError>;
+
+    /// Search archival entries (basic text search)
+    /// Returns entries matching the query, limited by `limit`
+    async fn search_archival_entries(
+        &self,
+        agent_id: &str,
+        query: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ArchivalEntry>, StorageError>;
 
     // =========================================================================
     // Transactional Operations

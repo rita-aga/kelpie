@@ -21,7 +21,7 @@ use kelpie_core::{ActorId, Result as CoreResult};
 use kelpie_storage::{ActorKV, FdbKV};
 use std::sync::Arc;
 
-use crate::models::{Block, Message};
+use crate::models::{ArchivalEntry, Block, Message};
 
 use super::traits::{AgentStorage, StorageError};
 use super::types::{AgentMetadata, CustomToolRecord, SessionState};
@@ -51,6 +51,7 @@ const KEY_PREFIX_GROUP: &[u8] = b"group:";
 const KEY_PREFIX_IDENTITY: &[u8] = b"identity:";
 const KEY_PREFIX_PROJECT: &[u8] = b"project:";
 const KEY_PREFIX_JOB: &[u8] = b"job:";
+const KEY_PREFIX_ARCHIVAL: &[u8] = b"archival:";
 
 // =============================================================================
 // FdbAgentRegistry Implementation
@@ -275,6 +276,22 @@ impl FdbAgentRegistry {
         })
     }
 
+    /// Serialize archival entry to bytes
+    fn serialize_archival_entry(entry: &ArchivalEntry) -> Result<Bytes, StorageError> {
+        serde_json::to_vec(entry)
+            .map(Bytes::from)
+            .map_err(|e| StorageError::SerializationFailed {
+                reason: e.to_string(),
+            })
+    }
+
+    /// Deserialize archival entry from bytes
+    fn deserialize_archival_entry(bytes: &Bytes) -> Result<ArchivalEntry, StorageError> {
+        serde_json::from_slice(bytes).map_err(|e| StorageError::DeserializationFailed {
+            reason: e.to_string(),
+        })
+    }
+
     /// Convert kelpie_core::Error to StorageError
     fn map_core_error(err: kelpie_core::Error) -> StorageError {
         StorageError::Internal {
@@ -327,7 +344,74 @@ impl AgentStorage for FdbAgentRegistry {
         // Preconditions
         assert!(!id.is_empty(), "agent id cannot be empty");
 
-        // Delete from registry
+        // First, gather all keys that need to be deleted (before starting transaction)
+        // This is necessary because scan_prefix can't be done inside a transaction
+        let agent_id = Self::agent_actor_id(id).map_err(Self::map_core_error)?;
+
+        // Scan for all session keys
+        let session_kvs = self
+            .fdb
+            .scan_prefix(&agent_id, KEY_PREFIX_SESSION)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        // Scan for all message keys
+        let message_kvs = self
+            .fdb
+            .scan_prefix(&agent_id, KEY_PREFIX_MESSAGE)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        // Scan for all archival keys
+        let archival_kvs = self
+            .fdb
+            .scan_prefix(&agent_id, KEY_PREFIX_ARCHIVAL)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        // Now perform ALL deletes in a single transaction for atomicity
+        // Note: FDB transactions have a 10MB limit, but agent data should fit
+        let mut txn = self
+            .fdb
+            .begin_transaction(&agent_id)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        // Delete blocks
+        txn.delete(KEY_PREFIX_BLOCKS)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        // Delete message count
+        txn.delete(KEY_PREFIX_MESSAGE_COUNT)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        // Delete all sessions
+        for (session_key, _) in session_kvs {
+            txn.delete(&session_key)
+                .await
+                .map_err(Self::map_core_error)?;
+        }
+
+        // Delete all messages
+        for (message_key, _) in message_kvs {
+            txn.delete(&message_key)
+                .await
+                .map_err(Self::map_core_error)?;
+        }
+
+        // Delete all archival entries
+        for (archival_key, _) in archival_kvs {
+            txn.delete(&archival_key)
+                .await
+                .map_err(Self::map_core_error)?;
+        }
+
+        // Commit per-agent data deletion
+        txn.commit().await.map_err(Self::map_core_error)?;
+
+        // Delete from registry (separate transaction since different actor)
         let registry_id = Self::registry_actor_id().map_err(Self::map_core_error)?;
         let key = id.as_bytes();
 
@@ -336,23 +420,7 @@ impl AgentStorage for FdbAgentRegistry {
             .await
             .map_err(Self::map_core_error)?;
 
-        // Delete per-agent data
-        let agent_id = Self::agent_actor_id(id).map_err(Self::map_core_error)?;
-
-        // Delete blocks
-        self.fdb
-            .delete(&agent_id, KEY_PREFIX_BLOCKS)
-            .await
-            .map_err(Self::map_core_error)?;
-
-        // Delete message count
-        self.fdb
-            .delete(&agent_id, KEY_PREFIX_MESSAGE_COUNT)
-            .await
-            .map_err(Self::map_core_error)?;
-
-        // TODO: Delete all sessions (need scan + delete loop)
-        // TODO: Delete all messages (need scan + delete loop)
+        tracing::info!(agent_id = %id, "Deleted agent with atomic cascading deletes");
 
         Ok(())
     }
@@ -428,8 +496,22 @@ impl AgentStorage for FdbAgentRegistry {
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
         assert!(!label.is_empty(), "label cannot be empty");
 
-        // Load existing blocks
-        let mut blocks = self.load_blocks(agent_id).await?;
+        let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
+
+        // Use a transaction for atomic read-modify-write
+        // This prevents race conditions when concurrent updates occur
+        let mut txn = self
+            .fdb
+            .begin_transaction(&actor_id)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        // Load existing blocks within transaction
+        let mut blocks = match txn.get(KEY_PREFIX_BLOCKS).await {
+            Ok(Some(bytes)) => Self::deserialize_blocks(&bytes)?,
+            Ok(None) => Vec::new(),
+            Err(e) => return Err(Self::map_core_error(e)),
+        };
 
         // Find and update block
         let mut found = false;
@@ -444,16 +526,23 @@ impl AgentStorage for FdbAgentRegistry {
             }
         }
 
-        if found {
-            // Save updated blocks (after mutable borrow ends)
-            self.save_blocks(agent_id, &blocks).await?;
-            return Ok(result_block.unwrap());
+        if !found {
+            return Err(StorageError::NotFound {
+                resource: "block",
+                id: label.to_string(),
+            });
         }
 
-        Err(StorageError::NotFound {
-            resource: "block",
-            id: label.to_string(),
-        })
+        // Save updated blocks within transaction
+        let blocks_value = Self::serialize_blocks(&blocks)?;
+        txn.set(KEY_PREFIX_BLOCKS, &blocks_value)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        // Commit transaction
+        txn.commit().await.map_err(Self::map_core_error)?;
+
+        Ok(result_block.unwrap())
     }
 
     async fn append_block(
@@ -466,8 +555,22 @@ impl AgentStorage for FdbAgentRegistry {
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
         assert!(!label.is_empty(), "label cannot be empty");
 
-        // Load existing blocks
-        let mut blocks = self.load_blocks(agent_id).await?;
+        let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
+
+        // Use a transaction for atomic read-modify-write
+        // This prevents race conditions when concurrent appends occur
+        let mut txn = self
+            .fdb
+            .begin_transaction(&actor_id)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        // Load existing blocks within transaction
+        let mut blocks = match txn.get(KEY_PREFIX_BLOCKS).await {
+            Ok(Some(bytes)) => Self::deserialize_blocks(&bytes)?,
+            Ok(None) => Vec::new(),
+            Err(e) => return Err(Self::map_core_error(e)),
+        };
 
         // Find existing block or create new
         let mut found = false;
@@ -482,18 +585,23 @@ impl AgentStorage for FdbAgentRegistry {
             }
         }
 
-        if found {
-            // Save updated blocks (after mutable borrow ends)
-            self.save_blocks(agent_id, &blocks).await?;
-            return Ok(result_block.unwrap());
+        if !found {
+            // Create new block
+            let block = Block::new(label, content);
+            result_block = Some(block.clone());
+            blocks.push(block);
         }
 
-        // Create new block
-        let block = Block::new(label, content);
-        blocks.push(block.clone());
-        self.save_blocks(agent_id, &blocks).await?;
+        // Save blocks within transaction
+        let blocks_value = Self::serialize_blocks(&blocks)?;
+        txn.set(KEY_PREFIX_BLOCKS, &blocks_value)
+            .await
+            .map_err(Self::map_core_error)?;
 
-        Ok(block)
+        // Commit transaction
+        txn.commit().await.map_err(Self::map_core_error)?;
+
+        Ok(result_block.unwrap())
     }
 
     // =========================================================================
@@ -599,8 +707,16 @@ impl AgentStorage for FdbAgentRegistry {
 
         let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
 
-        // Get current message count
-        let count = match self.fdb.get(&actor_id, KEY_PREFIX_MESSAGE_COUNT).await {
+        // Use a transaction for atomic read-modify-write
+        // This prevents race conditions when concurrent appends occur
+        let mut txn = self
+            .fdb
+            .begin_transaction(&actor_id)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        // Get current message count within transaction
+        let count = match txn.get(KEY_PREFIX_MESSAGE_COUNT).await {
             Ok(Some(bytes)) => {
                 let count_str = String::from_utf8(bytes.to_vec()).map_err(|e| {
                     StorageError::DeserializationFailed {
@@ -617,25 +733,23 @@ impl AgentStorage for FdbAgentRegistry {
             Err(e) => return Err(Self::map_core_error(e)),
         };
 
-        // Store message at index
+        // Serialize message
         let message_key = format!("{}{}", String::from_utf8_lossy(KEY_PREFIX_MESSAGE), count);
         let message_value = Self::serialize_message(message)?;
 
-        self.fdb
-            .set(&actor_id, message_key.as_bytes(), &message_value)
+        // Store message at index (within transaction)
+        txn.set(message_key.as_bytes(), &message_value)
             .await
             .map_err(Self::map_core_error)?;
 
-        // Increment count
+        // Increment count (within transaction)
         let new_count = count + 1;
-        self.fdb
-            .set(
-                &actor_id,
-                KEY_PREFIX_MESSAGE_COUNT,
-                &Bytes::from(new_count.to_string()),
-            )
+        txn.set(KEY_PREFIX_MESSAGE_COUNT, new_count.to_string().as_bytes())
             .await
             .map_err(Self::map_core_error)?;
+
+        // Commit transaction - all operations are atomic
+        txn.commit().await.map_err(Self::map_core_error)?;
 
         Ok(())
     }
@@ -853,17 +967,63 @@ impl AgentStorage for FdbAgentRegistry {
         assert!(!session.agent_id.is_empty(), "agent id cannot be empty");
         assert!(!session.session_id.is_empty(), "session id cannot be empty");
 
-        // Save session
-        self.save_session(session).await?;
+        let actor_id = Self::agent_actor_id(&session.agent_id).map_err(Self::map_core_error)?;
 
-        // Append message if provided
+        // Use a transaction for atomic session + message checkpoint
+        // Both operations succeed or fail together
+        let mut txn = self
+            .fdb
+            .begin_transaction(&actor_id)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        // Serialize and store session
+        let session_key = format!(
+            "{}{}",
+            String::from_utf8_lossy(KEY_PREFIX_SESSION),
+            session.session_id
+        );
+        let session_value = Self::serialize_session(session)?;
+        txn.set(session_key.as_bytes(), &session_value)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        // Append message if provided (within same transaction)
         if let Some(msg) = message {
-            self.append_message(&session.agent_id, msg).await?;
+            // Get current message count
+            let count = match txn.get(KEY_PREFIX_MESSAGE_COUNT).await {
+                Ok(Some(bytes)) => {
+                    let count_str = String::from_utf8(bytes.to_vec()).map_err(|e| {
+                        StorageError::DeserializationFailed {
+                            reason: e.to_string(),
+                        }
+                    })?;
+                    count_str
+                        .parse::<u64>()
+                        .map_err(|e| StorageError::DeserializationFailed {
+                            reason: e.to_string(),
+                        })?
+                }
+                Ok(None) => 0,
+                Err(e) => return Err(Self::map_core_error(e)),
+            };
+
+            // Store message
+            let message_key = format!("{}{}", String::from_utf8_lossy(KEY_PREFIX_MESSAGE), count);
+            let message_value = Self::serialize_message(msg)?;
+            txn.set(message_key.as_bytes(), &message_value)
+                .await
+                .map_err(Self::map_core_error)?;
+
+            // Increment count
+            let new_count = count + 1;
+            txn.set(KEY_PREFIX_MESSAGE_COUNT, new_count.to_string().as_bytes())
+                .await
+                .map_err(Self::map_core_error)?;
         }
 
-        // TODO: Use FDB transaction for atomicity
-        // Currently these are separate operations
-        // Need to expose begin_transaction() on FdbKV
+        // Commit transaction - session and message are atomic
+        txn.commit().await.map_err(Self::map_core_error)?;
 
         Ok(())
     }
@@ -1223,6 +1383,184 @@ impl AgentStorage for FdbAgentRegistry {
         }
 
         Ok(jobs)
+    }
+
+    // =========================================================================
+    // Archival Memory Operations (Per-Agent)
+    // =========================================================================
+
+    async fn save_archival_entry(
+        &self,
+        agent_id: &str,
+        entry: &ArchivalEntry,
+    ) -> Result<(), StorageError> {
+        // Preconditions
+        assert!(!agent_id.is_empty(), "agent id cannot be empty");
+        assert!(!entry.id.is_empty(), "entry id cannot be empty");
+
+        let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
+        let key = format!(
+            "{}{}",
+            String::from_utf8_lossy(KEY_PREFIX_ARCHIVAL),
+            entry.id
+        );
+        let value = Self::serialize_archival_entry(entry)?;
+
+        self.fdb
+            .set(&actor_id, key.as_bytes(), &value)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
+    }
+
+    async fn load_archival_entries(
+        &self,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ArchivalEntry>, StorageError> {
+        // Preconditions
+        assert!(!agent_id.is_empty(), "agent id cannot be empty");
+        assert!(limit > 0, "limit must be positive");
+
+        let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
+
+        // Scan all archival entries
+        let kvs = self
+            .fdb
+            .scan_prefix(&actor_id, KEY_PREFIX_ARCHIVAL)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        let mut entries = Vec::new();
+        for (_key, value) in kvs {
+            if entries.len() >= limit {
+                break;
+            }
+            let entry = Self::deserialize_archival_entry(&value)?;
+            entries.push(entry);
+        }
+
+        // Sort by creation time (most recent first)
+        entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+        Ok(entries)
+    }
+
+    async fn get_archival_entry(
+        &self,
+        agent_id: &str,
+        entry_id: &str,
+    ) -> Result<Option<ArchivalEntry>, StorageError> {
+        // Preconditions
+        assert!(!agent_id.is_empty(), "agent id cannot be empty");
+        assert!(!entry_id.is_empty(), "entry id cannot be empty");
+
+        let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
+        let key = format!(
+            "{}{}",
+            String::from_utf8_lossy(KEY_PREFIX_ARCHIVAL),
+            entry_id
+        );
+
+        match self.fdb.get(&actor_id, key.as_bytes()).await {
+            Ok(Some(bytes)) => {
+                let entry = Self::deserialize_archival_entry(&bytes)?;
+                Ok(Some(entry))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(Self::map_core_error(e)),
+        }
+    }
+
+    async fn delete_archival_entry(
+        &self,
+        agent_id: &str,
+        entry_id: &str,
+    ) -> Result<(), StorageError> {
+        // Preconditions
+        assert!(!agent_id.is_empty(), "agent id cannot be empty");
+        assert!(!entry_id.is_empty(), "entry id cannot be empty");
+
+        let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
+        let key = format!(
+            "{}{}",
+            String::from_utf8_lossy(KEY_PREFIX_ARCHIVAL),
+            entry_id
+        );
+
+        self.fdb
+            .delete(&actor_id, key.as_bytes())
+            .await
+            .map_err(Self::map_core_error)?;
+
+        Ok(())
+    }
+
+    async fn delete_archival_entries(&self, agent_id: &str) -> Result<(), StorageError> {
+        // Preconditions
+        assert!(!agent_id.is_empty(), "agent id cannot be empty");
+
+        let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
+
+        // Scan and delete all archival entries
+        let kvs = self
+            .fdb
+            .scan_prefix(&actor_id, KEY_PREFIX_ARCHIVAL)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        for (key, _) in kvs {
+            self.fdb
+                .delete(&actor_id, &key)
+                .await
+                .map_err(Self::map_core_error)?;
+        }
+
+        Ok(())
+    }
+
+    async fn search_archival_entries(
+        &self,
+        agent_id: &str,
+        query: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ArchivalEntry>, StorageError> {
+        // Preconditions
+        assert!(!agent_id.is_empty(), "agent id cannot be empty");
+        assert!(limit > 0, "limit must be positive");
+
+        let actor_id = Self::agent_actor_id(agent_id).map_err(Self::map_core_error)?;
+
+        // Scan all archival entries
+        let kvs = self
+            .fdb
+            .scan_prefix(&actor_id, KEY_PREFIX_ARCHIVAL)
+            .await
+            .map_err(Self::map_core_error)?;
+
+        let mut entries = Vec::new();
+        for (_key, value) in kvs {
+            let entry = Self::deserialize_archival_entry(&value)?;
+
+            // Filter by query if provided (case-insensitive substring match)
+            let matches = match query {
+                Some(q) => entry.content.to_lowercase().contains(&q.to_lowercase()),
+                None => true,
+            };
+
+            if matches {
+                entries.push(entry);
+                if entries.len() >= limit {
+                    break;
+                }
+            }
+        }
+
+        // Sort by creation time (most recent first)
+        entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+        Ok(entries)
     }
 }
 

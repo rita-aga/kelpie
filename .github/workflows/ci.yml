@@ -110,6 +110,48 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  test-fdb:
+    name: FDB Integration Tests
+    runs-on: ubuntu-latest
+    services:
+      fdb:
+        image: foundationdb/foundationdb:7.3.27
+        ports:
+          - 4500:4500
+        options: >-
+          --health-cmd "fdbcli --exec 'status minimal' || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install FDB client
+        run: |
+          wget https://github.com/apple/foundationdb/releases/download/7.3.27/foundationdb-clients_7.3.27-1_amd64.deb
+          sudo dpkg -i foundationdb-clients_7.3.27-1_amd64.deb
+      - name: Configure FDB cluster file
+        run: |
+          # Create cluster file pointing to the service container
+          echo "docker:docker@127.0.0.1:4500" > /tmp/fdb.cluster
+          echo "FDB_CLUSTER_FILE=/tmp/fdb.cluster" >> $GITHUB_ENV
+      - name: Wait for FDB to be ready
+        run: |
+          for i in {1..30}; do
+            if fdbcli -C /tmp/fdb.cluster --exec "status minimal" 2>/dev/null | grep -q "Healthy"; then
+              echo "FDB is ready!"
+              break
+            fi
+            echo "Waiting for FDB... ($i/30)"
+            sleep 2
+          done
+      - name: Run FDB persistence tests
+        run: cargo test -p kelpie-server --test fdb_persistence_test -- --include-ignored
+        env:
+          FDB_CLUSTER_FILE: /tmp/fdb.cluster
+          RUST_LOG: info
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest

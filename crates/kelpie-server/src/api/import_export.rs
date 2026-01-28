@@ -127,7 +127,7 @@ pub async fn import_agent<R: Runtime + 'static>(
 
     // Import messages if provided
     if !request.messages.is_empty() {
-        match import_messages(&state, &created.id, request.messages) {
+        match import_messages(&state, &created.id, request.messages).await {
             Ok(imported_count) => {
                 tracing::info!(
                     agent_id = %created.id,
@@ -158,7 +158,7 @@ pub async fn import_agent<R: Runtime + 'static>(
 /// Helper function to import messages into an agent
 ///
 /// TigerStyle: Separate function for clarity and error isolation.
-fn import_messages<R: Runtime + 'static>(
+async fn import_messages<R: Runtime + 'static>(
     state: &AppState<R>,
     agent_id: &str,
     messages: Vec<kelpie_server::models::MessageImportData>,
@@ -181,8 +181,8 @@ fn import_messages<R: Runtime + 'static>(
             created_at: Utc::now(),
         };
 
-        // Store message in agent state
-        if let Err(e) = state.add_message(agent_id, message) {
+        // Store message in agent state (with storage persistence)
+        if let Err(e) = state.add_message_async(agent_id, message).await {
             tracing::warn!(
                 agent_id = %agent_id,
                 error = ?e,
