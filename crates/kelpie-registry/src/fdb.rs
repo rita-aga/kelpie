@@ -17,6 +17,11 @@
 //!
 //! TigerStyle: Explicit lease management, FDB transactions for atomicity.
 
+// TODO: Migrate from deprecated Clock/SystemClock to TimeProvider/WallClockTime
+// This module uses the deprecated registry::Clock trait which should be replaced
+// with kelpie_core::io::TimeProvider. This is tracked technical debt.
+#![allow(deprecated)]
+
 use crate::error::{RegistryError, RegistryResult};
 use crate::heartbeat::{Heartbeat, HeartbeatConfig, HeartbeatTracker};
 use crate::node::{NodeId, NodeInfo, NodeStatus};
@@ -783,20 +788,18 @@ impl Registry for FdbRegistry {
             let txn = self.create_transaction()?;
 
             // Read existing placement INSIDE the transaction
-            let existing_placement = txn
-                .get(&actor_key, false)
-                .await
-                .map_err(|e| RegistryError::Internal {
-                    message: format!("read placement failed: {}", e),
-                })?;
+            let existing_placement =
+                txn.get(&actor_key, false)
+                    .await
+                    .map_err(|e| RegistryError::Internal {
+                        message: format!("read placement failed: {}", e),
+                    })?;
 
             // Check if actor is already registered
             if let Some(placement_data) = existing_placement {
-                let existing: ActorPlacement =
-                    serde_json::from_slice(placement_data.as_ref()).map_err(|e| {
-                        RegistryError::Internal {
-                            message: format!("deserialize placement failed: {}", e),
-                        }
+                let existing: ActorPlacement = serde_json::from_slice(placement_data.as_ref())
+                    .map_err(|e| RegistryError::Internal {
+                        message: format!("deserialize placement failed: {}", e),
                     })?;
 
                 if existing.node_id != node_id {
@@ -888,27 +891,25 @@ impl Registry for FdbRegistry {
             let txn = self.create_transaction()?;
 
             // Read existing placement and lease INSIDE the transaction
-            let existing_placement = txn
-                .get(&actor_key, false)
-                .await
-                .map_err(|e| RegistryError::Internal {
-                    message: format!("read placement failed: {}", e),
-                })?;
+            let existing_placement =
+                txn.get(&actor_key, false)
+                    .await
+                    .map_err(|e| RegistryError::Internal {
+                        message: format!("read placement failed: {}", e),
+                    })?;
 
-            let existing_lease = txn
-                .get(&lease_key, false)
-                .await
-                .map_err(|e| RegistryError::Internal {
-                    message: format!("read lease failed: {}", e),
-                })?;
+            let existing_lease =
+                txn.get(&lease_key, false)
+                    .await
+                    .map_err(|e| RegistryError::Internal {
+                        message: format!("read lease failed: {}", e),
+                    })?;
 
             // Check if actor is already claimed with valid lease
             if let Some(placement_data) = existing_placement {
-                let placement: ActorPlacement =
-                    serde_json::from_slice(placement_data.as_ref()).map_err(|e| {
-                        RegistryError::Internal {
-                            message: format!("deserialize placement failed: {}", e),
-                        }
+                let placement: ActorPlacement = serde_json::from_slice(placement_data.as_ref())
+                    .map_err(|e| RegistryError::Internal {
+                        message: format!("deserialize placement failed: {}", e),
                     })?;
 
                 if let Some(lease_data) = existing_lease {
