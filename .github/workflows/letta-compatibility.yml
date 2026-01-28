@@ -20,6 +20,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
+      # Install FDB client (required for compilation)
+      - name: Install FoundationDB client
+        run: |
+          wget -q https://github.com/apple/foundationdb/releases/download/7.3.27/foundationdb-clients_7.3.27-1_amd64.deb
+          sudo dpkg -i foundationdb-clients_7.3.27-1_amd64.deb
+
       # Build Kelpie Server
       - name: Build Kelpie Server
         run: cargo build --release -p kelpie-server
@@ -77,6 +83,12 @@ jobs:
       # Setup Rust
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+
+      # Install FDB client (required for compilation)
+      - name: Install FoundationDB client
+        run: |
+          wget -q https://github.com/apple/foundationdb/releases/download/7.3.27/foundationdb-clients_7.3.27-1_amd64.deb
+          sudo dpkg -i foundationdb-clients_7.3.27-1_amd64.deb
 
       # Build Kelpie Server
       - name: Build Kelpie Server
