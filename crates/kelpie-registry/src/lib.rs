@@ -34,6 +34,9 @@
 
 #[cfg(feature = "fdb")]
 mod cluster;
+mod cluster_storage;
+mod cluster_testable;
+mod cluster_types;
 mod error;
 #[cfg(feature = "fdb")]
 mod fdb;
@@ -45,9 +48,13 @@ mod placement;
 mod registry;
 
 #[cfg(feature = "fdb")]
-pub use cluster::{
-    ClusterMembership, ClusterNodeInfo, ELECTION_TIMEOUT_MS, PRIMARY_STEPDOWN_DELAY_MS,
+pub use cluster::{ClusterMembership, ELECTION_TIMEOUT_MS, PRIMARY_STEPDOWN_DELAY_MS};
+pub use cluster_storage::{ClusterStorageBackend, MockClusterStorage};
+pub use cluster_testable::{
+    TestableClusterMembership, ELECTION_TIMEOUT_MS as TESTABLE_ELECTION_TIMEOUT_MS,
+    PRIMARY_STEPDOWN_DELAY_MS as TESTABLE_PRIMARY_STEPDOWN_DELAY_MS,
 };
+pub use cluster_types::{ClusterNodeInfo, MigrationCandidate, MigrationQueue, MigrationResult};
 pub use error::{RegistryError, RegistryResult};
 #[cfg(feature = "fdb")]
 pub use fdb::{FdbRegistry, FdbRegistryConfig, Lease as FdbLease, LeaseRenewalTask};

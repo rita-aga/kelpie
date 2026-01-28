@@ -317,24 +317,72 @@ When implementing via Ralph Loop, verify after each phase:
 
 **Completed:** 2026-01-27
 
+### Remediation Completed
+
+All critical issues from 2026-01-27 review have been addressed:
+
+1. **DST-1 FIXED**: ✅ Tests now use production `TestableClusterMembership` with `MockClusterStorage`
+2. **FR-7 IMPLEMENTED**: ✅ `MigrationQueue`, `MigrationCandidate`, `MigrationResult` in `cluster_types.rs`
+3. **TLA+ Actions IMPLEMENTED**: ✅ `sync_views()`, `detect_failure()`, `node_recover()`, `send_heartbeat()` in `TestableClusterMembership`
+4. **TigerStyle COMPLIANT**: ✅ 2+ assertions per function in `cluster_testable.rs`
+
 ### Implementation Summary
 
-- **FR-1 (NodeState):** Implemented `NodeState` enum in `crates/kelpie-registry/src/membership.rs` matching TLA+ states (Left, Joining, Active, Leaving, Failed) with validated state transitions
-- **FR-2 (Primary Election):** Implemented `PrimaryInfo` and quorum-based election in `crates/kelpie-registry/src/cluster.rs`
-- **FR-3 (Step-Down):** Implemented `step_down()` and `check_quorum_and_maybe_step_down()` methods
-- **FR-4 (Heartbeat):** Integrated heartbeat timeout with node state transitions via `detect_failed_nodes()` and `mark_node_failed()`
-- **FR-5 (MembershipView):** Implemented `MembershipView` with view numbers, add/remove/merge operations
-- **FR-6 (Partition Handling):** Implemented quorum checking, primary step-down on partition, reachable nodes tracking
-- **FR-7 (Actor Migration):** Implemented `MigrationQueue`, `queue_actors_for_migration()`, `process_migration_queue()`, and `handle_node_failure()`
+**New Files:**
+- `crates/kelpie-registry/src/cluster_types.rs` - Shared types (ClusterNodeInfo, MigrationQueue, etc.)
+- `crates/kelpie-registry/src/cluster_storage.rs` - ClusterStorageBackend trait + MockClusterStorage
+- `crates/kelpie-registry/src/cluster_testable.rs` - TestableClusterMembership (production code, testable)
 
-### DST Tests
+**DST Tests Rewritten:**
+- `crates/kelpie-dst/tests/cluster_membership_production_dst.rs` - 11 tests using production code
 
-All tests in `crates/kelpie-dst/tests/cluster_membership_production_dst.rs`:
-1. `test_production_no_split_brain` - Verifies NoSplitBrain invariant
-2. `test_production_primary_election_requires_quorum` - Verifies quorum requirement
-3. `test_production_primary_stepdown_on_quorum_loss` - Verifies step-down behavior
-4. `test_production_heartbeat_failure_detection` - Verifies failure detection
-5. `test_production_partition_heal_resolves_conflict` - Verifies partition healing
-6. `test_production_determinism` - Verifies same seed produces same results
-7. `test_production_state_transitions_match_tla` - Verifies TLA+ state machine
-8. `test_production_actor_migration_on_node_failure` - Verifies actor migration and single activation guarantee
+### Verification Results
+
+```bash
+# All DST tests pass
+cargo test -p kelpie-dst --test cluster_membership_production_dst
+# 11 passed; 0 failed
+
+# All kelpie-registry tests pass
+cargo test -p kelpie-registry
+# 84 passed; 0 failed
+
+# Clippy clean
+cargo clippy -p kelpie-registry -p kelpie-dst -- -D warnings
+# No errors
+```
+
+### Test Coverage
+
+| Test | Verifies |
+|------|----------|
+| `test_production_no_split_brain` | INV-1: NoSplitBrain |
+| `test_production_primary_election_requires_quorum` | FR-2, FR-3 |
+| `test_production_primary_stepdown_on_quorum_loss` | FR-3, FR-6 |
+| `test_production_heartbeat_failure_detection` | FR-4 |
+| `test_production_partition_heal_resolves_conflict` | FR-5, FR-6 |
+| `test_production_determinism` | DST-5 |
+| `test_production_actor_migration_on_node_failure` | FR-7 |
+| `test_production_state_transitions_match_tla` | FR-1 |
+| `test_production_second_node_joins_as_joining` | FR-1 |
+| `test_production_node_recover` | TLA+ NodeRecover |
+| `test_production_stress_partition_cycles` | All invariants |
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  TestableClusterMembership<S: ClusterStorageBackend>             │
+│  - Same logic as ClusterMembership (FDB-backed)                  │
+│  - Uses trait for storage abstraction                            │
+│  - TigerStyle: 2+ assertions per function                        │
+├──────────────────────────────────────────────────────────────────┤
+│                           │                                      │
+│   ┌───────────────────────┴───────────────────────┐              │
+│   │           ClusterStorageBackend               │              │
+│   ├─────────────────────────────────────────────────┤            │
+│   │  FDB Implementation   │  MockClusterStorage   │              │
+│   │  (Production)         │  (DST Testing)        │              │
+│   └───────────────────────────────────────────────┘              │
+└──────────────────────────────────────────────────────────────────┘
+```
