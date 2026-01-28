@@ -3,6 +3,7 @@
 //! TigerStyle: Single registry for all tool types with explicit source tracking.
 
 use crate::llm::ToolDefinition;
+use crate::security::audit::SharedAuditLog;
 use kelpie_core::io::{TimeProvider, WallClockTime};
 use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
 use serde::{Deserialize, Serialize};
@@ -110,6 +111,9 @@ pub struct ToolExecutionContext {
     /// Dispatcher for invoking other agents (Issue #75)
     /// None if agent-to-agent calls are not available
     pub dispatcher: Option<Arc<dyn AgentDispatcher>>,
+    /// Audit log for recording tool executions
+    /// None if audit logging is disabled
+    pub audit_log: Option<SharedAuditLog>,
 }
 
 impl std::fmt::Debug for ToolExecutionContext {
@@ -120,6 +124,7 @@ impl std::fmt::Debug for ToolExecutionContext {
             .field("call_depth", &self.call_depth)
             .field("call_chain", &self.call_chain)
             .field("dispatcher", &self.dispatcher.is_some())
+            .field("audit_log", &self.audit_log.is_some())
             .finish()
     }
 }
@@ -576,11 +581,35 @@ impl UnifiedToolRegistry {
         };
 
         // Route to appropriate handler based on source
-        match &tool.source {
+        let result = match &tool.source {
             ToolSource::Builtin => self.execute_builtin(name, input, context, start_ms).await,
             ToolSource::Mcp { server } => self.execute_mcp(name, server, input, start_ms).await,
             ToolSource::Custom => self.execute_custom(name, input, context, start_ms).await,
+        };
+
+        // Audit logging: Record tool execution if audit log is available
+        if let Some(ctx) = context {
+            if let Some(audit_log) = &ctx.audit_log {
+                let input_str = serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string());
+                let agent_id = ctx.agent_id.as_deref().unwrap_or("unknown");
+
+                audit_log.write().await.log_tool_execution(
+                    name,
+                    agent_id,
+                    &input_str,
+                    &result.output,
+                    result.duration_ms,
+                    result.success,
+                    if result.success {
+                        None
+                    } else {
+                        Some(result.output.clone())
+                    },
+                );
+            }
         }
+
+        result
     }
 
     /// Execute a builtin tool

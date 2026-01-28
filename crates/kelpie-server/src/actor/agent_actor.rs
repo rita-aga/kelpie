@@ -398,6 +398,7 @@ impl AgentActor {
                         Arc::new(super::dispatcher_adapter::DispatcherAdapter::new(d.clone()))
                             as Arc<dyn crate::tools::AgentDispatcher>
                     }),
+                    ..Default::default()
                 };
                 let exec_result = self
                     .tool_registry

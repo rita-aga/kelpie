@@ -12,6 +12,7 @@ use crate::actor::{AgentActor, RealLlmAdapter};
 use crate::llm::LlmClient;
 use crate::models::ArchivalEntry;
 use crate::models::{AgentGroup, AgentState, BatchStatus, Block, Job, Message, Project};
+use crate::security::audit::{new_shared_log, SharedAuditLog};
 use crate::service::AgentService;
 use crate::storage::{AgentStorage, SimStorage, StorageError};
 use crate::tools::UnifiedToolRegistry;
@@ -115,6 +116,8 @@ struct AppStateInner<R: kelpie_core::Runtime> {
     agent_groups: RwLock<HashMap<String, crate::models::AgentGroup>>,
     /// Identities by ID
     identities: RwLock<HashMap<String, crate::models::Identity>>,
+    /// Audit log for forensics and compliance
+    audit_log: SharedAuditLog,
     /// Server start time for uptime calculation (monotonic ms)
     start_time_ms: u64,
     /// LLM client (None if no API key configured)
@@ -190,6 +193,8 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             (None, None, None)
         };
 
+        tracing::info!("Audit logging enabled");
+
         Self {
             inner: Arc::new(AppStateInner {
                 agent_service,
@@ -209,6 +214,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
+                audit_log: new_shared_log(),
                 start_time_ms: time.monotonic_ms(),
                 llm,
                 // Issue #74: Always create storage - SimStorage for in-memory mode
@@ -274,6 +280,8 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             (None, None, None)
         };
 
+        tracing::info!("Audit logging enabled");
+
         Self {
             inner: Arc::new(AppStateInner {
                 agent_service,
@@ -293,6 +301,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
+                audit_log: new_shared_log(),
                 start_time_ms: time.monotonic_ms(),
                 llm,
                 // Issue #74: Always create storage - SimStorage for in-memory mode
@@ -350,6 +359,8 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             (None, None, None)
         };
 
+        tracing::info!("Audit logging enabled");
+
         Self {
             inner: Arc::new(AppStateInner {
                 agent_service,
@@ -369,6 +380,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
+                audit_log: new_shared_log(),
                 start_time_ms: time.monotonic_ms(),
                 llm,
                 storage: Some(storage),
@@ -430,6 +442,8 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             (None, None, None)
         };
 
+        tracing::info!("Audit logging enabled");
+
         Self {
             inner: Arc::new(AppStateInner {
                 agent_service,
@@ -449,6 +463,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
+                audit_log: new_shared_log(),
                 start_time_ms: time.monotonic_ms(),
                 llm,
                 storage: Some(storage),
@@ -483,6 +498,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
+                audit_log: new_shared_log(),
                 start_time_ms: time.monotonic_ms(),
                 llm: Some(llm),
                 storage: Some(Arc::new(SimStorage::new())),
@@ -519,6 +535,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
+                audit_log: new_shared_log(),
                 start_time_ms: time.monotonic_ms(),
                 llm: None,
                 storage: Some(Arc::new(SimStorage::new())),
@@ -558,6 +575,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
+                audit_log: new_shared_log(),
                 start_time_ms: time.monotonic_ms(),
                 llm: None,
                 storage: Some(storage),
@@ -607,6 +625,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
+                audit_log: new_shared_log(),
                 start_time_ms: time.monotonic_ms(),
                 llm: None,
                 // Issue #74: Always create storage - SimStorage for tests
@@ -676,6 +695,11 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
     /// Get reference to the unified tool registry
     pub fn tool_registry(&self) -> &UnifiedToolRegistry {
         &self.inner.tool_registry
+    }
+
+    /// Get the audit log
+    pub fn audit_log(&self) -> &SharedAuditLog {
+        &self.inner.audit_log
     }
 
     /// Get server uptime in seconds

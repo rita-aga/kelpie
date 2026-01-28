@@ -476,6 +476,7 @@ pub async fn handle_message_request<R: Runtime + 'static>(
                                 std::sync::Arc::new(DispatcherAdapter::new(d.clone()))
                                     as std::sync::Arc<dyn AgentDispatcher>
                             }),
+                            audit_log: Some(state.audit_log().clone()),
                         };
                         let exec_result = state
                             .tool_registry()
@@ -1069,6 +1070,7 @@ async fn generate_sse_events<R: Runtime + 'static>(
                             std::sync::Arc::new(DispatcherAdapter::new(d.clone()))
                                 as std::sync::Arc<dyn AgentDispatcher>
                         }),
+                        audit_log: Some(state.audit_log().clone()),
                     };
                     let exec_result = state
                         .tool_registry()

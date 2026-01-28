@@ -360,6 +360,7 @@ pub fn create_nested_context(
         call_depth: parent_context.call_depth + 1,
         call_chain: new_chain,
         dispatcher: parent_context.dispatcher.clone(),
+        audit_log: parent_context.audit_log.clone(),
     };
 
     // Postcondition
@@ -387,7 +388,7 @@ mod tests {
             project_id: None,
             call_depth: 0,
             call_chain: vec!["agent-a".to_string()],
-            dispatcher: None,
+            ..Default::default()
         };
 
         // Agent B is not in chain, should succeed
@@ -401,7 +402,7 @@ mod tests {
             project_id: None,
             call_depth: 1,
             call_chain: vec!["agent-a".to_string(), "agent-b".to_string()],
-            dispatcher: None,
+            ..Default::default()
         };
 
         // Agent A is in chain, should fail
@@ -423,7 +424,7 @@ mod tests {
                 "d".to_string(),
                 "e".to_string(),
             ],
-            dispatcher: None,
+            ..Default::default()
         };
 
         // At max depth, should fail
@@ -439,7 +440,7 @@ mod tests {
             project_id: Some("project-1".to_string()),
             call_depth: 1,
             call_chain: vec!["agent-a".to_string()],
-            dispatcher: None,
+            ..Default::default()
         };
 
         let nested = create_nested_context(&parent, "agent-a");
