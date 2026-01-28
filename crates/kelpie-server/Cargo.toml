@@ -81,6 +81,9 @@ foundationdb = { workspace = true, optional = true }
 # Telegram bot (optional, with telegram feature)
 teloxide = { workspace = true, optional = true }
 
+# Constant-time comparison for security
+subtle = "2.5"
+
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
 kelpie-dst = { workspace = true }

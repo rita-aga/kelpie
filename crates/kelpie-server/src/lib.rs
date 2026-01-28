@@ -12,6 +12,7 @@ pub mod interface;
 pub mod llm;
 pub mod memory;
 pub mod models;
+pub mod security;
 pub mod service;
 pub mod state;
 pub mod storage;
