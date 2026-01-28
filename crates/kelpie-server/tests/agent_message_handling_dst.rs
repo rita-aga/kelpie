@@ -18,7 +18,8 @@ use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
 use kelpie_server::models::{AgentType, CreateAgentRequest, CreateBlockRequest};
 use kelpie_server::service::AgentService;
-use kelpie_server::tools::UnifiedToolRegistry;
+use kelpie_server::tools::{BuiltinToolHandler, UnifiedToolRegistry};
+use serde_json::json;
 use std::sync::Arc;
 
 /// Adapter to use SimLlmClient with actor LlmClient trait
@@ -122,16 +123,56 @@ impl LlmClient for SimLlmClientAdapter {
 }
 
 /// Create AgentService from simulation environment
-fn create_service<R: Runtime + 'static>(
+async fn create_service<R: Runtime + 'static>(
     runtime: R,
     sim_env: &SimEnvironment,
 ) -> Result<AgentService<R>> {
-    let sim_llm = SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone());
+    create_service_with_tool_probability(runtime, sim_env, 0.3).await
+}
+
+/// Create AgentService with specific tool call probability
+async fn create_service_with_tool_probability<R: Runtime + 'static>(
+    runtime: R,
+    sim_env: &SimEnvironment,
+    tool_call_probability: f64,
+) -> Result<AgentService<R>> {
+    let sim_llm = SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone())
+        .with_tool_call_probability(tool_call_probability);
     let llm_adapter: Arc<dyn LlmClient> = Arc::new(SimLlmClientAdapter {
         client: Arc::new(sim_llm),
     });
 
-    let actor = AgentActor::new(llm_adapter, Arc::new(UnifiedToolRegistry::new()));
+    // Create registry and register shell tool for testing
+    let registry = Arc::new(UnifiedToolRegistry::new());
+    let shell_handler: BuiltinToolHandler = Arc::new(|input: &serde_json::Value| {
+        let input = input.clone();
+        Box::pin(async move {
+            let command = input
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("echo 'no command'");
+            format!("Executed: {}", command)
+        })
+    });
+    registry
+        .register_builtin(
+            "shell",
+            "Execute a shell command for testing",
+            json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The command to execute"
+                    }
+                },
+                "required": ["command"]
+            }),
+            shell_handler,
+        )
+        .await;
+
+    let actor = AgentActor::new(llm_adapter, registry);
     let factory = Arc::new(CloneFactory::new(actor));
     let kv = Arc::new(sim_env.storage.clone());
 
@@ -164,7 +205,7 @@ async fn test_dst_agent_message_basic() {
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
             use kelpie_core::current_runtime;
-            let service = create_service(current_runtime(), &sim_env)?;
+            let service = create_service(current_runtime(), &sim_env).await?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -260,7 +301,9 @@ async fn test_dst_agent_message_with_tool_call() {
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
             use kelpie_core::current_runtime;
-            let service = create_service(current_runtime(), &sim_env)?;
+            // Use 100% tool call probability to guarantee tool calls for this test
+            let service =
+                create_service_with_tool_probability(current_runtime(), &sim_env, 1.0).await?;
 
             // Create agent with shell tool
             let request = CreateAgentRequest {
@@ -335,7 +378,7 @@ async fn test_dst_agent_message_with_storage_fault() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.3))
         .run_async(|sim_env| async move {
-            let service = create_service(current_runtime(), &sim_env)?;
+            let service = create_service(current_runtime(), &sim_env).await?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -407,7 +450,7 @@ async fn test_dst_agent_message_history() {
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
             use kelpie_core::current_runtime;
-            let service = create_service(current_runtime(), &sim_env)?;
+            let service = create_service(current_runtime(), &sim_env).await?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -486,7 +529,7 @@ async fn test_dst_agent_message_concurrent() {
         .run_async(|sim_env| async move {
             use kelpie_core::current_runtime;
             let runtime = current_runtime();
-            let service = create_service(runtime.clone(), &sim_env)?;
+            let service = create_service(runtime.clone(), &sim_env).await?;
 
             // Create 5 agents with different names
             let mut agent_ids = Vec::new();
