@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-use crate::models::{AgentGroup, Block, Identity, Job, MCPServer, Message, Project};
+use crate::models::{AgentGroup, ArchivalEntry, Block, Identity, Job, MCPServer, Message, Project};
 
 use super::traits::{AgentStorage, StorageError};
 use super::types::{AgentMetadata, CustomToolRecord, SessionState};
@@ -53,6 +53,8 @@ pub struct SimStorage {
     projects: RwLock<HashMap<String, Project>>,
     /// Jobs by ID
     jobs: RwLock<HashMap<String, Job>>,
+    /// Archival entries by agent_id -> entry_id -> ArchivalEntry
+    archival: RwLock<HashMap<String, HashMap<String, ArchivalEntry>>>,
     /// Optional fault injector for DST
     #[cfg(feature = "dst")]
     fault_injector: Option<Arc<FaultInjector>>,
@@ -72,6 +74,7 @@ impl SimStorage {
             identities: RwLock::new(HashMap::new()),
             projects: RwLock::new(HashMap::new()),
             jobs: RwLock::new(HashMap::new()),
+            archival: RwLock::new(HashMap::new()),
             #[cfg(feature = "dst")]
             fault_injector: None,
         }
@@ -91,6 +94,7 @@ impl SimStorage {
             identities: RwLock::new(HashMap::new()),
             projects: RwLock::new(HashMap::new()),
             jobs: RwLock::new(HashMap::new()),
+            archival: RwLock::new(HashMap::new()),
             fault_injector: Some(fault_injector),
         }
     }
@@ -207,6 +211,15 @@ impl AgentStorage for SimStorage {
                 .write()
                 .map_err(|_| Self::lock_error("delete_agent_messages"))?;
             messages.remove(id);
+        }
+
+        // Cascade: delete archival entries
+        {
+            let mut archival = self
+                .archival
+                .write()
+                .map_err(|_| Self::lock_error("delete_agent_archival"))?;
+            archival.remove(id);
         }
 
         Ok(())
@@ -848,6 +861,140 @@ impl AgentStorage for SimStorage {
             .read()
             .map_err(|_| Self::lock_error("list_jobs"))?;
         Ok(jobs.values().cloned().collect())
+    }
+
+    // =========================================================================
+    // Archival Memory Operations
+    // =========================================================================
+
+    async fn save_archival_entry(
+        &self,
+        agent_id: &str,
+        entry: &ArchivalEntry,
+    ) -> Result<(), StorageError> {
+        #[cfg(feature = "dst")]
+        if self.should_inject_fault("save_archival_entry") {
+            return Err(Self::fault_error("save_archival_entry"));
+        }
+
+        let mut archival = self
+            .archival
+            .write()
+            .map_err(|_| Self::lock_error("save_archival_entry"))?;
+        let agent_entries = archival.entry(agent_id.to_string()).or_default();
+        agent_entries.insert(entry.id.clone(), entry.clone());
+        Ok(())
+    }
+
+    async fn load_archival_entries(
+        &self,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ArchivalEntry>, StorageError> {
+        #[cfg(feature = "dst")]
+        if self.should_inject_fault("load_archival_entries") {
+            return Err(Self::fault_error("load_archival_entries"));
+        }
+
+        let archival = self
+            .archival
+            .read()
+            .map_err(|_| Self::lock_error("load_archival_entries"))?;
+        let entries: Vec<ArchivalEntry> = archival
+            .get(agent_id)
+            .map(|m| m.values().take(limit).cloned().collect())
+            .unwrap_or_default();
+        Ok(entries)
+    }
+
+    async fn get_archival_entry(
+        &self,
+        agent_id: &str,
+        entry_id: &str,
+    ) -> Result<Option<ArchivalEntry>, StorageError> {
+        #[cfg(feature = "dst")]
+        if self.should_inject_fault("get_archival_entry") {
+            return Err(Self::fault_error("get_archival_entry"));
+        }
+
+        let archival = self
+            .archival
+            .read()
+            .map_err(|_| Self::lock_error("get_archival_entry"))?;
+        let entry = archival
+            .get(agent_id)
+            .and_then(|m| m.get(entry_id).cloned());
+        Ok(entry)
+    }
+
+    async fn delete_archival_entry(
+        &self,
+        agent_id: &str,
+        entry_id: &str,
+    ) -> Result<(), StorageError> {
+        #[cfg(feature = "dst")]
+        if self.should_inject_fault("delete_archival_entry") {
+            return Err(Self::fault_error("delete_archival_entry"));
+        }
+
+        let mut archival = self
+            .archival
+            .write()
+            .map_err(|_| Self::lock_error("delete_archival_entry"))?;
+        if let Some(agent_entries) = archival.get_mut(agent_id) {
+            agent_entries.remove(entry_id);
+        }
+        Ok(())
+    }
+
+    async fn delete_archival_entries(&self, agent_id: &str) -> Result<(), StorageError> {
+        #[cfg(feature = "dst")]
+        if self.should_inject_fault("delete_archival_entries") {
+            return Err(Self::fault_error("delete_archival_entries"));
+        }
+
+        let mut archival = self
+            .archival
+            .write()
+            .map_err(|_| Self::lock_error("delete_archival_entries"))?;
+        archival.remove(agent_id);
+        Ok(())
+    }
+
+    async fn search_archival_entries(
+        &self,
+        agent_id: &str,
+        query: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ArchivalEntry>, StorageError> {
+        #[cfg(feature = "dst")]
+        if self.should_inject_fault("search_archival_entries") {
+            return Err(Self::fault_error("search_archival_entries"));
+        }
+
+        let archival = self
+            .archival
+            .read()
+            .map_err(|_| Self::lock_error("search_archival_entries"))?;
+
+        let entries: Vec<ArchivalEntry> = archival
+            .get(agent_id)
+            .map(|m| {
+                m.values()
+                    .filter(|e| {
+                        // If no query, return all entries
+                        // If query, filter by content containing query (case-insensitive)
+                        query.map_or(true, |q| {
+                            e.content.to_lowercase().contains(&q.to_lowercase())
+                        })
+                    })
+                    .take(limit)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(entries)
     }
 }
 

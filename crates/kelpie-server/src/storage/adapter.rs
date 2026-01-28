@@ -19,7 +19,7 @@ use kelpie_core::ActorId;
 use kelpie_storage::ActorKV;
 use std::sync::Arc;
 
-use crate::models::{Block, Message};
+use crate::models::{ArchivalEntry, Block, Message};
 
 use super::traits::{AgentStorage, StorageError};
 use super::types::{AgentMetadata, CustomToolRecord, SessionState};
@@ -203,6 +203,19 @@ impl KvAdapter {
             key.len()
         );
         key.into_bytes()
+    }
+
+    /// Generate key for archival entry: `archival:{entry_id}`
+    fn archival_key(_agent_id: &str, entry_id: &str) -> Vec<u8> {
+        assert!(!entry_id.is_empty(), "entry id cannot be empty");
+        // TigerStyle: Archival entries are stored in the agent's namespace
+        format!("archival:{}", entry_id).into_bytes()
+    }
+
+    /// Generate prefix for listing archival entries: `archival:`
+    fn archival_prefix(_agent_id: &str) -> Vec<u8> {
+        // TigerStyle: Archival entries are stored in the agent's namespace with prefix "archival:"
+        b"archival:".to_vec()
     }
 
     // =========================================================================
@@ -1286,6 +1299,165 @@ impl AgentStorage for KvAdapter {
         }
 
         Ok(jobs)
+    }
+
+    // =========================================================================
+    // Archival Memory Operations
+    // =========================================================================
+
+    async fn save_archival_entry(
+        &self,
+        agent_id: &str,
+        entry: &ArchivalEntry,
+    ) -> Result<(), StorageError> {
+        // Preconditions
+        assert!(!agent_id.is_empty(), "agent id cannot be empty");
+        assert!(!entry.id.is_empty(), "entry id cannot be empty");
+
+        let key = Self::archival_key(agent_id, &entry.id);
+        let value = Self::serialize(entry)?;
+
+        self.kv
+            .set(&self.actor_id, &key, &value)
+            .await
+            .map_err(|e| Self::map_kv_error("save_archival_entry", e))?;
+
+        Ok(())
+    }
+
+    async fn load_archival_entries(
+        &self,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ArchivalEntry>, StorageError> {
+        // Preconditions
+        assert!(!agent_id.is_empty(), "agent id cannot be empty");
+        assert!(limit > 0, "limit must be positive");
+
+        let prefix = Self::archival_prefix(agent_id);
+        let pairs = self
+            .kv
+            .scan_prefix(&self.actor_id, &prefix)
+            .await
+            .map_err(|e| Self::map_kv_error("load_archival_entries", e))?;
+
+        let mut entries = Vec::with_capacity(pairs.len().min(limit));
+        for (_key, value) in pairs {
+            if entries.len() >= limit {
+                break;
+            }
+            let entry: ArchivalEntry = Self::deserialize(&value)?;
+            entries.push(entry);
+        }
+
+        // Sort by creation time (most recent first)
+        entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+        Ok(entries)
+    }
+
+    async fn get_archival_entry(
+        &self,
+        agent_id: &str,
+        entry_id: &str,
+    ) -> Result<Option<ArchivalEntry>, StorageError> {
+        // Preconditions
+        assert!(!agent_id.is_empty(), "agent id cannot be empty");
+        assert!(!entry_id.is_empty(), "entry id cannot be empty");
+
+        let key = Self::archival_key(agent_id, entry_id);
+
+        let bytes = self
+            .kv
+            .get(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("get_archival_entry", e))?;
+
+        match bytes {
+            Some(b) => {
+                let entry = Self::deserialize(&b)?;
+                Ok(Some(entry))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_archival_entry(
+        &self,
+        agent_id: &str,
+        entry_id: &str,
+    ) -> Result<(), StorageError> {
+        // Preconditions
+        assert!(!agent_id.is_empty(), "agent id cannot be empty");
+        assert!(!entry_id.is_empty(), "entry id cannot be empty");
+
+        let key = Self::archival_key(agent_id, entry_id);
+
+        self.kv
+            .delete(&self.actor_id, &key)
+            .await
+            .map_err(|e| Self::map_kv_error("delete_archival_entry", e))?;
+
+        Ok(())
+    }
+
+    async fn delete_archival_entries(&self, agent_id: &str) -> Result<(), StorageError> {
+        // Preconditions
+        assert!(!agent_id.is_empty(), "agent id cannot be empty");
+
+        let prefix = Self::archival_prefix(agent_id);
+        let keys = self
+            .kv
+            .list_keys(&self.actor_id, &prefix)
+            .await
+            .map_err(|e| Self::map_kv_error("delete_archival_entries", e))?;
+
+        for key in keys {
+            let _ = self.kv.delete(&self.actor_id, &key).await; // Continue on error
+        }
+
+        Ok(())
+    }
+
+    async fn search_archival_entries(
+        &self,
+        agent_id: &str,
+        query: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ArchivalEntry>, StorageError> {
+        // Preconditions
+        assert!(!agent_id.is_empty(), "agent id cannot be empty");
+        assert!(limit > 0, "limit must be positive");
+
+        let prefix = Self::archival_prefix(agent_id);
+        let pairs = self
+            .kv
+            .scan_prefix(&self.actor_id, &prefix)
+            .await
+            .map_err(|e| Self::map_kv_error("search_archival_entries", e))?;
+
+        let mut entries = Vec::new();
+        for (_key, value) in pairs {
+            let entry: ArchivalEntry = Self::deserialize(&value)?;
+
+            // Filter by query if provided (case-insensitive substring match)
+            let matches = match query {
+                Some(q) => entry.content.to_lowercase().contains(&q.to_lowercase()),
+                None => true,
+            };
+
+            if matches {
+                entries.push(entry);
+                if entries.len() >= limit {
+                    break;
+                }
+            }
+        }
+
+        // Sort by creation time (most recent first)
+        entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+        Ok(entries)
     }
 }
 
