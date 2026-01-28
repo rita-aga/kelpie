@@ -153,6 +153,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
 
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
         let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
+        let audit_log = new_shared_log();
 
         // Phase 6.4: Create AgentService and Dispatcher for production
         let (agent_service, dispatcher, shutdown_tx) = if let Some(ref llm_client) = llm {
@@ -162,8 +163,9 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             let llm_adapter: Arc<dyn crate::actor::LlmClient> =
                 Arc::new(RealLlmAdapter::new(llm_client.clone()));
 
-            // Create AgentActor
-            let actor = AgentActor::new(llm_adapter, tool_registry.clone());
+            // Create AgentActor with audit logging
+            let actor = AgentActor::new(llm_adapter, tool_registry.clone())
+                .with_audit_log(audit_log.clone());
 
             // Create CloneFactory for dispatcher
             let factory = Arc::new(CloneFactory::new(actor));
@@ -214,7 +216,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
-                audit_log: new_shared_log(),
+                audit_log,
                 start_time_ms: time.monotonic_ms(),
                 llm,
                 // Issue #74: Always create storage - SimStorage for in-memory mode
@@ -240,6 +242,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
 
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
         let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
+        let audit_log = new_shared_log();
 
         // Phase 6.4: Create AgentService and Dispatcher for production
         let (agent_service, dispatcher, shutdown_tx) = if let Some(ref llm_client) = llm {
@@ -249,8 +252,9 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             let llm_adapter: Arc<dyn crate::actor::LlmClient> =
                 Arc::new(RealLlmAdapter::new(llm_client.clone()));
 
-            // Create AgentActor
-            let actor = AgentActor::new(llm_adapter, tool_registry.clone());
+            // Create AgentActor with audit logging
+            let actor = AgentActor::new(llm_adapter, tool_registry.clone())
+                .with_audit_log(audit_log.clone());
 
             // Create CloneFactory for dispatcher
             let factory = Arc::new(CloneFactory::new(actor));
@@ -301,7 +305,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
-                audit_log: new_shared_log(),
+                audit_log,
                 start_time_ms: time.monotonic_ms(),
                 llm,
                 // Issue #74: Always create storage - SimStorage for in-memory mode
@@ -319,6 +323,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
         let llm = LlmClient::from_env();
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
         let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
+        let audit_log = new_shared_log();
 
         // Phase 6.4: Create AgentService and Dispatcher for production
         let (agent_service, dispatcher, shutdown_tx) = if let Some(ref llm_client) = llm {
@@ -328,8 +333,9 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             let llm_adapter: Arc<dyn crate::actor::LlmClient> =
                 Arc::new(RealLlmAdapter::new(llm_client.clone()));
 
-            // Create AgentActor
-            let actor = AgentActor::new(llm_adapter, tool_registry.clone());
+            // Create AgentActor with audit logging
+            let actor = AgentActor::new(llm_adapter, tool_registry.clone())
+                .with_audit_log(audit_log.clone());
 
             // Create CloneFactory for dispatcher
             let factory = Arc::new(CloneFactory::new(actor));
@@ -380,7 +386,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
-                audit_log: new_shared_log(),
+                audit_log,
                 start_time_ms: time.monotonic_ms(),
                 llm,
                 storage: Some(storage),
@@ -402,6 +408,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
         let llm = LlmClient::from_env();
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
         let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
+        let audit_log = new_shared_log();
 
         // Phase 6.4: Create AgentService and Dispatcher for production (otel)
         let (agent_service, dispatcher, shutdown_tx) = if let Some(ref llm_client) = llm {
@@ -411,8 +418,9 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             let llm_adapter: Arc<dyn crate::actor::LlmClient> =
                 Arc::new(RealLlmAdapter::new(llm_client.clone()));
 
-            // Create AgentActor
-            let actor = AgentActor::new(llm_adapter, tool_registry.clone());
+            // Create AgentActor with audit logging
+            let actor = AgentActor::new(llm_adapter, tool_registry.clone())
+                .with_audit_log(audit_log.clone());
 
             // Create CloneFactory for dispatcher
             let factory = Arc::new(CloneFactory::new(actor));
@@ -463,7 +471,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
                 identities: RwLock::new(HashMap::new()),
-                audit_log: new_shared_log(),
+                audit_log,
                 start_time_ms: time.monotonic_ms(),
                 llm,
                 storage: Some(storage),

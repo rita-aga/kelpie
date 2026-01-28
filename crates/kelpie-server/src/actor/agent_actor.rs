@@ -8,6 +8,7 @@ use crate::models::{
     AgentState, CreateAgentRequest, LettaToolCall, Message, MessageRole, ToolCall,
     UpdateAgentRequest, UsageStats,
 };
+use crate::security::audit::SharedAuditLog;
 use crate::tools::{parse_pause_signal, ToolExecutionContext, ToolSignal, UnifiedToolRegistry};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -31,6 +32,9 @@ pub struct AgentActor {
     /// Optional dispatcher for inter-actor communication (e.g., RegistryActor registration)
     /// If None, self-registration is skipped (backward compatible)
     dispatcher: Option<kelpie_runtime::DispatcherHandle<kelpie_core::TokioRuntime>>,
+    /// Audit log for recording tool executions
+    /// If None, audit logging is disabled for this actor
+    audit_log: Option<SharedAuditLog>,
 }
 
 impl AgentActor {
@@ -40,6 +44,7 @@ impl AgentActor {
             llm,
             tool_registry,
             dispatcher: None,
+            audit_log: None,
         }
     }
 
@@ -49,6 +54,12 @@ impl AgentActor {
         dispatcher: kelpie_runtime::DispatcherHandle<kelpie_core::TokioRuntime>,
     ) -> Self {
         self.dispatcher = Some(dispatcher);
+        self
+    }
+
+    /// Create AgentActor with audit logging enabled
+    pub fn with_audit_log(mut self, audit_log: SharedAuditLog) -> Self {
+        self.audit_log = Some(audit_log);
         self
     }
 
@@ -398,7 +409,7 @@ impl AgentActor {
                         Arc::new(super::dispatcher_adapter::DispatcherAdapter::new(d.clone()))
                             as Arc<dyn crate::tools::AgentDispatcher>
                     }),
-                    ..Default::default()
+                    audit_log: self.audit_log.clone(),
                 };
                 let exec_result = self
                     .tool_registry
