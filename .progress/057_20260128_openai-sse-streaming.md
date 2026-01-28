@@ -67,7 +67,7 @@ Add Server-Sent Events (SSE) streaming support for OpenAI API, matching the exis
 - [x] Research complete
 - [x] Implementation
 - [x] Testing (5 unit tests added)
-- [ ] PR created
+- [x] PR created: https://github.com/rita-aga/kelpie/pull/82
 
 ## Implementation Summary
 
