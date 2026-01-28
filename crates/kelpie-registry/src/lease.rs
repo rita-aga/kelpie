@@ -166,11 +166,7 @@ impl Lease {
 
     /// Get remaining time on the lease in milliseconds
     pub fn remaining_ms(&self, now_ms: u64) -> u64 {
-        if self.expiry_ms > now_ms {
-            self.expiry_ms - now_ms
-        } else {
-            0
-        }
+        self.expiry_ms.saturating_sub(now_ms)
     }
 }
 

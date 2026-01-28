@@ -28,7 +28,7 @@ use std::sync::Arc;
 // =============================================================================
 
 /// Maximum depth for nested agent calls
-/// TLA+ invariant: DepthBounded ensures Len(callStack[a]) <= MAX_DEPTH
+/// TLA+ invariant: DepthBounded ensures `Len(callStack[a]) <= MAX_DEPTH`
 pub const AGENT_CALL_DEPTH_MAX: u32 = 5;
 
 /// Default timeout for agent calls in milliseconds (30 seconds)

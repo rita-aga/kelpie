@@ -11,7 +11,7 @@
 //! - `agents/{id}` -> JSON-serialized AgentMetadata
 //! - `sessions/{agent_id}/{session_id}` -> JSON-serialized SessionState
 //! - `messages/{agent_id}/{message_id}` -> JSON-serialized Message
-//! - `blocks/{agent_id}` -> JSON-serialized Vec<Block>
+//! - `blocks/{agent_id}` -> JSON-serialized `Vec<Block>`
 //! - `tools/{name}` -> JSON-serialized CustomToolRecord
 
 use async_trait::async_trait;

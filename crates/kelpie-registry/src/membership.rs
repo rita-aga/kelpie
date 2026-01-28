@@ -49,10 +49,11 @@ pub const HEARTBEAT_FAILURE_THRESHOLD: u64 = 5;
 ///                                         ▼                                      │
 ///                                      Failed ──recover─────────────────────────┘
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeState {
     /// Node not in cluster (initial and final state)
+    #[default]
     Left,
     /// Node is joining the cluster
     Joining,
@@ -120,12 +121,6 @@ impl NodeState {
             new_state
         );
         *self = new_state;
-    }
-}
-
-impl Default for NodeState {
-    fn default() -> Self {
-        Self::Left
     }
 }
 
