@@ -93,7 +93,8 @@ impl LlmClient for MockStreamingLlmClient {
 /// - Tokens arrive incrementally (one per chunk)
 /// - Order preserved
 /// - Stream ends with Done chunk
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_client_token_streaming() {
     let config = SimConfig::new(6001);
 
@@ -163,7 +164,8 @@ async fn test_dst_llm_client_token_streaming() {
 /// - Dropping stream consumer stops iteration
 /// - No resource leak
 /// - Clean shutdown
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_client_cancellation() {
     let config = SimConfig::new(6002);
 
@@ -210,7 +212,8 @@ async fn test_dst_llm_client_cancellation() {
 /// - Stream completes despite StorageLatency faults
 /// - Tokens arrive in order
 /// - No tokens lost
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_client_with_storage_delay() {
     let config = SimConfig::new(6003);
 
@@ -270,7 +273,8 @@ async fn test_dst_llm_client_with_storage_delay() {
 /// - Multiple clients can stream concurrently
 /// - Streams don't interfere with each other
 /// - All streams complete successfully
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_client_concurrent() {
     let config = SimConfig::new(6004);
 
@@ -339,7 +343,8 @@ async fn test_dst_llm_client_concurrent() {
 /// - Stream completes despite multiple faults
 /// - Tokens arrive in order
 /// - Graceful degradation
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_client_comprehensive_faults() {
     let config = SimConfig::new(6005);
 

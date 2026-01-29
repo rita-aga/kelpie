@@ -49,7 +49,8 @@ fn create_sse_config(url: &str) -> MCPServerConfig {
 // Basic CRUD Tests
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_create_basic() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -86,7 +87,8 @@ async fn test_dst_mcp_server_create_basic() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_list_empty() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -106,7 +108,8 @@ async fn test_dst_mcp_server_list_empty() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_list_multiple() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -141,7 +144,8 @@ async fn test_dst_mcp_server_list_multiple() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_update() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -182,7 +186,8 @@ async fn test_dst_mcp_server_update() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_delete() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -224,7 +229,8 @@ async fn test_dst_mcp_server_delete() {
 // Fault Injection Tests
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_create_with_storage_faults() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -266,7 +272,8 @@ async fn test_dst_mcp_server_create_with_storage_faults() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_update_with_faults() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -304,7 +311,8 @@ async fn test_dst_mcp_server_update_with_faults() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_delete_idempotent() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -336,7 +344,8 @@ async fn test_dst_mcp_server_delete_idempotent() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_concurrent_creates() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -390,7 +399,8 @@ async fn test_dst_mcp_server_concurrent_creates() {
 // Edge Cases
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_update_nonexistent() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -416,7 +426,8 @@ async fn test_dst_mcp_server_update_nonexistent() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_get_nonexistent() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);

@@ -198,7 +198,8 @@ async fn create_service_with_tool_probability<R: Runtime + 'static>(
 /// - LLM processes message
 /// - Response returned with message history
 /// - User message and assistant response stored in history
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_message_basic() {
     let config = SimConfig::new(3001);
 
@@ -294,7 +295,8 @@ async fn test_dst_agent_message_basic() {
 /// - Tool results fed back to LLM
 /// - Loop continues until no more tool calls (max 5 iterations)
 /// - All tool calls/results in message history
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_message_with_tool_call() {
     let config = SimConfig::new(3002);
 
@@ -371,7 +373,8 @@ async fn test_dst_agent_message_with_tool_call() {
 /// - System retries or handles gracefully
 /// - No data corruption
 /// - Messages still delivered
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_message_with_storage_fault() {
     let config = SimConfig::new(3003);
 
@@ -443,7 +446,8 @@ async fn test_dst_agent_message_with_storage_fault() {
 /// - State persisted to KV storage
 /// - After deactivation + reactivation, history is loaded
 /// - Subsequent messages see full history
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_message_history() {
     let config = SimConfig::new(3004);
 
@@ -521,7 +525,8 @@ async fn test_dst_agent_message_history() {
 /// - No message mixing between agents
 /// - Each agent maintains its own history
 /// - All responses are correct
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_message_concurrent() {
     let config = SimConfig::new(3005);
 

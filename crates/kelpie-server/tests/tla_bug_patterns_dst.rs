@@ -50,7 +50,8 @@ fn print_test_header(test_name: &str, tla_pattern: &str) {
 /// ```
 ///
 /// Expected outcome: SingleActivation violation detected.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_toctou_race_dual_activation() {
     print_test_header(
         "test_toctou_race_dual_activation",
@@ -115,7 +116,8 @@ async fn test_toctou_race_dual_activation() {
 /// ```
 ///
 /// Expected outcome: SingleActivation violation (zombie + new activation).
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_zombie_actor_reclaim_race() {
     print_test_header(
         "test_zombie_actor_reclaim_race",
@@ -161,7 +163,8 @@ async fn test_zombie_actor_reclaim_race() {
 /// ```
 ///
 /// Expected outcome: PartialCommit violation detected.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_partial_commit_detected() {
     print_test_header(
         "test_partial_commit_detected",
@@ -224,7 +227,8 @@ async fn test_partial_commit_detected() {
 /// ```
 ///
 /// Expected outcome: NO capacity violation.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_concurrent_registration_respects_capacity() {
     print_test_header(
         "test_concurrent_registration_respects_capacity",
@@ -258,7 +262,8 @@ async fn test_concurrent_registration_respects_capacity() {
 /// This tests the SAFE behavior from TLA+ TryClaimActor_Atomic.
 ///
 /// Expected outcome: Exactly one node gets the actor, NO violations.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_safe_concurrent_claim_no_violations() {
     print_test_header(
         "test_safe_concurrent_claim_no_violations",
@@ -294,7 +299,8 @@ async fn test_safe_concurrent_claim_no_violations() {
 /// Integration test: Run all TLA+ bug patterns in sequence.
 ///
 /// This provides a quick sanity check that all patterns are working.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_all_tla_bug_patterns_integration() {
     print_test_header(
         "test_all_tla_bug_patterns_integration",

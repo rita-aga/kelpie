@@ -11,8 +11,6 @@
 //!
 //! ALL TESTS MUST FAIL INITIALLY (AppState doesn't have service yet)
 #![cfg(feature = "dst")]
-// Allow tokio::time::timeout in tests - needed for timeout handling
-#![allow(clippy::disallowed_methods)]
 
 use async_trait::async_trait;
 use kelpie_core::{current_runtime, Result, Runtime};
@@ -34,7 +32,8 @@ use std::time::Duration;
 ///
 /// ASSERTION: Either AppState creation succeeds fully OR fails cleanly
 /// No partial state where AppState exists but service is broken
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_appstate_init_crash() {
     let config = SimConfig::new(5001);
 
@@ -151,7 +150,8 @@ async fn test_appstate_init_crash() {
 /// FAULT: 40% CrashAfterWrite during actor operations
 ///
 /// ASSERTION: No duplicate agents, concurrent creates are serialized
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_concurrent_agent_creation_race() {
     let config = SimConfig::new(5002);
 
@@ -269,7 +269,8 @@ async fn test_concurrent_agent_creation_race() {
 ///
 /// ASSERTION: In-flight requests either complete OR fail with clear error
 /// No silent drops
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_shutdown_with_inflight_requests() {
     let config = SimConfig::new(5003);
 
@@ -335,7 +336,7 @@ async fn test_shutdown_with_inflight_requests() {
             let mut silent_drops = 0;
 
             for (i, handle) in handles {
-                match tokio::time::timeout(Duration::from_secs(1), handle).await {
+                match current_runtime().timeout(Duration::from_secs(1), handle).await {
                     Ok(Ok(Ok(_agent))) => {
                         completed += 1;
                         println!("Request {} completed successfully", i);
@@ -389,7 +390,8 @@ async fn test_shutdown_with_inflight_requests() {
 ///
 /// ASSERTION: Requests after shutdown fail with ShuttingDown error
 /// No panics, no silent acceptance
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_service_invoke_during_shutdown() {
     let config = SimConfig::new(5004);
 
@@ -487,7 +489,8 @@ async fn test_service_invoke_during_shutdown() {
 ///
 /// ASSERTION: create → immediate get works OR recoverable via WAL
 /// After calling recover(), agent should be retrievable
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_first_invoke_after_creation() {
     let config = SimConfig::new(5005);
 

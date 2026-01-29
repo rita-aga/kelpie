@@ -77,7 +77,8 @@ fn create_test_agent(name: &str) -> AgentState {
 ///
 /// Old behavior (TOCTOU bug): get_block_by_label (read) -> update_block_by_label (write)
 /// New behavior (atomic): append_or_create_block_by_label (single write)
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_core_memory_append_with_block_read_fault() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -121,7 +122,8 @@ async fn test_core_memory_append_with_block_read_fault() {
     );
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_core_memory_append_with_block_write_fault() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -165,7 +167,8 @@ async fn test_core_memory_append_with_block_write_fault() {
     );
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_core_memory_replace_with_read_fault() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -208,7 +211,8 @@ async fn test_core_memory_replace_with_read_fault() {
     );
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_archival_memory_insert_with_write_fault() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -251,7 +255,8 @@ async fn test_archival_memory_insert_with_write_fault() {
     );
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_archival_memory_search_with_read_fault() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -294,7 +299,8 @@ async fn test_archival_memory_search_with_read_fault() {
     );
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_conversation_search_with_read_fault() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -341,7 +347,8 @@ async fn test_conversation_search_with_read_fault() {
 // Probabilistic Fault Tests
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_memory_operations_with_probabilistic_faults() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -424,7 +431,8 @@ async fn test_memory_operations_with_probabilistic_faults() {
 /// - Thread B: creates ANOTHER block "facts" (DUPLICATE!)
 ///
 /// This test runs concurrent appends to the same label to expose the race.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_core_memory_append_toctou_race() {
     let seed = get_seed();
 
@@ -506,7 +514,8 @@ async fn test_core_memory_append_toctou_race() {
 // =============================================================================
 
 /// Test that the system recovers gracefully after transient faults
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_memory_tools_recovery_after_fault() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);
@@ -594,7 +603,8 @@ async fn test_memory_tools_recovery_after_fault() {
 // Integration Test - Full Memory Operations Under Faults
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_full_memory_workflow_under_faults() {
     let seed = get_seed();
     let rng = DeterministicRng::new(seed);

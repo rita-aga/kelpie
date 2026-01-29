@@ -18,7 +18,8 @@ use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
 /// With real streaming, we should get multiple chunks.
 ///
 /// THIS TEST WILL FAIL (or show different behavior) once we implement real streaming.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_real_adapter_chunk_count() {
     let config = SimConfig::new(7001);
 
@@ -59,7 +60,8 @@ async fn test_dst_real_adapter_chunk_count() {
 /// - Stream should complete despite StorageLatency faults
 /// - Fault injection at 50% probability
 /// - All data arrives eventually
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_real_adapter_fault_resilience() {
     let config = SimConfig::new(7002);
 
@@ -96,7 +98,8 @@ async fn test_dst_real_adapter_fault_resilience() {
 /// - No data loss in conversion
 ///
 /// THIS TEST WILL FAIL if conversion is wrong in RealLlmAdapter.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_stream_delta_to_chunk_conversion() {
     let config = SimConfig::new(7003);
 
@@ -160,7 +163,8 @@ async fn test_dst_stream_delta_to_chunk_conversion() {
 /// - Multiple streams can run concurrently
 /// - No interference between streams
 /// - All complete successfully with faults active
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_concurrent_streaming_with_faults() {
     let config = SimConfig::new(7004);
 
@@ -216,7 +220,8 @@ async fn test_dst_concurrent_streaming_with_faults() {
 /// - LLM errors are wrapped with context
 /// - Error messages are preserved
 /// - Errors use Internal error type
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_streaming_error_propagation() {
     let config = SimConfig::new(7005);
 

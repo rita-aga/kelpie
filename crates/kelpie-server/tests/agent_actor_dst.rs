@@ -185,7 +185,8 @@ async fn invoke_deserialize<T: serde::de::DeserializeOwned, R: Runtime>(
 /// - Create agent → actor activates
 /// - State loads from storage (or creates if new)
 /// - Actor is ready to handle messages
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_actor_activation_basic() {
     let config = SimConfig::new(42);
 
@@ -239,7 +240,8 @@ async fn test_dst_agent_actor_activation_basic() {
 /// - 20% storage read fault rate
 /// - Actor should handle gracefully (retry or return error)
 /// - Should not panic or corrupt state
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_actor_activation_with_storage_fail() {
     let config = SimConfig::new(12345);
 
@@ -305,7 +307,8 @@ async fn test_dst_agent_actor_activation_with_storage_fail() {
 /// - Deactivate actor → state written to storage
 /// - Reactivate actor → state loaded correctly
 /// - All data preserved across activation cycles
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_actor_deactivation_persists_state() {
     let config = SimConfig::new(54321);
 
@@ -365,7 +368,8 @@ async fn test_dst_agent_actor_deactivation_persists_state() {
 /// - 20% storage write fault rate
 /// - Actor should retry or fail gracefully
 /// - State should remain consistent (no partial writes)
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_actor_deactivation_with_storage_fail() {
     let config = SimConfig::new(99999);
 
@@ -450,7 +454,8 @@ async fn test_dst_agent_actor_deactivation_with_storage_fail() {
 /// - CrashAfterWrite fault → actor crashes after writing
 /// - State should be consistent (transaction committed or rolled back)
 /// - Actor can be reactivated and continue
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_actor_crash_recovery() {
     let config = SimConfig::new(77777);
 
@@ -524,7 +529,8 @@ async fn test_dst_agent_actor_crash_recovery() {
 /// - core_memory_append → updates block in state
 /// - State persisted to storage
 /// - Next message sees updated block in prompt
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_memory_tools() {
     let config = SimConfig::new(55555);
 
@@ -607,7 +613,8 @@ struct MessageResponse {
 /// - Send user message → actor builds prompt → calls LLM → returns response
 /// - Message stored in conversation history
 /// - State updated correctly
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_handle_message_basic() {
     let config = SimConfig::new(11111);
 
@@ -672,7 +679,8 @@ async fn test_dst_agent_handle_message_basic() {
 /// - LlmTimeout fault → actor returns error gracefully
 /// - State remains consistent
 /// - Agent can retry on next message
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_handle_message_with_llm_timeout() {
     let config = SimConfig::new(22222);
 
@@ -751,7 +759,8 @@ async fn test_dst_agent_handle_message_with_llm_timeout() {
 /// - LlmFailure fault → actor returns error gracefully
 /// - Error message is informative
 /// - Agent state not corrupted
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_handle_message_with_llm_failure() {
     let config = SimConfig::new(33333);
 
@@ -834,7 +843,8 @@ async fn test_dst_agent_handle_message_with_llm_failure() {
 /// - LLM requests tool → actor executes tool → returns result to LLM
 /// - Tool result included in next LLM call
 /// - Conversation history includes tool calls
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_tool_execution() {
     let config = SimConfig::new(44444);
 

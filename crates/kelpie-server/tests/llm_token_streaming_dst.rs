@@ -103,7 +103,8 @@ fn create_service<R: Runtime + 'static>(
 /// - Tokens arrive incrementally (not all at once)
 /// - Concatenated chunks equal final content
 /// - Stream ends with Done chunk
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_token_streaming_basic() {
     let config = SimConfig::new(5001);
 
@@ -185,7 +186,8 @@ async fn test_dst_llm_token_streaming_basic() {
 /// - Stream completes despite StorageLatency faults
 /// - No tokens lost
 /// - Final content is complete
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_streaming_with_network_delay() {
     let config = SimConfig::new(5002);
 
@@ -258,7 +260,8 @@ async fn test_dst_llm_streaming_with_network_delay() {
 /// - Dropping stream consumer stops iteration
 /// - No panic or resource leak
 /// - Clean shutdown
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_streaming_cancellation() {
     let config = SimConfig::new(5003);
 
@@ -321,7 +324,8 @@ async fn test_dst_llm_streaming_cancellation() {
 /// - Tool calls appear as ToolCallStart chunks
 /// - Content deltas continue after tool execution
 /// - Stream completes with Done
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_streaming_with_tool_calls() {
     let config = SimConfig::new(5004);
 
@@ -395,7 +399,8 @@ async fn test_dst_llm_streaming_with_tool_calls() {
 /// - Multiple agents can stream concurrently
 /// - Streams don't interfere with each other
 /// - All streams complete successfully
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_streaming_concurrent() {
     let config = SimConfig::new(5005);
 
@@ -481,7 +486,8 @@ async fn test_dst_llm_streaming_concurrent() {
 /// - Stream works despite multiple simultaneous faults
 /// - No data corruption
 /// - Graceful degradation
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_streaming_with_comprehensive_faults() {
     let config = SimConfig::new(5006);
 

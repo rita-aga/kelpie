@@ -106,7 +106,7 @@ fn test_message_write_fault_after_pause() {
                 tool_call: None,
                 tool_return: None,
                 status: None,
-                created_at: chrono::Utc::now(),
+                created_at: chrono::DateTime::from_timestamp(1700000000, 0).unwrap(),
             };
 
             let store_result = state.add_message(&agent_id, message);
@@ -223,7 +223,7 @@ fn test_probabilistic_faults_during_pause_flow() {
                     tool_call: None,
                     tool_return: None,
                     status: None,
-                    created_at: chrono::Utc::now(),
+                    created_at: chrono::DateTime::from_timestamp(1700000000, 0).unwrap(),
                 };
 
                 match state.add_message(&agent_id, message) {
@@ -349,7 +349,7 @@ fn test_multiple_simultaneous_faults() {
                 tool_call: None,
                 tool_return: None,
                 status: None,
-                created_at: chrono::Utc::now(),
+                created_at: chrono::DateTime::from_timestamp(1700000000, 0).unwrap(),
             };
             assert!(
                 state.add_message(&agent_id, message).is_err(),
@@ -406,7 +406,7 @@ fn test_fault_injection_determinism() {
                         tool_call: None,
                         tool_return: None,
                         status: None,
-                        created_at: chrono::Utc::now(),
+                        created_at: chrono::DateTime::from_timestamp(1700000000, 0).unwrap(),
                     };
                     results.push(state.add_message(&agent_id, message).is_ok());
                 }

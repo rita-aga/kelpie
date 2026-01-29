@@ -6,11 +6,32 @@
 
 ## Summary
 
-Migrated 3 DST test files from tokio runtime to conditional madsim/tokio compilation for deterministic simulation testing.
+Migrated **19 DST test files** (120+ tests) from tokio runtime to conditional madsim/tokio compilation for deterministic simulation testing.
 
-## Investigation Findings
+## Full Migration (Phase 2)
 
-Issue 86 claimed 9+ files needed migration, but investigation revealed **only 3 files actually needed work**:
+After initial investigation was found to be incorrect, migrated all remaining files:
+
+**Files migrated (16 additional):**
+- agent_actor_dst.rs (10 tests)
+- agent_loop_dst.rs (16 tests)
+- agent_message_handling_dst.rs (5 tests)
+- agent_service_send_message_full_dst.rs (5 tests)
+- appstate_integration_dst.rs (5 tests) - also fixed tokio::time::timeout
+- fdb_storage_dst.rs (8 tests) - also fixed chrono::Utc::now()
+- heartbeat_integration_dst.rs - fixed chrono::Utc::now()
+- llm_token_streaming_dst.rs (6 tests)
+- mcp_integration_dst.rs (12 tests)
+- mcp_servers_dst.rs (11 tests)
+- memory_tools_real_dst.rs (10 tests)
+- real_adapter_dst.rs (5 tests)
+- real_adapter_http_dst.rs (3 tests)
+- real_adapter_simhttp_dst.rs (3 tests)
+- real_llm_adapter_streaming_dst.rs (5 tests)
+- tla_bug_patterns_dst.rs (6 tests)
+- umi_integration_dst.rs (12 tests)
+
+## Initial Investigation (Incorrect)
 
 | File | Issue Claimed | Actual Status |
 |------|---------------|---------------|

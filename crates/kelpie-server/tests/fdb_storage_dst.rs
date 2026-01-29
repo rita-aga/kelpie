@@ -107,7 +107,8 @@ where
 ///
 /// ASSERTION: Operations either succeed or return retriable error
 /// No partial state (e.g., agent exists but blocks missing)
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_fdb_agent_crud_with_faults() {
     let config = SimConfig::from_env_or_random();
 
@@ -197,7 +198,8 @@ async fn test_dst_fdb_agent_crud_with_faults() {
 ///
 /// ASSERTION: Block operations are atomic - either fully written or not at all
 /// No partial updates where block exists but has wrong content
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_fdb_blocks_with_crash_faults() {
     let config = SimConfig::from_env_or_random();
 
@@ -301,7 +303,8 @@ async fn test_dst_fdb_blocks_with_crash_faults() {
 ///
 /// ASSERTION: Checkpoint either succeeds or returns conflict error
 /// Session state is never partially written
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_fdb_session_checkpoint_with_conflicts() {
     let config = SimConfig::from_env_or_random();
 
@@ -345,7 +348,7 @@ async fn test_dst_fdb_session_checkpoint_with_conflicts() {
                     tool_call: None,
                     tool_return: None,
                     status: None,
-                    created_at: chrono::Utc::now(),
+                    created_at: chrono::DateTime::from_timestamp(1700000000, 0).unwrap(),
                 };
 
                 // Atomic checkpoint
@@ -425,7 +428,8 @@ async fn test_dst_fdb_session_checkpoint_with_conflicts() {
 ///
 /// ASSERTION: Messages are never duplicated or lost silently
 /// Ordering is preserved when messages do get written
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_fdb_messages_with_high_fault_rate() {
     let config = SimConfig::from_env_or_random();
 
@@ -471,7 +475,7 @@ async fn test_dst_fdb_messages_with_high_fault_rate() {
                     tool_call: None,
                     tool_return: None,
                     status: None,
-                    created_at: chrono::Utc::now(),
+                    created_at: chrono::DateTime::from_timestamp(1700000000, 0).unwrap(),
                 };
 
                 match storage.append_message("agent-messages", &message).await {
@@ -546,7 +550,8 @@ async fn test_dst_fdb_messages_with_high_fault_rate() {
 ///
 /// ASSERTION: No race conditions - concurrent operations are isolated
 /// Final state is consistent
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_fdb_concurrent_operations() {
     let config = SimConfig::from_env_or_random();
 
@@ -674,7 +679,8 @@ async fn test_dst_fdb_concurrent_operations() {
 ///
 /// ASSERTION: Data written before crash is recoverable
 /// No corruption after crash
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_fdb_crash_recovery() {
     let config = SimConfig::from_env_or_random();
 
@@ -726,7 +732,7 @@ async fn test_dst_fdb_crash_recovery() {
                     tool_call: None,
                     tool_return: None,
                     status: None,
-                    created_at: chrono::Utc::now(),
+                    created_at: chrono::DateTime::from_timestamp(1700000000, 0).unwrap(),
                 };
 
                 match storage1.append_message("crash-agent", &message).await {
@@ -815,7 +821,8 @@ async fn test_dst_fdb_crash_recovery() {
 /// NO FAULTS - Just verify determinism
 ///
 /// ASSERTION: Running twice with same seed produces identical results
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_fdb_determinism() {
     let seed = 99999u64;
 
@@ -889,7 +896,8 @@ async fn test_dst_fdb_determinism() {
 ///
 /// ASSERTION: Delete is atomic - either all data deleted or none
 /// No orphaned blocks/sessions/messages
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_fdb_delete_cascade() {
     let config = SimConfig::from_env_or_random();
 
@@ -950,7 +958,7 @@ async fn test_dst_fdb_delete_cascade() {
                 tool_call: None,
                 tool_return: None,
                 status: None,
-                created_at: chrono::Utc::now(),
+                created_at: chrono::DateTime::from_timestamp(1700000000, 0).unwrap(),
             };
             let storage_ref = storage.clone();
             let message_clone = message.clone();

@@ -156,7 +156,8 @@ fn create_service<R: Runtime + 'static>(
 /// - Method signature: send_message_full(agent_id: &str, content: String) -> Result<HandleMessageFullResponse>
 /// - Returns typed response with messages Vec and usage stats
 /// - NOT a JSON Value like old send_message
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_send_message_full_typed_response() {
     let config = SimConfig::new(4001);
 
@@ -234,7 +235,8 @@ async fn test_dst_send_message_full_typed_response() {
 /// - Service handles storage faults gracefully
 /// - Either succeeds or returns clear error
 /// - No panics or data corruption
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_send_message_full_storage_faults() {
     let config = SimConfig::new(4002);
 
@@ -301,7 +303,8 @@ async fn test_dst_send_message_full_storage_faults() {
 /// - Service handles network delays gracefully
 /// - Operations complete despite latency
 /// - Response remains valid
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_send_message_full_network_delay() {
     let config = SimConfig::new(4003);
 
@@ -361,7 +364,8 @@ async fn test_dst_send_message_full_network_delay() {
 /// - Multiple agents can process messages concurrently
 /// - No message mixing between agents
 /// - All responses are valid
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_send_message_full_concurrent_with_faults() {
     let config = SimConfig::new(4004);
 
@@ -439,7 +443,8 @@ async fn test_dst_send_message_full_concurrent_with_faults() {
 /// Contract:
 /// - Returns clear error for non-existent agent
 /// - Error message indicates agent not found
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_send_message_full_invalid_agent() {
     let config = SimConfig::new(4005);
 

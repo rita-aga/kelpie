@@ -103,7 +103,8 @@ impl HttpClient for FaultInjectedHttpClient {
 /// Expected behavior:
 /// - Without faults: completes in ~10-50ms
 /// - With 70% faults (50-200ms delays): should take significantly longer
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_network_delay_actually_triggers() {
     let config = SimConfig::new(10001);
 
@@ -185,7 +186,8 @@ async fn test_dst_network_delay_actually_triggers() {
 /// Expected behavior:
 /// - With 90% packet loss: most requests should fail
 /// - Test should handle errors gracefully
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_network_packet_loss_actually_triggers() {
     let config = SimConfig::new(10002);
 
@@ -256,7 +258,8 @@ async fn test_dst_network_packet_loss_actually_triggers() {
 /// - Some requests delayed (NetworkDelay)
 /// - Some requests fail (NetworkPacketLoss)
 /// - Overall resilience under combined faults
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_combined_network_faults() {
     let config = SimConfig::new(10003);
 
