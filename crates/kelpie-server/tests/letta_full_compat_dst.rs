@@ -80,7 +80,8 @@ impl HttpClient for StubHttpClient {
     }
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_summarization_with_llm_faults() {
     let config = SimConfig::new(8801);
 
@@ -122,6 +123,11 @@ async fn test_dst_summarization_with_llm_faults() {
                     message: format!("create_agent_async failed: {}", e),
                 })?;
 
+            // Use simulated time for determinism
+            let sim_time_ms = sim_env.io_context.time.now_ms() as i64;
+            let created_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(sim_time_ms)
+                .unwrap_or_else(chrono::Utc::now);
+
             state
                 .add_message(
                     &agent.id,
@@ -136,7 +142,7 @@ async fn test_dst_summarization_with_llm_faults() {
                         tool_call: None,
                         tool_return: None,
                         status: None,
-                        created_at: chrono::Utc::now(),
+                        created_at,
                     },
                 )
                 .map_err(|e| Error::Internal {
@@ -176,7 +182,8 @@ async fn test_dst_summarization_with_llm_faults() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_scheduling_job_write_fault() {
     let config = SimConfig::new(8802);
 
@@ -222,7 +229,8 @@ async fn test_dst_scheduling_job_write_fault() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_projects_write_fault() {
     let config = SimConfig::new(8803);
 
@@ -264,7 +272,8 @@ async fn test_dst_projects_write_fault() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_batch_status_write_fault() {
     let config = SimConfig::new(8804);
 
@@ -309,7 +318,8 @@ async fn test_dst_batch_status_write_fault() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_group_write_fault() {
     let config = SimConfig::new(8805);
 
@@ -354,7 +364,8 @@ async fn test_dst_agent_group_write_fault() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_custom_tool_storage_fault() {
     let config = SimConfig::new(8806);
 
@@ -388,7 +399,8 @@ async fn test_dst_custom_tool_storage_fault() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_conversation_search_date_with_faults() {
     let config = SimConfig::new(8807);
 
@@ -496,7 +508,8 @@ async fn test_dst_conversation_search_date_with_faults() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_web_search_missing_api_key() {
     let config = SimConfig::new(8808);
 
@@ -538,7 +551,8 @@ async fn test_dst_web_search_missing_api_key() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_run_code_unsupported_language() {
     let config = SimConfig::new(8809);
 
@@ -568,7 +582,8 @@ async fn test_dst_run_code_unsupported_language() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_export_with_message_read_fault() {
     let config = SimConfig::new(8810);
 
@@ -676,7 +691,8 @@ async fn test_dst_export_with_message_read_fault() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_import_with_message_write_fault() {
     let config = SimConfig::new(8811);
 

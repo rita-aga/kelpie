@@ -363,7 +363,8 @@ async fn create_memory_registry(
 // Basic Functionality Tests
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_core_memory_append_basic() {
     let seed = std::env::var("DST_SEED")
         .ok()
@@ -415,7 +416,8 @@ async fn test_dst_core_memory_append_basic() {
     assert!(persona.contains("enjoy helping"));
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_core_memory_replace_basic() {
     let seed = std::env::var("DST_SEED")
         .ok()
@@ -466,7 +468,8 @@ async fn test_dst_core_memory_replace_basic() {
     assert!(!persona.contains("helpful"));
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_archival_memory_insert_and_search() {
     let seed = std::env::var("DST_SEED")
         .ok()
@@ -507,7 +510,8 @@ async fn test_dst_archival_memory_insert_and_search() {
     println!("Search results: {}", result.output);
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_conversation_search() {
     let seed = std::env::var("DST_SEED")
         .ok()
@@ -561,7 +565,8 @@ async fn test_dst_conversation_search() {
 // Fault Injection Tests
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_core_memory_append_with_faults() {
     let seed = std::env::var("DST_SEED")
         .ok()
@@ -595,7 +600,8 @@ async fn test_dst_core_memory_append_with_faults() {
     println!("Fault correctly injected: {}", result.output);
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_archival_search_with_faults() {
     let seed = std::env::var("DST_SEED")
         .ok()
@@ -627,7 +633,8 @@ async fn test_dst_archival_search_with_faults() {
     println!("Search fault: {}", result.output);
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_memory_tools_partial_faults() {
     let seed = std::env::var("DST_SEED")
         .ok()
@@ -680,7 +687,8 @@ async fn test_dst_memory_tools_partial_faults() {
 // Error Handling Tests
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_core_memory_missing_params() {
     let agent_memory = Arc::new(RwLock::new(HashMap::new()));
     let registry = create_memory_registry(agent_memory.clone(), None).await;
@@ -701,7 +709,8 @@ async fn test_dst_core_memory_missing_params() {
     assert!(result.output.contains("Error") || result.output.contains("missing"));
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_core_memory_replace_not_found() {
     let agent_memory = Arc::new(RwLock::new(HashMap::new()));
     let registry = create_memory_registry(agent_memory.clone(), None).await;
@@ -723,7 +732,8 @@ async fn test_dst_core_memory_replace_not_found() {
     assert!(result.output.contains("not found"));
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_archival_search_no_agent() {
     let agent_memory = Arc::new(RwLock::new(HashMap::new()));
     let registry = create_memory_registry(agent_memory.clone(), None).await;
@@ -746,7 +756,8 @@ async fn test_dst_archival_search_no_agent() {
 // Determinism Test
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_memory_tools_determinism() {
     let seed = 88888u64;
     println!("DST seed: {}", seed);
@@ -793,7 +804,8 @@ async fn test_dst_memory_tools_determinism() {
 // Multi-Agent Isolation Test
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_memory_agent_isolation() {
     let seed = std::env::var("DST_SEED")
         .ok()
@@ -859,7 +871,8 @@ async fn test_dst_memory_agent_isolation() {
 // Concurrent Access Test
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_memory_concurrent_access() {
     use kelpie_core::{current_runtime, Runtime};
     let runtime = current_runtime();

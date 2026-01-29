@@ -3,8 +3,6 @@
 //! TigerStyle: DST-first development - these tests define the streaming contract
 //! and will initially FAIL until streaming is implemented.
 #![cfg(feature = "dst")]
-// Allow tokio::time::timeout in tests - needed for stream timeout handling
-#![allow(clippy::disallowed_methods)]
 
 use async_trait::async_trait;
 use kelpie_core::{Result, Runtime};
@@ -94,7 +92,8 @@ fn create_service<R: Runtime + 'static>(
 /// - Events emitted: MessageChunk(s) → MessageComplete
 /// - All events arrive in order
 /// - No errors in happy path
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_streaming_basic() {
     let config = SimConfig::new(2001);
 
@@ -148,11 +147,14 @@ async fn test_dst_streaming_basic() {
 
             // Collect events with timeout
             let mut events = Vec::new();
-            let timeout_duration = Duration::from_secs(5);
-            let start = std::time::Instant::now();
+            let timeout_ms: u64 = 5000;
+            let start_ms = sim_env.io_context.time.now_ms();
 
             loop {
-                match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                match current_runtime()
+                    .timeout(Duration::from_millis(100), rx.recv())
+                    .await
+                {
                     Ok(Some(event)) => {
                         events.push(event.clone());
                         if matches!(event, StreamEvent::MessageComplete { .. }) {
@@ -161,7 +163,8 @@ async fn test_dst_streaming_basic() {
                     }
                     Ok(None) => break, // Channel closed
                     Err(_) => {
-                        if start.elapsed() > timeout_duration {
+                        let elapsed_ms = sim_env.io_context.time.now_ms() - start_ms;
+                        if elapsed_ms > timeout_ms {
                             break; // Timeout - expected for failing test
                         }
                     }
@@ -205,7 +208,8 @@ async fn test_dst_streaming_basic() {
 /// - Stream completes despite NetworkDelay faults
 /// - No events lost due to delays
 /// - Events still arrive in order
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_streaming_with_network_delay() {
     let config = SimConfig::new(2002);
 
@@ -260,11 +264,14 @@ async fn test_dst_streaming_with_network_delay() {
 
             // Collect events with timeout
             let mut events = Vec::new();
-            let timeout_duration = Duration::from_secs(10);
-            let start = std::time::Instant::now();
+            let timeout_ms: u64 = 10_000;
+            let start_ms = sim_env.io_context.time.now_ms();
 
             loop {
-                match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                match current_runtime()
+                    .timeout(Duration::from_millis(200), rx.recv())
+                    .await
+                {
                     Ok(Some(event)) => {
                         events.push(event.clone());
                         if matches!(event, StreamEvent::MessageComplete { .. }) {
@@ -273,7 +280,8 @@ async fn test_dst_streaming_with_network_delay() {
                     }
                     Ok(None) => break,
                     Err(_) => {
-                        if start.elapsed() > timeout_duration {
+                        let elapsed_ms = sim_env.io_context.time.now_ms() - start_ms;
+                        if elapsed_ms > timeout_ms {
                             break;
                         }
                     }
@@ -311,7 +319,8 @@ async fn test_dst_streaming_with_network_delay() {
 /// - Actor detects disconnection via send() failure
 /// - Actor stops processing gracefully
 /// - No panic, no resource leak
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_streaming_cancellation() {
     let config = SimConfig::new(2003);
 
@@ -361,7 +370,10 @@ async fn test_dst_streaming_cancellation() {
             // Receive a few events then drop receiver (simulate disconnect)
             let mut received_count = 0;
             for _ in 0..3 {
-                match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                match current_runtime()
+                    .timeout(Duration::from_millis(100), rx.recv())
+                    .await
+                {
                     Ok(Some(_)) => {
                         received_count += 1;
                     }
@@ -383,7 +395,9 @@ async fn test_dst_streaming_cancellation() {
             );
 
             // Streaming task should complete (not hang)
-            let stream_result = tokio::time::timeout(Duration::from_secs(5), stream_handle).await;
+            let stream_result = current_runtime()
+                .timeout(Duration::from_secs(5), stream_handle)
+                .await;
             assert!(
                 stream_result.is_ok(),
                 "streaming task should complete after cancellation"
@@ -407,7 +421,8 @@ async fn test_dst_streaming_cancellation() {
 /// - Slow consumer delays between reads
 /// - No events lost despite backpressure
 /// - Events arrive in order
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_streaming_backpressure() {
     let config = SimConfig::new(2004);
 
@@ -456,11 +471,14 @@ async fn test_dst_streaming_backpressure() {
 
             // Slow consumer - deliberately delay between reads
             let mut events = Vec::new();
-            let timeout_duration = Duration::from_secs(10);
-            let start = std::time::Instant::now();
+            let timeout_ms: u64 = 10_000;
+            let start_ms = sim_env.io_context.time.now_ms();
 
             loop {
-                match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                match current_runtime()
+                    .timeout(Duration::from_millis(100), rx.recv())
+                    .await
+                {
                     Ok(Some(event)) => {
                         events.push(event.clone());
 
@@ -473,7 +491,8 @@ async fn test_dst_streaming_backpressure() {
                     }
                     Ok(None) => break,
                     Err(_) => {
-                        if start.elapsed() > timeout_duration {
+                        let elapsed_ms = sim_env.io_context.time.now_ms() - start_ms;
+                        if elapsed_ms > timeout_ms {
                             break;
                         }
                     }
@@ -511,7 +530,8 @@ async fn test_dst_streaming_backpressure() {
 /// - Tool calls emit ToolCallStart → ToolCallComplete events
 /// - Tool events in correct order
 /// - Always ends with MessageComplete
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_streaming_with_tool_calls() {
     let config = SimConfig::new(2005);
 
@@ -559,11 +579,14 @@ async fn test_dst_streaming_with_tool_calls() {
 
             // Collect events with timeout
             let mut events = Vec::new();
-            let timeout_duration = Duration::from_secs(10);
-            let start = std::time::Instant::now();
+            let timeout_ms: u64 = 10_000;
+            let start_ms = sim_env.io_context.time.now_ms();
 
             loop {
-                match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                match current_runtime()
+                    .timeout(Duration::from_millis(100), rx.recv())
+                    .await
+                {
                     Ok(Some(event)) => {
                         events.push(event.clone());
                         if matches!(event, StreamEvent::MessageComplete { .. }) {
@@ -572,7 +595,8 @@ async fn test_dst_streaming_with_tool_calls() {
                     }
                     Ok(None) => break,
                     Err(_) => {
-                        if start.elapsed() > timeout_duration {
+                        let elapsed_ms = sim_env.io_context.time.now_ms() - start_ms;
+                        if elapsed_ms > timeout_ms {
                             break;
                         }
                     }
