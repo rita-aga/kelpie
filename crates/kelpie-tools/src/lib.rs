@@ -28,6 +28,7 @@
 
 mod builtin;
 mod error;
+pub mod http_client;
 pub mod http_tool;
 pub mod mcp;
 mod registry;
@@ -37,6 +38,10 @@ mod traits;
 
 pub use builtin::{FilesystemTool, GitTool, ShellTool};
 pub use error::{ToolError, ToolResult};
+pub use http_client::{
+    default_http_client, HttpClient, HttpError, HttpRequest, HttpResponse, HttpResult,
+    ReqwestHttpClient, HTTP_CLIENT_RESPONSE_BYTES_MAX, HTTP_CLIENT_TIMEOUT_MS_DEFAULT,
+};
 pub use http_tool::{HttpMethod, HttpTool, HttpToolDefinition};
 pub use mcp::{
     extract_tool_output, McpClient, McpConfig, McpTool, McpToolDefinition, ReconnectConfig,
