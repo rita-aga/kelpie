@@ -28,6 +28,7 @@
 
 mod builtin;
 mod error;
+pub mod http_tool;
 pub mod mcp;
 mod registry;
 #[cfg(feature = "dst")]
@@ -36,6 +37,7 @@ mod traits;
 
 pub use builtin::{FilesystemTool, GitTool, ShellTool};
 pub use error::{ToolError, ToolResult};
+pub use http_tool::{HttpMethod, HttpTool, HttpToolDefinition};
 pub use mcp::{
     extract_tool_output, McpClient, McpConfig, McpTool, McpToolDefinition, ReconnectConfig,
     MCP_HEALTH_CHECK_INTERVAL_MS, MCP_RECONNECT_ATTEMPTS_MAX, MCP_RECONNECT_BACKOFF_MULTIPLIER,

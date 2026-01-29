@@ -240,6 +240,8 @@ pub struct UnifiedToolRegistry {
     sim_mcp_client: RwLock<Option<Arc<kelpie_tools::SimMcpClient>>>,
     /// Custom tool definitions (source code + runtime)
     custom_tools: RwLock<HashMap<String, CustomToolDefinition>>,
+    /// Optional sandbox pool for better performance
+    sandbox_pool: Option<Arc<kelpie_sandbox::SandboxPool<kelpie_sandbox::ProcessSandboxFactory>>>,
 }
 
 impl UnifiedToolRegistry {
@@ -253,7 +255,20 @@ impl UnifiedToolRegistry {
             #[cfg(feature = "dst")]
             sim_mcp_client: RwLock::new(None),
             custom_tools: RwLock::new(HashMap::new()),
+            sandbox_pool: None,
         }
+    }
+
+    /// Set a sandbox pool for custom tool execution
+    ///
+    /// When set, custom tools will use sandboxes from the pool for better performance
+    /// (avoiding sandbox startup overhead on each execution).
+    pub fn with_sandbox_pool(
+        mut self,
+        pool: Arc<kelpie_sandbox::SandboxPool<kelpie_sandbox::ProcessSandboxFactory>>,
+    ) -> Self {
+        self.sandbox_pool = Some(pool);
+        self
     }
 
     /// Register a builtin tool
@@ -734,6 +749,8 @@ impl UnifiedToolRegistry {
     }
 
     /// Execute a custom tool in a sandboxed runtime
+    ///
+    /// Supports Python, JavaScript (Node.js), and Shell (Bash) runtimes.
     async fn execute_custom(
         &self,
         name: &str,
@@ -749,66 +766,120 @@ impl UnifiedToolRegistry {
         };
 
         let runtime = custom_tool.runtime.to_lowercase();
-        if runtime != "python" && runtime != "py" {
-            return ToolExecutionResult::failure(
-                format!("Unsupported custom tool runtime: {}", custom_tool.runtime),
-                elapsed_ms(start_ms),
-            );
-        }
 
-        let mut script = String::new();
-        script.push_str("import json\nimport sys\n\n");
-        script.push_str(&custom_tool.source_code);
-        script.push_str("\n\n");
-        script.push_str("def _kelpie_call(args):\n");
-        script.push_str(&format!("    fn = globals().get(\"{}\")\n", name));
-        script.push_str("    if fn is None:\n");
-        script.push_str(&format!(
-            "        raise RuntimeError(\"Tool function '{}' not found\")\n",
-            name
-        ));
-        script.push_str("    if isinstance(args, dict):\n");
-        script.push_str("        try:\n");
-        script.push_str("            return fn(**args)\n");
-        script.push_str("        except TypeError:\n");
-        script.push_str("            return fn(args)\n");
-        script.push_str("    return fn(args)\n\n");
-        script.push_str("def _kelpie_main():\n");
-        script.push_str("    payload = sys.stdin.read()\n");
-        script.push_str("    args = json.loads(payload) if payload else {}\n");
-        script.push_str("    result = _kelpie_call(args)\n");
-        script.push_str("    if not isinstance(result, str):\n");
-        script.push_str("        try:\n");
-        script.push_str("            result = json.dumps(result)\n");
-        script.push_str("        except Exception:\n");
-        script.push_str("            result = str(result)\n");
-        script.push_str("    sys.stdout.write(result)\n\n");
-        script.push_str("if __name__ == \"__main__\":\n");
-        script.push_str("    _kelpie_main()\n");
+        // Build the script and command based on runtime
+        let (command, args, _script) = match runtime.as_str() {
+            "python" | "py" => {
+                let script = Self::build_python_wrapper(name, &custom_tool.source_code);
+                (
+                    "python3".to_string(),
+                    vec!["-c".to_string(), script.clone()],
+                    script,
+                )
+            }
+            "javascript" | "js" | "node" => {
+                let script = Self::build_javascript_wrapper(name, &custom_tool.source_code);
+                (
+                    "node".to_string(),
+                    vec!["-e".to_string(), script.clone()],
+                    script,
+                )
+            }
+            "shell" | "bash" | "sh" => {
+                let script = Self::build_shell_wrapper(input, &custom_tool.source_code);
+                (
+                    "bash".to_string(),
+                    vec!["-c".to_string(), script.clone()],
+                    script,
+                )
+            }
+            _ => {
+                return ToolExecutionResult::failure(
+                    format!("Unsupported custom tool runtime: {}", custom_tool.runtime),
+                    elapsed_ms(start_ms),
+                );
+            }
+        };
 
-        let mut sandbox = ProcessSandbox::new(SandboxConfig::default());
-        if let Err(e) = sandbox.start().await {
-            return ToolExecutionResult::failure(
-                format!("Failed to start sandbox: {}", e),
-                elapsed_ms(start_ms),
-            );
-        }
+        // Get or create sandbox
+        let result = if let Some(pool) = &self.sandbox_pool {
+            // Use sandbox from pool
+            match pool.acquire().await {
+                Ok(sandbox) => {
+                    let result = self
+                        .run_in_sandbox(
+                            &sandbox,
+                            &command,
+                            &args,
+                            input,
+                            context,
+                            &custom_tool,
+                            start_ms,
+                        )
+                        .await;
+                    pool.release(sandbox).await;
+                    result
+                }
+                Err(e) => ToolExecutionResult::failure(
+                    format!("Failed to acquire sandbox from pool: {}", e),
+                    elapsed_ms(start_ms),
+                ),
+            }
+        } else {
+            // Create a one-off sandbox
+            let mut sandbox = ProcessSandbox::new(SandboxConfig::default());
+            if let Err(e) = sandbox.start().await {
+                return ToolExecutionResult::failure(
+                    format!("Failed to start sandbox: {}", e),
+                    elapsed_ms(start_ms),
+                );
+            }
 
-        if !custom_tool.requirements.is_empty() {
+            let result = self
+                .run_in_sandbox(
+                    &sandbox,
+                    &command,
+                    &args,
+                    input,
+                    context,
+                    &custom_tool,
+                    start_ms,
+                )
+                .await;
+
+            let _ = sandbox.stop().await;
+            result
+        };
+
+        result
+    }
+
+    /// Run a command in a sandbox
+    async fn run_in_sandbox(
+        &self,
+        sandbox: &ProcessSandbox,
+        command: &str,
+        args: &[String],
+        input: &Value,
+        context: Option<&ToolExecutionContext>,
+        custom_tool: &CustomToolDefinition,
+        start_ms: u64,
+    ) -> ToolExecutionResult {
+        // Install requirements for Python
+        if command == "python3" && !custom_tool.requirements.is_empty() {
             let mut install_args = vec!["-m", "pip", "install"];
             for requirement in &custom_tool.requirements {
                 install_args.push(requirement);
             }
 
-            let install_output = sandbox
+            if let Err(e) = sandbox
                 .exec(
                     "python3",
                     &install_args,
                     ExecOptions::new().with_timeout(Duration::from_secs(120)),
                 )
-                .await;
-
-            if let Err(e) = install_output {
+                .await
+            {
                 return ToolExecutionResult::failure(
                     format!("Failed to install tool requirements: {}", e),
                     elapsed_ms(start_ms),
@@ -837,7 +908,8 @@ impl UnifiedToolRegistry {
             exec_opts = exec_opts.with_env("LETTA_BASE_URL", base_url);
         }
 
-        let output = match sandbox.exec("python3", &["-c", &script], exec_opts).await {
+        let args_strs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let output = match sandbox.exec(command, &args_strs, exec_opts).await {
             Ok(output) => output,
             Err(e) => {
                 return ToolExecutionResult::failure(
@@ -861,6 +933,99 @@ impl UnifiedToolRegistry {
                 duration,
             )
         }
+    }
+
+    /// Build Python wrapper script
+    fn build_python_wrapper(name: &str, source_code: &str) -> String {
+        let mut script = String::new();
+        script.push_str("import json\nimport sys\n\n");
+        script.push_str(source_code);
+        script.push_str("\n\n");
+        script.push_str("def _kelpie_call(args):\n");
+        script.push_str(&format!("    fn = globals().get(\"{}\")\n", name));
+        script.push_str("    if fn is None:\n");
+        script.push_str(&format!(
+            "        raise RuntimeError(\"Tool function '{}' not found\")\n",
+            name
+        ));
+        script.push_str("    if isinstance(args, dict):\n");
+        script.push_str("        try:\n");
+        script.push_str("            return fn(**args)\n");
+        script.push_str("        except TypeError:\n");
+        script.push_str("            return fn(args)\n");
+        script.push_str("    return fn(args)\n\n");
+        script.push_str("def _kelpie_main():\n");
+        script.push_str("    payload = sys.stdin.read()\n");
+        script.push_str("    args = json.loads(payload) if payload else {}\n");
+        script.push_str("    result = _kelpie_call(args)\n");
+        script.push_str("    if not isinstance(result, str):\n");
+        script.push_str("        try:\n");
+        script.push_str("            result = json.dumps(result)\n");
+        script.push_str("        except Exception:\n");
+        script.push_str("            result = str(result)\n");
+        script.push_str("    sys.stdout.write(result)\n\n");
+        script.push_str("if __name__ == \"__main__\":\n");
+        script.push_str("    _kelpie_main()\n");
+        script
+    }
+
+    /// Build JavaScript wrapper script
+    fn build_javascript_wrapper(name: &str, source_code: &str) -> String {
+        let mut script = String::new();
+        script.push_str(source_code);
+        script.push_str("\n\n");
+        script.push_str("(async function() {\n");
+        script.push_str("  let input = '';\n");
+        script.push_str("  process.stdin.setEncoding('utf8');\n");
+        script.push_str("  for await (const chunk of process.stdin) {\n");
+        script.push_str("    input += chunk;\n");
+        script.push_str("  }\n");
+        script.push_str("  const args = input ? JSON.parse(input) : {};\n");
+        script.push_str(&format!(
+            "  const fn = typeof {} === 'function' ? {} : null;\n",
+            name, name
+        ));
+        script.push_str("  if (!fn) {\n");
+        script.push_str(&format!(
+            "    throw new Error(\"Tool function '{}' not found\");\n",
+            name
+        ));
+        script.push_str("  }\n");
+        script.push_str("  let result = await fn(args);\n");
+        script.push_str("  if (typeof result !== 'string') {\n");
+        script.push_str("    result = JSON.stringify(result);\n");
+        script.push_str("  }\n");
+        script.push_str("  process.stdout.write(result);\n");
+        script.push_str("})();\n");
+        script
+    }
+
+    /// Build Shell wrapper script
+    fn build_shell_wrapper(input: &Value, source_code: &str) -> String {
+        let mut script = String::new();
+        script.push_str("#!/bin/bash\n");
+        script.push_str("set -e\n\n");
+
+        // Export input as environment variables if it's an object
+        if let Some(obj) = input.as_object() {
+            for (key, value) in obj {
+                let val_str = match value {
+                    Value::String(s) => s.clone(),
+                    _ => value.to_string(),
+                };
+                // Escape single quotes for bash
+                let escaped = val_str.replace('\'', "'\\''");
+                script.push_str(&format!(
+                    "export TOOL_{}='{}'\n",
+                    key.to_uppercase(),
+                    escaped
+                ));
+            }
+        }
+
+        script.push('\n');
+        script.push_str(source_code);
+        script
     }
 
     /// Unregister a tool
