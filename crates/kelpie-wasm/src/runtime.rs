@@ -1,7 +1,12 @@
 //! WASM Runtime Implementation
 //!
 //! TigerStyle: Sandboxed WASM execution with explicit limits and caching.
+//!
+//! DST-Compliant: Uses TimeProvider abstraction for deterministic testing.
+//! When the `dst` feature is enabled, supports FaultInjector for testing
+//! error paths including compilation failures, execution failures, and timeouts.
 
+use kelpie_core::io::TimeProvider;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,6 +16,9 @@ use tracing::{debug, info};
 use wasi_cap_std_sync::WasiCtxBuilder;
 use wasi_common::WasiCtx;
 use wasmtime::{Config, Engine, Linker, Module, Store};
+
+#[cfg(feature = "dst")]
+use kelpie_dst::fault::{FaultInjector, FaultType};
 
 // =============================================================================
 // TigerStyle Constants
@@ -145,8 +153,8 @@ impl WasmConfig {
 struct CachedModule {
     module: Module,
     use_count: u64,
-    #[allow(dead_code)]
-    last_used: std::time::Instant,
+    /// Last used timestamp in milliseconds (from TimeProvider.monotonic_ms())
+    last_used_ms: u64,
 }
 
 // =============================================================================
@@ -159,15 +167,24 @@ struct CachedModule {
 /// - Module caching for performance
 /// - Memory and execution time limits
 /// - WASI support for system calls
+///
+/// DST-Compliant: Uses TimeProvider for deterministic time in tests.
+/// When the `dst` feature is enabled, supports FaultInjector for testing
+/// error paths including compilation failures, execution failures, and timeouts.
 pub struct WasmRuntime {
     engine: Engine,
     config: WasmConfig,
     module_cache: Arc<RwLock<HashMap<[u8; 32], CachedModule>>>,
+    /// Time provider for DST-compatible timing
+    time_provider: Arc<dyn TimeProvider>,
+    /// Fault injector for DST testing (optional)
+    #[cfg(feature = "dst")]
+    fault_injector: Option<Arc<FaultInjector>>,
 }
 
 impl WasmRuntime {
-    /// Create a new WASM runtime
-    pub fn new(config: WasmConfig) -> WasmToolResult<Self> {
+    /// Create a new WASM runtime with TimeProvider for DST compatibility
+    pub fn new(config: WasmConfig, time_provider: Arc<dyn TimeProvider>) -> WasmToolResult<Self> {
         config.validate()?;
 
         // Configure wasmtime engine
@@ -188,12 +205,48 @@ impl WasmRuntime {
             engine,
             config,
             module_cache: Arc::new(RwLock::new(HashMap::new())),
+            time_provider,
+            #[cfg(feature = "dst")]
+            fault_injector: None,
         })
     }
 
-    /// Create with default configuration
+    /// Create with default configuration and wall clock time
     pub fn with_defaults() -> WasmToolResult<Self> {
-        Self::new(WasmConfig::default())
+        use kelpie_core::io::WallClockTime;
+        Self::new(WasmConfig::default(), Arc::new(WallClockTime::new()))
+    }
+
+    /// Create a WASM runtime with DST fault injection support
+    ///
+    /// # Arguments
+    /// * `config` - WASM configuration
+    /// * `time_provider` - Time provider for deterministic timing
+    /// * `fault_injector` - Fault injector for DST testing
+    #[cfg(feature = "dst")]
+    pub fn with_fault_injection(
+        config: WasmConfig,
+        time_provider: Arc<dyn TimeProvider>,
+        fault_injector: Arc<FaultInjector>,
+    ) -> WasmToolResult<Self> {
+        let mut runtime = Self::new(config, time_provider)?;
+        runtime.fault_injector = Some(fault_injector);
+        Ok(runtime)
+    }
+
+    /// Check for fault injection and return the fault type if triggered
+    #[cfg(feature = "dst")]
+    fn check_fault(&self, operation: &str) -> Option<FaultType> {
+        self.fault_injector
+            .as_ref()
+            .and_then(|fi| fi.should_inject(operation))
+    }
+
+    /// Check for fault injection (no-op when dst feature is disabled)
+    #[cfg(not(feature = "dst"))]
+    #[allow(dead_code)]
+    fn check_fault(&self, _operation: &str) -> Option<()> {
+        None
     }
 
     /// Compute hash for WASM bytes (for caching)
@@ -224,14 +277,34 @@ impl WasmRuntime {
 
         let hash = Self::compute_hash(wasm_bytes);
 
+        // DST: Check for cache eviction fault before cache lookup
+        #[cfg(feature = "dst")]
+        if let Some(fault) = self.check_fault("wasm_cache_lookup") {
+            if matches!(fault, FaultType::WasmCacheEvict) {
+                debug!("DST fault injection: forcing cache eviction");
+                let mut cache = self.module_cache.write().await;
+                cache.remove(&hash);
+            }
+        }
+
         // Check cache
         {
             let mut cache = self.module_cache.write().await;
             if let Some(cached) = cache.get_mut(&hash) {
                 cached.use_count += 1;
-                cached.last_used = std::time::Instant::now();
+                cached.last_used_ms = self.time_provider.monotonic_ms();
                 debug!(hash = ?hash[..8], use_count = cached.use_count, "WASM module cache hit");
                 return Ok(cached.module.clone());
+            }
+        }
+
+        // DST: Check for compile failure fault
+        #[cfg(feature = "dst")]
+        if let Some(fault) = self.check_fault("wasm_compile") {
+            if matches!(fault, FaultType::WasmCompileFail) {
+                return Err(WasmError::CompileFailed(
+                    "DST fault injection: simulated compile failure".to_string(),
+                ));
             }
         }
 
@@ -263,7 +336,7 @@ impl WasmRuntime {
                 CachedModule {
                     module: module.clone(),
                     use_count: 1,
-                    last_used: std::time::Instant::now(),
+                    last_used_ms: self.time_provider.monotonic_ms(),
                 },
             );
         }
@@ -285,6 +358,27 @@ impl WasmRuntime {
                 size: input_json.len(),
                 max: WASM_INPUT_SIZE_BYTES_MAX,
             });
+        }
+
+        // DST: Check for execution-related faults before compile
+        #[cfg(feature = "dst")]
+        if let Some(fault) = self.check_fault("wasm_execute") {
+            match fault {
+                FaultType::WasmExecFail => {
+                    return Err(WasmError::ExecutionFailed(
+                        "DST fault injection: simulated execution failure".to_string(),
+                    ));
+                }
+                FaultType::WasmExecTimeout { timeout_ms } => {
+                    return Err(WasmError::Timeout { timeout_ms });
+                }
+                FaultType::WasmInstantiateFail => {
+                    return Err(WasmError::InstantiateFailed(
+                        "DST fault injection: simulated instantiation failure".to_string(),
+                    ));
+                }
+                _ => {}
+            }
         }
 
         let module = self.get_or_compile(wasm_bytes).await?;
@@ -424,6 +518,12 @@ pub struct CacheStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kelpie_core::io::WallClockTime;
+
+    /// Helper to create a test TimeProvider
+    fn test_time_provider() -> Arc<dyn TimeProvider> {
+        Arc::new(WallClockTime::new())
+    }
 
     #[test]
     fn test_wasm_config_default() {
@@ -469,7 +569,7 @@ mod tests {
             module_size_bytes_max: 10, // Very small limit
             ..Default::default()
         };
-        let runtime = WasmRuntime::new(config).unwrap();
+        let runtime = WasmRuntime::new(config, test_time_provider()).unwrap();
 
         let large_bytes = vec![0u8; 100];
         let result = runtime.execute(&large_bytes, serde_json::json!({})).await;

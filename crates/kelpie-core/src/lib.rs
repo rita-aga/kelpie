@@ -21,6 +21,7 @@ pub mod actor;
 pub mod config;
 pub mod constants;
 pub mod error;
+pub mod http;
 pub mod io;
 pub mod metrics;
 pub mod runtime;

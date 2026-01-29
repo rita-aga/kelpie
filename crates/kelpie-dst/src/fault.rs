@@ -99,6 +99,38 @@ pub enum FaultType {
     /// Sandbox exec operation times out
     SandboxExecTimeout { timeout_ms: u64 },
 
+    // WASM runtime faults
+    /// WASM module compilation fails
+    WasmCompileFail,
+    /// WASM module instantiation fails
+    WasmInstantiateFail,
+    /// WASM execution fails
+    WasmExecFail,
+    /// WASM execution times out (fuel exhausted)
+    WasmExecTimeout { timeout_ms: u64 },
+    /// WASM cache eviction (for testing cache behavior)
+    WasmCacheEvict,
+
+    // Custom tool faults (for sandboxed tool execution)
+    /// Custom tool execution fails
+    CustomToolExecFail,
+    /// Custom tool execution times out
+    CustomToolExecTimeout { timeout_ms: u64 },
+    /// Custom tool sandbox acquisition fails (pool exhausted)
+    CustomToolSandboxAcquireFail,
+
+    // HTTP client faults (for API-calling tools)
+    /// HTTP connection fails
+    HttpConnectionFail,
+    /// HTTP request times out
+    HttpTimeout { timeout_ms: u64 },
+    /// HTTP server returns error status (4xx/5xx)
+    HttpServerError { status: u16 },
+    /// HTTP response is too large
+    HttpResponseTooLarge { max_bytes: u64 },
+    /// HTTP rate limited (429)
+    HttpRateLimited { retry_after_ms: u64 },
+
     // Snapshot faults (for VM state capture)
     /// Snapshot creation fails
     SnapshotCreateFail,
@@ -214,6 +246,22 @@ impl FaultType {
             FaultType::SandboxResumeFail => "sandbox_resume_fail",
             FaultType::SandboxExecFail => "sandbox_exec_fail",
             FaultType::SandboxExecTimeout { .. } => "sandbox_exec_timeout",
+            // WASM runtime faults
+            FaultType::WasmCompileFail => "wasm_compile_fail",
+            FaultType::WasmInstantiateFail => "wasm_instantiate_fail",
+            FaultType::WasmExecFail => "wasm_exec_fail",
+            FaultType::WasmExecTimeout { .. } => "wasm_exec_timeout",
+            FaultType::WasmCacheEvict => "wasm_cache_evict",
+            // Custom tool faults
+            FaultType::CustomToolExecFail => "custom_tool_exec_fail",
+            FaultType::CustomToolExecTimeout { .. } => "custom_tool_exec_timeout",
+            FaultType::CustomToolSandboxAcquireFail => "custom_tool_sandbox_acquire_fail",
+            // HTTP client faults
+            FaultType::HttpConnectionFail => "http_connection_fail",
+            FaultType::HttpTimeout { .. } => "http_timeout",
+            FaultType::HttpServerError { .. } => "http_server_error",
+            FaultType::HttpResponseTooLarge { .. } => "http_response_too_large",
+            FaultType::HttpRateLimited { .. } => "http_rate_limited",
             // Snapshot faults
             FaultType::SnapshotCreateFail => "snapshot_create_fail",
             FaultType::SnapshotCorruption => "snapshot_corruption",
@@ -539,6 +587,81 @@ impl FaultInjectorBuilder {
             .with_fault(FaultConfig::new(FaultType::SandboxPauseFail, probability))
             .with_fault(FaultConfig::new(FaultType::SandboxResumeFail, probability))
             .with_fault(FaultConfig::new(FaultType::SandboxExecFail, probability))
+    }
+
+    /// Add WASM runtime faults with default probabilities
+    ///
+    /// These faults simulate failures in WASM module execution:
+    /// - Compilation failures (invalid WASM bytecode)
+    /// - Instantiation failures (linking errors)
+    /// - Execution failures (runtime errors)
+    /// - Execution timeouts (fuel exhausted)
+    /// - Cache evictions (for testing cache behavior)
+    pub fn with_wasm_faults(self, probability: f64) -> Self {
+        self.with_fault(FaultConfig::new(FaultType::WasmCompileFail, probability))
+            .with_fault(FaultConfig::new(
+                FaultType::WasmInstantiateFail,
+                probability,
+            ))
+            .with_fault(FaultConfig::new(FaultType::WasmExecFail, probability))
+            .with_fault(FaultConfig::new(
+                FaultType::WasmExecTimeout { timeout_ms: 30_000 },
+                probability / 2.0,
+            ))
+            .with_fault(FaultConfig::new(
+                FaultType::WasmCacheEvict,
+                probability / 3.0,
+            ))
+    }
+
+    /// Add custom tool execution faults with default probabilities
+    ///
+    /// These faults simulate failures in custom tool execution:
+    /// - Execution failures (script errors)
+    /// - Execution timeouts (tool takes too long)
+    /// - Sandbox acquisition failures (pool exhausted)
+    pub fn with_custom_tool_faults(self, probability: f64) -> Self {
+        self.with_fault(FaultConfig::new(FaultType::CustomToolExecFail, probability))
+            .with_fault(FaultConfig::new(
+                FaultType::CustomToolExecTimeout { timeout_ms: 30_000 },
+                probability / 2.0,
+            ))
+            .with_fault(FaultConfig::new(
+                FaultType::CustomToolSandboxAcquireFail,
+                probability / 3.0,
+            ))
+    }
+
+    /// Add HTTP client faults with default probabilities
+    ///
+    /// These faults simulate failures in HTTP API calls:
+    /// - Connection failures (network issues)
+    /// - Timeouts (slow server)
+    /// - Server errors (5xx responses)
+    /// - Response too large
+    /// - Rate limiting (429 responses)
+    pub fn with_http_faults(self, probability: f64) -> Self {
+        self.with_fault(FaultConfig::new(FaultType::HttpConnectionFail, probability))
+            .with_fault(FaultConfig::new(
+                FaultType::HttpTimeout { timeout_ms: 30_000 },
+                probability / 2.0,
+            ))
+            .with_fault(FaultConfig::new(
+                FaultType::HttpServerError { status: 500 },
+                probability,
+            ))
+            .with_fault(FaultConfig::new(
+                FaultType::HttpResponseTooLarge {
+                    max_bytes: 10 * 1024 * 1024,
+                },
+                probability / 3.0,
+            ))
+            .with_fault(FaultConfig::new(
+                FaultType::HttpRateLimited {
+                    retry_after_ms: 60_000,
+                },
+                probability / 2.0,
+            ))
     }
 
     /// Add snapshot faults with default probabilities

@@ -37,6 +37,7 @@
 pub mod agent;
 pub mod clock;
 pub mod fault;
+pub mod http;
 pub mod invariants;
 pub mod liveness;
 pub mod llm;
@@ -53,6 +54,7 @@ pub mod vm;
 pub use agent::{AgentTestConfig, AgentTestState, BlockTestState, SimAgentEnv};
 pub use clock::SimClock;
 pub use fault::{FaultConfig, FaultInjector, FaultInjectorBuilder, FaultType};
+pub use http::{MockResponse, RecordedRequest, SimHttpClient};
 pub use invariants::{
     AtomicVisibility, ConsistentHolder, Durability, FencingTokenMonotonic, Invariant,
     InvariantChecker, InvariantCheckingSimulation, InvariantViolation, LeaseInfo, LeaseUniqueness,
