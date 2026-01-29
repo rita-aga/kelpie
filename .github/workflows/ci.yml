@@ -162,36 +162,42 @@ jobs:
           # Find the FDB container
           FDB_CONTAINER=$(docker ps --filter "ancestor=foundationdb/foundationdb:7.3.27" --format "{{.ID}}" | head -1)
           echo "FDB Container: $FDB_CONTAINER"
+          echo "FDB_CONTAINER=$FDB_CONTAINER" >> $GITHUB_ENV
 
           # Copy the cluster file from the container (FDB generates it on startup)
+          # Keep the container's internal IP - GitHub Actions host can reach it directly
           docker cp $FDB_CONTAINER:/var/fdb/fdb.cluster /tmp/fdb.cluster
-
-          # The container uses its internal IP, but we need to connect via the published port
-          # Replace the container's internal IP with 127.0.0.1 (the published port)
-          sed -i 's/@[0-9.]*:/@127.0.0.1:/g' /tmp/fdb.cluster
 
           echo "Cluster file contents:"
           cat /tmp/fdb.cluster
           echo "FDB_CLUSTER_FILE=/tmp/fdb.cluster" >> $GITHUB_ENV
       - name: Initialize FDB database
         run: |
-          # Wait for FDB server to be reachable
+          # Initialize database using docker exec (inside the container where networking works)
+          # Wait for FDB to be ready and configure the database
           for i in {1..30}; do
-            if fdbcli -C /tmp/fdb.cluster --exec "status" 2>/dev/null | grep -q "The database is available"; then
-              echo "FDB server is reachable and database exists"
+            # Check status inside the container
+            STATUS=$(docker exec $FDB_CONTAINER fdbcli --exec "status" 2>&1 || true)
+            echo "Attempt $i: $STATUS"
+
+            if echo "$STATUS" | grep -q "The database is available"; then
+              echo "FDB database is available!"
               exit 0
-            elif fdbcli -C /tmp/fdb.cluster --exec "status" 2>/dev/null | grep -q "The database is unavailable"; then
+            elif echo "$STATUS" | grep -q "The database is unavailable"; then
               echo "FDB server reachable, configuring database..."
-              fdbcli -C /tmp/fdb.cluster --exec "configure new single memory"
-              sleep 2
+              docker exec $FDB_CONTAINER fdbcli --exec "configure new single memory" || true
+              sleep 3
             else
               echo "Waiting for FDB server... ($i/30)"
               sleep 2
             fi
           done
-          # Final check
-          fdbcli -C /tmp/fdb.cluster --exec "status"
-          if fdbcli -C /tmp/fdb.cluster --exec "status minimal" 2>/dev/null | grep -q "Healthy"; then
+
+          # Final status check
+          echo "Final status:"
+          docker exec $FDB_CONTAINER fdbcli --exec "status"
+
+          if docker exec $FDB_CONTAINER fdbcli --exec "status minimal" 2>/dev/null | grep -q "Healthy"; then
             echo "FDB database is ready!"
             exit 0
           fi
