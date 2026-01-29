@@ -2754,6 +2754,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "subtle",
  "teloxide",
  "thiserror 1.0.69",
  "tokio",
@@ -2833,9 +2834,12 @@ dependencies = [
  "kelpie-dst",
  "kelpie-runtime",
  "proptest",
+ "serde_json",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "wasi-cap-std-sync",
+ "wasi-common",
  "wasmtime",
  "wasmtime-wasi",
 ]
@@ -5474,6 +5478,7 @@ checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 [[package]]
 name = "umi-memory"
 version = "0.2.0"
+source = "git+https://github.com/rita-aga/umi#64aa92f606e2556def3baa508f3cac55ebe48bb5"
 dependencies = [
  "anyhow",
  "async-trait",

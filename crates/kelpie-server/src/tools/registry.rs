@@ -1,6 +1,9 @@
 //! Unified Tool Registry Implementation
 //!
 //! TigerStyle: Single registry for all tool types with explicit source tracking.
+//!
+//! DST-Compliant: When the `dst` feature is enabled, supports FaultInjector
+//! for testing custom tool execution error paths.
 
 use crate::llm::ToolDefinition;
 use crate::security::audit::SharedAuditLog;
@@ -12,6 +15,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
+
+#[cfg(feature = "dst")]
+use kelpie_dst::fault::{FaultInjector, FaultType};
 
 /// Helper to compute elapsed time since start_ms using WallClockTime.
 /// WallClockTime is zero-sized, so this has no allocation cost.
@@ -243,6 +249,9 @@ pub struct UnifiedToolRegistry {
     /// Optional sandbox pool for better performance (uses RwLock for interior mutability)
     sandbox_pool:
         RwLock<Option<Arc<kelpie_sandbox::SandboxPool<kelpie_sandbox::ProcessSandboxFactory>>>>,
+    /// Fault injector for DST testing (optional)
+    #[cfg(feature = "dst")]
+    fault_injector: RwLock<Option<Arc<FaultInjector>>>,
 }
 
 impl UnifiedToolRegistry {
@@ -257,7 +266,33 @@ impl UnifiedToolRegistry {
             sim_mcp_client: RwLock::new(None),
             custom_tools: RwLock::new(HashMap::new()),
             sandbox_pool: RwLock::new(None),
+            #[cfg(feature = "dst")]
+            fault_injector: RwLock::new(None),
         }
+    }
+
+    /// Set the fault injector for DST testing
+    ///
+    /// When set, the registry will inject faults during custom tool execution
+    /// based on the FaultInjector configuration.
+    #[cfg(feature = "dst")]
+    pub async fn set_fault_injector(&self, injector: Arc<FaultInjector>) {
+        *self.fault_injector.write().await = Some(injector);
+        tracing::info!("Fault injector configured for DST testing");
+    }
+
+    /// Check for fault injection and return the fault type if triggered
+    #[cfg(feature = "dst")]
+    async fn check_fault(&self, operation: &str) -> Option<FaultType> {
+        let guard = self.fault_injector.read().await;
+        guard.as_ref().and_then(|fi| fi.should_inject(operation))
+    }
+
+    /// Check for fault injection (no-op when dst feature is disabled)
+    #[cfg(not(feature = "dst"))]
+    #[allow(dead_code)]
+    async fn check_fault(&self, _operation: &str) -> Option<()> {
+        None
     }
 
     /// Set a sandbox pool for custom tool execution (builder pattern)
@@ -765,6 +800,9 @@ impl UnifiedToolRegistry {
     /// Execute a custom tool in a sandboxed runtime
     ///
     /// Supports Python, JavaScript (Node.js), and Shell (Bash) runtimes.
+    ///
+    /// DST-Compliant: When the `dst` feature is enabled, checks for fault injection
+    /// before sandbox acquisition and execution.
     async fn execute_custom(
         &self,
         name: &str,
@@ -772,6 +810,35 @@ impl UnifiedToolRegistry {
         context: Option<&ToolExecutionContext>,
         start_ms: u64,
     ) -> ToolExecutionResult {
+        // DST: Check for custom tool execution faults
+        #[cfg(feature = "dst")]
+        if let Some(fault) = self.check_fault("custom_tool_execute").await {
+            match fault {
+                FaultType::CustomToolExecFail => {
+                    return ToolExecutionResult::failure(
+                        "DST fault injection: simulated custom tool execution failure",
+                        elapsed_ms(start_ms),
+                    );
+                }
+                FaultType::CustomToolExecTimeout { timeout_ms } => {
+                    return ToolExecutionResult::failure(
+                        format!(
+                            "DST fault injection: simulated timeout after {}ms",
+                            timeout_ms
+                        ),
+                        elapsed_ms(start_ms),
+                    );
+                }
+                FaultType::CustomToolSandboxAcquireFail => {
+                    return ToolExecutionResult::failure(
+                        "DST fault injection: simulated sandbox acquisition failure (pool exhausted)",
+                        elapsed_ms(start_ms),
+                    );
+                }
+                _ => {}
+            }
+        }
+
         let Some(custom_tool) = self.custom_tools.read().await.get(name).cloned() else {
             return ToolExecutionResult::failure(
                 format!("Custom tool not found: {}", name),
