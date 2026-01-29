@@ -10,7 +10,6 @@
 
 mod agent_call;
 mod code_execution;
-mod executor;
 mod heartbeat;
 mod memory;
 mod messaging;
@@ -35,9 +34,3 @@ pub use registry::{
     HEARTBEAT_PAUSE_MINUTES_MAX, HEARTBEAT_PAUSE_MINUTES_MIN, MS_PER_MINUTE,
 };
 pub use web_search::register_web_search_tool;
-
-pub use executor::{
-    create_sandbox_pool, ExecutionResult, ExecutorStats, ExtendedToolDefinition, ToolExecutor,
-    ToolLanguage, EXECUTOR_CONCURRENT_EXECUTIONS_MAX, EXECUTOR_OUTPUT_BYTES_MAX,
-    EXECUTOR_SOURCE_CODE_BYTES_MAX, EXECUTOR_TIMEOUT_MS_DEFAULT, EXECUTOR_TIMEOUT_MS_MAX,
-};

@@ -240,8 +240,9 @@ pub struct UnifiedToolRegistry {
     sim_mcp_client: RwLock<Option<Arc<kelpie_tools::SimMcpClient>>>,
     /// Custom tool definitions (source code + runtime)
     custom_tools: RwLock<HashMap<String, CustomToolDefinition>>,
-    /// Optional sandbox pool for better performance
-    sandbox_pool: Option<Arc<kelpie_sandbox::SandboxPool<kelpie_sandbox::ProcessSandboxFactory>>>,
+    /// Optional sandbox pool for better performance (uses RwLock for interior mutability)
+    sandbox_pool:
+        RwLock<Option<Arc<kelpie_sandbox::SandboxPool<kelpie_sandbox::ProcessSandboxFactory>>>>,
 }
 
 impl UnifiedToolRegistry {
@@ -255,20 +256,33 @@ impl UnifiedToolRegistry {
             #[cfg(feature = "dst")]
             sim_mcp_client: RwLock::new(None),
             custom_tools: RwLock::new(HashMap::new()),
-            sandbox_pool: None,
+            sandbox_pool: RwLock::new(None),
         }
     }
 
-    /// Set a sandbox pool for custom tool execution
+    /// Set a sandbox pool for custom tool execution (builder pattern)
     ///
     /// When set, custom tools will use sandboxes from the pool for better performance
     /// (avoiding sandbox startup overhead on each execution).
     pub fn with_sandbox_pool(
-        mut self,
+        self,
         pool: Arc<kelpie_sandbox::SandboxPool<kelpie_sandbox::ProcessSandboxFactory>>,
     ) -> Self {
-        self.sandbox_pool = Some(pool);
+        // Use blocking lock since this is called during construction
+        *self.sandbox_pool.blocking_write() = Some(pool);
         self
+    }
+
+    /// Set a sandbox pool after construction
+    ///
+    /// This allows setting the sandbox pool on an existing registry instance,
+    /// which is useful when the registry is created by AppState.
+    pub async fn set_sandbox_pool(
+        &self,
+        pool: Arc<kelpie_sandbox::SandboxPool<kelpie_sandbox::ProcessSandboxFactory>>,
+    ) {
+        *self.sandbox_pool.write().await = Some(pool);
+        tracing::info!("Sandbox pool configured for custom tool execution");
     }
 
     /// Register a builtin tool
@@ -802,7 +816,8 @@ impl UnifiedToolRegistry {
         };
 
         // Get or create sandbox
-        let result = if let Some(pool) = &self.sandbox_pool {
+        let pool_guard = self.sandbox_pool.read().await;
+        let result = if let Some(pool) = pool_guard.as_ref() {
             // Use sandbox from pool
             match pool.acquire().await {
                 Ok(sandbox) => {

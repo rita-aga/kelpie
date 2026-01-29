@@ -1,12 +1,14 @@
 //! Tool registry for discovery and management
 //!
 //! TigerStyle: Centralized tool management with explicit lifecycle.
+//!
+//! DST-Compliant: Uses TimeProvider abstraction for deterministic testing.
 
 use crate::error::{ToolError, ToolResult};
 use crate::traits::{DynTool, Tool, ToolInput, ToolMetadata, ToolOutput};
+use kelpie_core::io::{TimeProvider, WallClockTime};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
@@ -19,11 +21,15 @@ pub const REGISTRY_TOOLS_COUNT_MAX: usize = 1000;
 /// - Tool registration and discovery
 /// - Tool execution with timeout handling
 /// - Statistics tracking
+///
+/// DST-Compliant: Uses TimeProvider for deterministic timing in tests.
 pub struct ToolRegistry {
     /// Registered tools
     tools: RwLock<HashMap<String, Arc<dyn Tool>>>,
     /// Execution statistics
     stats: RwLock<RegistryStats>,
+    /// Time provider for DST-compatible timing
+    time_provider: Arc<dyn TimeProvider>,
 }
 
 /// Registry statistics
@@ -42,11 +48,17 @@ pub struct RegistryStats {
 }
 
 impl ToolRegistry {
-    /// Create a new empty registry
+    /// Create a new empty registry with wall clock time (production default)
     pub fn new() -> Self {
+        Self::with_time_provider(Arc::new(WallClockTime::new()))
+    }
+
+    /// Create a new registry with custom TimeProvider (for DST)
+    pub fn with_time_provider(time_provider: Arc<dyn TimeProvider>) -> Self {
         Self {
             tools: RwLock::new(HashMap::new()),
             stats: RwLock::new(RegistryStats::default()),
+            time_provider,
         }
     }
 
@@ -156,14 +168,14 @@ impl ToolRegistry {
 
         debug!(tool = %name, timeout_ms = %timeout_ms, "Executing tool");
 
-        let start = Instant::now();
+        let start_ms = self.time_provider.monotonic_ms();
 
         // Execute with timeout
         let runtime = kelpie_core::current_runtime();
         let result =
             kelpie_core::Runtime::timeout(&runtime, timeout_duration, tool.execute(input)).await;
 
-        let duration_ms = start.elapsed().as_millis() as u64;
+        let duration_ms = self.time_provider.monotonic_ms().saturating_sub(start_ms);
 
         // Update statistics
         {
