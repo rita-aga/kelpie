@@ -142,10 +142,12 @@ jobs:
         image: foundationdb/foundationdb:7.3.27
         ports:
           - 4500:4500
+        # Simple health check - just verify the process is running
+        # Database configuration happens in the workflow steps
         options: >-
-          --health-cmd "fdbcli --exec 'status minimal' || exit 1"
-          --health-interval 10s
-          --health-timeout 5s
+          --health-cmd "pgrep fdbserver || exit 1"
+          --health-interval 5s
+          --health-timeout 3s
           --health-retries 10
     steps:
       - uses: actions/checkout@v4
@@ -153,23 +155,38 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install FDB client
         run: |
-          wget https://github.com/apple/foundationdb/releases/download/7.3.27/foundationdb-clients_7.3.27-1_amd64.deb
+          wget -q https://github.com/apple/foundationdb/releases/download/7.3.27/foundationdb-clients_7.3.27-1_amd64.deb
           sudo dpkg -i foundationdb-clients_7.3.27-1_amd64.deb
       - name: Configure FDB cluster file
         run: |
           # Create cluster file pointing to the service container
           echo "docker:docker@127.0.0.1:4500" > /tmp/fdb.cluster
           echo "FDB_CLUSTER_FILE=/tmp/fdb.cluster" >> $GITHUB_ENV
-      - name: Wait for FDB to be ready
+      - name: Initialize FDB database
         run: |
+          # Wait for FDB server to be reachable
           for i in {1..30}; do
-            if fdbcli -C /tmp/fdb.cluster --exec "status minimal" 2>/dev/null | grep -q "Healthy"; then
-              echo "FDB is ready!"
+            if fdbcli -C /tmp/fdb.cluster --exec "status" 2>/dev/null; then
+              echo "FDB server is reachable"
               break
             fi
-            echo "Waiting for FDB... ($i/30)"
+            echo "Waiting for FDB server... ($i/30)"
             sleep 2
           done
+          # Configure the database (required for new FDB clusters)
+          fdbcli -C /tmp/fdb.cluster --exec "configure new single memory"
+          # Verify database is healthy
+          for i in {1..30}; do
+            if fdbcli -C /tmp/fdb.cluster --exec "status minimal" 2>/dev/null | grep -q "Healthy"; then
+              echo "FDB database is ready!"
+              exit 0
+            fi
+            echo "Waiting for FDB to become healthy... ($i/30)"
+            sleep 2
+          done
+          echo "FDB failed to become healthy"
+          fdbcli -C /tmp/fdb.cluster --exec "status"
+          exit 1
       - name: Run FDB persistence tests
         run: cargo test -p kelpie-server --test fdb_persistence_test -- --include-ignored
         env:
