@@ -8,11 +8,40 @@
 //! - archival_memory_insert: Insert into archival memory
 //! - archival_memory_search: Search archival memory
 //! - conversation_search: Search conversation history
+//!
+//! BUG-002 FIX: All memory tools now use ContextAwareToolHandler to get the
+//! agent_id from ToolExecutionContext instead of requiring the LLM to provide it.
+//! The LLM only knows its name (e.g., "Tama"), not its UUID, so passing agent_id
+//! as an input parameter caused "agent not found" errors.
 
 use crate::state::AppState;
-use crate::tools::{BuiltinToolHandler, UnifiedToolRegistry};
+use crate::tools::{
+    ContextAwareToolHandler, ToolExecutionContext, ToolExecutionResult, UnifiedToolRegistry,
+};
+use kelpie_core::io::{TimeProvider, WallClockTime};
 use serde_json::{json, Value};
 use std::sync::Arc;
+
+/// Helper to compute elapsed time since start_ms using WallClockTime.
+#[inline]
+fn elapsed_ms(start_ms: u64) -> u64 {
+    WallClockTime::new().monotonic_ms().saturating_sub(start_ms)
+}
+
+/// Extract agent_id from context, falling back to input for backwards compatibility
+fn get_agent_id(context: &ToolExecutionContext, input: &Value) -> Result<String, String> {
+    // Prefer context.agent_id (the correct UUID)
+    if let Some(agent_id) = &context.agent_id {
+        return Ok(agent_id.clone());
+    }
+
+    // Fall back to input parameter (for backwards compatibility)
+    input
+        .get("agent_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Error: agent_id not available in context or input".to_string())
+}
 
 /// Register all memory tools with the unified registry
 pub async fn register_memory_tools<R: kelpie_core::Runtime + 'static>(
@@ -46,51 +75,60 @@ async fn register_core_memory_append<R: kelpie_core::Runtime + 'static>(
     registry: &UnifiedToolRegistry,
     state: AppState<R>,
 ) {
-    let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
-        let state = state.clone();
-        let input = input.clone();
-        Box::pin(async move {
-            let agent_id = match input.get("agent_id").and_then(|v| v.as_str()) {
-                Some(id) => id.to_string(),
-                None => return "Error: missing required parameter 'agent_id'".to_string(),
-            };
+    // BUG-002 FIX: Use ContextAwareToolHandler to get agent_id from context
+    let handler: ContextAwareToolHandler =
+        Arc::new(move |input: &Value, context: &ToolExecutionContext| {
+            let state = state.clone();
+            let input = input.clone();
+            let context = context.clone();
+            Box::pin(async move {
+                let start_ms = WallClockTime::new().monotonic_ms();
 
-            let label = match input.get("label").and_then(|v| v.as_str()) {
-                Some(l) => l.to_string(),
-                None => return "Error: missing required parameter 'label'".to_string(),
-            };
+                let agent_id = match get_agent_id(&context, &input) {
+                    Ok(id) => id,
+                    Err(e) => return ToolExecutionResult::failure(e, elapsed_ms(start_ms)),
+                };
 
-            let content = match input.get("content").and_then(|v| v.as_str()) {
-                Some(c) => c.to_string(),
-                None => return "Error: missing required parameter 'content'".to_string(),
-            };
+                let label = match input.get("label").and_then(|v| v.as_str()) {
+                    Some(l) => l.to_string(),
+                    None => {
+                        return ToolExecutionResult::failure(
+                            "Error: missing required parameter 'label'",
+                            elapsed_ms(start_ms),
+                        )
+                    }
+                };
 
-            // BUG-001 FIX: Use atomic append_or_create to eliminate TOCTOU race
-            // The old implementation had a race between get_block_by_label and update:
-            //   1. Thread A checks: block doesn't exist
-            //   2. Thread B checks: block doesn't exist
-            //   3. Thread A creates block
-            //   4. Thread B creates duplicate block (race condition!)
-            //
-            // The new atomic method holds the write lock for the entire operation.
-            match state.append_or_create_block_by_label(&agent_id, &label, &content) {
-                Ok(_) => format!("Successfully updated memory block '{}'", label),
-                Err(e) => format!("Error: {}", e),
-            }
-        })
-    });
+                let content = match input.get("content").and_then(|v| v.as_str()) {
+                    Some(c) => c.to_string(),
+                    None => {
+                        return ToolExecutionResult::failure(
+                            "Error: missing required parameter 'content'",
+                            elapsed_ms(start_ms),
+                        )
+                    }
+                };
+
+                // BUG-001 FIX: Use atomic append_or_create to eliminate TOCTOU race
+                match state.append_or_create_block_by_label(&agent_id, &label, &content) {
+                    Ok(_) => ToolExecutionResult::success(
+                        format!("Successfully updated memory block '{}'", label),
+                        elapsed_ms(start_ms),
+                    ),
+                    Err(e) => {
+                        ToolExecutionResult::failure(format!("Error: {}", e), elapsed_ms(start_ms))
+                    }
+                }
+            })
+        });
 
     registry
-        .register_builtin(
+        .register_context_aware_builtin(
             "core_memory_append",
-            "Append content to a core memory block. The block will be created if it doesn't exist. Core memory blocks are always visible in the LLM context window.",
+            "Append content to a core memory block. The block will be created if it doesn't exist. Core memory blocks are always visible in the LLM context window. The agent_id is automatically provided from context.",
             json!({
                 "type": "object",
                 "properties": {
-                    "agent_id": {
-                        "type": "string",
-                        "description": "The agent ID whose memory to modify"
-                    },
                     "label": {
                         "type": "string",
                         "description": "Block label (e.g., 'persona', 'human', 'facts', 'goals', 'scratch')"
@@ -100,7 +138,7 @@ async fn register_core_memory_append<R: kelpie_core::Runtime + 'static>(
                         "description": "Content to append to the block"
                     }
                 },
-                "required": ["agent_id", "label", "content"]
+                "required": ["label", "content"]
             }),
             handler,
         )
@@ -111,67 +149,96 @@ async fn register_core_memory_replace<R: kelpie_core::Runtime + 'static>(
     registry: &UnifiedToolRegistry,
     state: AppState<R>,
 ) {
-    let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
-        let state = state.clone();
-        let input = input.clone();
-        Box::pin(async move {
-            let agent_id = match input.get("agent_id").and_then(|v| v.as_str()) {
-                Some(id) => id.to_string(),
-                None => return "Error: missing required parameter 'agent_id'".to_string(),
-            };
+    // BUG-002 FIX: Use ContextAwareToolHandler to get agent_id from context
+    let handler: ContextAwareToolHandler =
+        Arc::new(move |input: &Value, context: &ToolExecutionContext| {
+            let state = state.clone();
+            let input = input.clone();
+            let context = context.clone();
+            Box::pin(async move {
+                let start_ms = WallClockTime::new().monotonic_ms();
 
-            let label = match input.get("label").and_then(|v| v.as_str()) {
-                Some(l) => l.to_string(),
-                None => return "Error: missing required parameter 'label'".to_string(),
-            };
+                let agent_id = match get_agent_id(&context, &input) {
+                    Ok(id) => id,
+                    Err(e) => return ToolExecutionResult::failure(e, elapsed_ms(start_ms)),
+                };
 
-            let old_content = match input.get("old_content").and_then(|v| v.as_str()) {
-                Some(c) => c.to_string(),
-                None => return "Error: missing required parameter 'old_content'".to_string(),
-            };
+                let label = match input.get("label").and_then(|v| v.as_str()) {
+                    Some(l) => l.to_string(),
+                    None => {
+                        return ToolExecutionResult::failure(
+                            "Error: missing required parameter 'label'",
+                            elapsed_ms(start_ms),
+                        )
+                    }
+                };
 
-            let new_content = input
-                .get("new_content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+                let old_content = match input.get("old_content").and_then(|v| v.as_str()) {
+                    Some(c) => c.to_string(),
+                    None => {
+                        return ToolExecutionResult::failure(
+                            "Error: missing required parameter 'old_content'",
+                            elapsed_ms(start_ms),
+                        )
+                    }
+                };
 
-            // Get current block
-            let current_block = match state.get_block_by_label(&agent_id, &label) {
-                Ok(Some(b)) => b,
-                Ok(None) => return format!("Error: block '{}' not found", label),
-                Err(e) => return format!("Error: {}", e),
-            };
+                let new_content = input
+                    .get("new_content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
 
-            // Check if old_content exists
-            if !current_block.value.contains(&old_content) {
-                return format!(
-                    "Error: content '{}' not found in block '{}'",
-                    old_content, label
-                );
-            }
+                // Get current block
+                let current_block = match state.get_block_by_label(&agent_id, &label) {
+                    Ok(Some(b)) => b,
+                    Ok(None) => {
+                        return ToolExecutionResult::failure(
+                            format!("Error: block '{}' not found", label),
+                            elapsed_ms(start_ms),
+                        )
+                    }
+                    Err(e) => {
+                        return ToolExecutionResult::failure(
+                            format!("Error: {}", e),
+                            elapsed_ms(start_ms),
+                        )
+                    }
+                };
 
-            // Perform replacement
-            match state.update_block_by_label(&agent_id, &label, |block| {
-                block.value = block.value.replace(&old_content, &new_content);
-            }) {
-                Ok(_) => format!("Successfully replaced content in memory block '{}'", label),
-                Err(e) => format!("Error: {}", e),
-            }
-        })
-    });
+                // Check if old_content exists
+                if !current_block.value.contains(&old_content) {
+                    return ToolExecutionResult::failure(
+                        format!(
+                            "Error: content '{}' not found in block '{}'",
+                            old_content, label
+                        ),
+                        elapsed_ms(start_ms),
+                    );
+                }
+
+                // Perform replacement
+                match state.update_block_by_label(&agent_id, &label, |block| {
+                    block.value = block.value.replace(&old_content, &new_content);
+                }) {
+                    Ok(_) => ToolExecutionResult::success(
+                        format!("Successfully replaced content in memory block '{}'", label),
+                        elapsed_ms(start_ms),
+                    ),
+                    Err(e) => {
+                        ToolExecutionResult::failure(format!("Error: {}", e), elapsed_ms(start_ms))
+                    }
+                }
+            })
+        });
 
     registry
-        .register_builtin(
+        .register_context_aware_builtin(
             "core_memory_replace",
-            "Replace content in a core memory block. The old content must exist in the block.",
+            "Replace content in a core memory block. The old content must exist in the block. The agent_id is automatically provided from context.",
             json!({
                 "type": "object",
                 "properties": {
-                    "agent_id": {
-                        "type": "string",
-                        "description": "The agent ID whose memory to modify"
-                    },
                     "label": {
                         "type": "string",
                         "description": "Block label"
@@ -185,7 +252,7 @@ async fn register_core_memory_replace<R: kelpie_core::Runtime + 'static>(
                         "description": "Replacement content (can be empty to delete)"
                     }
                 },
-                "required": ["agent_id", "label", "old_content", "new_content"]
+                "required": ["label", "old_content", "new_content"]
             }),
             handler,
         )
@@ -196,47 +263,58 @@ async fn register_archival_memory_insert<R: kelpie_core::Runtime + 'static>(
     registry: &UnifiedToolRegistry,
     state: AppState<R>,
 ) {
-    let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
-        let state = state.clone();
-        let input = input.clone();
-        Box::pin(async move {
-            let agent_id = match input.get("agent_id").and_then(|v| v.as_str()) {
-                Some(id) => id.to_string(),
-                None => return "Error: missing required parameter 'agent_id'".to_string(),
-            };
+    // BUG-002 FIX: Use ContextAwareToolHandler to get agent_id from context
+    let handler: ContextAwareToolHandler =
+        Arc::new(move |input: &Value, context: &ToolExecutionContext| {
+            let state = state.clone();
+            let input = input.clone();
+            let context = context.clone();
+            Box::pin(async move {
+                let start_ms = WallClockTime::new().monotonic_ms();
 
-            let content = match input.get("content").and_then(|v| v.as_str()) {
-                Some(c) => c.to_string(),
-                None => return "Error: missing required parameter 'content'".to_string(),
-            };
+                let agent_id = match get_agent_id(&context, &input) {
+                    Ok(id) => id,
+                    Err(e) => return ToolExecutionResult::failure(e, elapsed_ms(start_ms)),
+                };
 
-            match state.add_archival(&agent_id, content, None) {
-                Ok(entry) => format!(
-                    "Successfully inserted into archival memory. Entry ID: {}",
-                    entry.id
-                ),
-                Err(e) => format!("Error: {}", e),
-            }
-        })
-    });
+                let content = match input.get("content").and_then(|v| v.as_str()) {
+                    Some(c) => c.to_string(),
+                    None => {
+                        return ToolExecutionResult::failure(
+                            "Error: missing required parameter 'content'",
+                            elapsed_ms(start_ms),
+                        )
+                    }
+                };
+
+                match state.add_archival(&agent_id, content, None) {
+                    Ok(entry) => ToolExecutionResult::success(
+                        format!(
+                            "Successfully inserted into archival memory. Entry ID: {}",
+                            entry.id
+                        ),
+                        elapsed_ms(start_ms),
+                    ),
+                    Err(e) => {
+                        ToolExecutionResult::failure(format!("Error: {}", e), elapsed_ms(start_ms))
+                    }
+                }
+            })
+        });
 
     registry
-        .register_builtin(
+        .register_context_aware_builtin(
             "archival_memory_insert",
-            "Insert content into archival memory with embedding for semantic search. Use this for long-term knowledge that doesn't need to be in the main context window.",
+            "Insert content into archival memory with embedding for semantic search. Use this for long-term knowledge that doesn't need to be in the main context window. The agent_id is automatically provided from context.",
             json!({
                 "type": "object",
                 "properties": {
-                    "agent_id": {
-                        "type": "string",
-                        "description": "The agent ID whose archival memory to modify"
-                    },
                     "content": {
                         "type": "string",
                         "description": "Content to store in archival memory"
                     }
                 },
-                "required": ["agent_id", "content"]
+                "required": ["content"]
             }),
             handler,
         )
@@ -247,61 +325,72 @@ async fn register_archival_memory_search<R: kelpie_core::Runtime + 'static>(
     registry: &UnifiedToolRegistry,
     state: AppState<R>,
 ) {
-    let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
-        let state = state.clone();
-        let input = input.clone();
-        Box::pin(async move {
-            let agent_id = match input.get("agent_id").and_then(|v| v.as_str()) {
-                Some(id) => id.to_string(),
-                None => return "Error: missing required parameter 'agent_id'".to_string(),
-            };
+    // BUG-002 FIX: Use ContextAwareToolHandler to get agent_id from context
+    let handler: ContextAwareToolHandler =
+        Arc::new(move |input: &Value, context: &ToolExecutionContext| {
+            let state = state.clone();
+            let input = input.clone();
+            let context = context.clone();
+            Box::pin(async move {
+                let start_ms = WallClockTime::new().monotonic_ms();
 
-            let query = match input.get("query").and_then(|v| v.as_str()) {
-                Some(q) => q.to_string(),
-                None => return "Error: missing required parameter 'query'".to_string(),
-            };
+                let agent_id = match get_agent_id(&context, &input) {
+                    Ok(id) => id,
+                    Err(e) => return ToolExecutionResult::failure(e, elapsed_ms(start_ms)),
+                };
 
-            let page = input.get("page").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
-
-            let page_size = 10;
-            let offset = page * page_size;
-
-            match state.search_archival(&agent_id, Some(&query), page_size + offset) {
-                Ok(entries) => {
-                    let page_entries: Vec<_> =
-                        entries.into_iter().skip(offset).take(page_size).collect();
-
-                    if page_entries.is_empty() {
-                        "No results found".to_string()
-                    } else {
-                        let results: Vec<String> = page_entries
-                            .iter()
-                            .map(|e| format!("[{}] {}", e.id, e.content))
-                            .collect();
-                        format!(
-                            "Found {} results (page {}):\n{}",
-                            results.len(),
-                            page,
-                            results.join("\n---\n")
+                let query = match input.get("query").and_then(|v| v.as_str()) {
+                    Some(q) => q.to_string(),
+                    None => {
+                        return ToolExecutionResult::failure(
+                            "Error: missing required parameter 'query'",
+                            elapsed_ms(start_ms),
                         )
                     }
+                };
+
+                let page = input.get("page").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
+
+                let page_size = 10;
+                let offset = page * page_size;
+
+                match state.search_archival(&agent_id, Some(&query), page_size + offset) {
+                    Ok(entries) => {
+                        let page_entries: Vec<_> =
+                            entries.into_iter().skip(offset).take(page_size).collect();
+
+                        if page_entries.is_empty() {
+                            ToolExecutionResult::success("No results found", elapsed_ms(start_ms))
+                        } else {
+                            let results: Vec<String> = page_entries
+                                .iter()
+                                .map(|e| format!("[{}] {}", e.id, e.content))
+                                .collect();
+                            ToolExecutionResult::success(
+                                format!(
+                                    "Found {} results (page {}):\n{}",
+                                    results.len(),
+                                    page,
+                                    results.join("\n---\n")
+                                ),
+                                elapsed_ms(start_ms),
+                            )
+                        }
+                    }
+                    Err(e) => {
+                        ToolExecutionResult::failure(format!("Error: {}", e), elapsed_ms(start_ms))
+                    }
                 }
-                Err(e) => format!("Error: {}", e),
-            }
-        })
-    });
+            })
+        });
 
     registry
-        .register_builtin(
+        .register_context_aware_builtin(
             "archival_memory_search",
-            "Search archival memory using semantic search. Returns paginated results.",
+            "Search archival memory using semantic search. Returns paginated results. The agent_id is automatically provided from context.",
             json!({
                 "type": "object",
                 "properties": {
-                    "agent_id": {
-                        "type": "string",
-                        "description": "The agent ID whose archival memory to search"
-                    },
                     "query": {
                         "type": "string",
                         "description": "Search query"
@@ -312,7 +401,7 @@ async fn register_archival_memory_search<R: kelpie_core::Runtime + 'static>(
                         "default": 0
                     }
                 },
-                "required": ["agent_id", "query"]
+                "required": ["query"]
             }),
             handler,
         )
@@ -323,66 +412,80 @@ async fn register_conversation_search<R: kelpie_core::Runtime + 'static>(
     registry: &UnifiedToolRegistry,
     state: AppState<R>,
 ) {
-    let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
-        let state = state.clone();
-        let input = input.clone();
-        Box::pin(async move {
-            let agent_id = match input.get("agent_id").and_then(|v| v.as_str()) {
-                Some(id) => id.to_string(),
-                None => return "Error: missing required parameter 'agent_id'".to_string(),
-            };
+    // BUG-002 FIX: Use ContextAwareToolHandler to get agent_id from context
+    let handler: ContextAwareToolHandler =
+        Arc::new(move |input: &Value, context: &ToolExecutionContext| {
+            let state = state.clone();
+            let input = input.clone();
+            let context = context.clone();
+            Box::pin(async move {
+                let start_ms = WallClockTime::new().monotonic_ms();
 
-            let query = match input.get("query").and_then(|v| v.as_str()) {
-                Some(q) => q.to_string(),
-                None => return "Error: missing required parameter 'query'".to_string(),
-            };
+                let agent_id = match get_agent_id(&context, &input) {
+                    Ok(id) => id,
+                    Err(e) => return ToolExecutionResult::failure(e, elapsed_ms(start_ms)),
+                };
 
-            let page = input.get("page").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
-
-            let page_size = 10;
-
-            // Get all messages and filter
-            match state.list_messages(&agent_id, 1000, None) {
-                Ok(messages) => {
-                    let query_lower = query.to_lowercase();
-                    let matching: Vec<_> = messages
-                        .iter()
-                        .filter(|m| m.content.to_lowercase().contains(&query_lower))
-                        .skip(page * page_size)
-                        .take(page_size)
-                        .collect();
-
-                    if matching.is_empty() {
-                        "No matching conversations found".to_string()
-                    } else {
-                        let results: Vec<String> = matching
-                            .iter()
-                            .map(|m| format!("[{:?}]: {}", m.role, m.content))
-                            .collect();
-                        format!(
-                            "Found {} results (page {}):\n{}",
-                            results.len(),
-                            page,
-                            results.join("\n---\n")
+                let query = match input.get("query").and_then(|v| v.as_str()) {
+                    Some(q) => q.to_string(),
+                    None => {
+                        return ToolExecutionResult::failure(
+                            "Error: missing required parameter 'query'",
+                            elapsed_ms(start_ms),
                         )
                     }
+                };
+
+                let page = input.get("page").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
+
+                let page_size = 10;
+
+                // Get all messages and filter
+                match state.list_messages(&agent_id, 1000, None) {
+                    Ok(messages) => {
+                        let query_lower = query.to_lowercase();
+                        let matching: Vec<_> = messages
+                            .iter()
+                            .filter(|m| m.content.to_lowercase().contains(&query_lower))
+                            .skip(page * page_size)
+                            .take(page_size)
+                            .collect();
+
+                        if matching.is_empty() {
+                            ToolExecutionResult::success(
+                                "No matching conversations found",
+                                elapsed_ms(start_ms),
+                            )
+                        } else {
+                            let results: Vec<String> = matching
+                                .iter()
+                                .map(|m| format!("[{:?}]: {}", m.role, m.content))
+                                .collect();
+                            ToolExecutionResult::success(
+                                format!(
+                                    "Found {} results (page {}):\n{}",
+                                    results.len(),
+                                    page,
+                                    results.join("\n---\n")
+                                ),
+                                elapsed_ms(start_ms),
+                            )
+                        }
+                    }
+                    Err(e) => {
+                        ToolExecutionResult::failure(format!("Error: {}", e), elapsed_ms(start_ms))
+                    }
                 }
-                Err(e) => format!("Error: {}", e),
-            }
-        })
-    });
+            })
+        });
 
     registry
-        .register_builtin(
+        .register_context_aware_builtin(
             "conversation_search",
-            "Search past conversation messages. Returns paginated results matching the query.",
+            "Search past conversation messages. Returns paginated results matching the query. The agent_id is automatically provided from context.",
             json!({
                 "type": "object",
                 "properties": {
-                    "agent_id": {
-                        "type": "string",
-                        "description": "The agent ID whose conversations to search"
-                    },
                     "query": {
                         "type": "string",
                         "description": "Search query"
@@ -393,7 +496,7 @@ async fn register_conversation_search<R: kelpie_core::Runtime + 'static>(
                         "default": 0
                     }
                 },
-                "required": ["agent_id", "query"]
+                "required": ["query"]
             }),
             handler,
         )
@@ -404,112 +507,139 @@ async fn register_conversation_search_date<R: kelpie_core::Runtime + 'static>(
     registry: &UnifiedToolRegistry,
     state: AppState<R>,
 ) {
-    let handler: BuiltinToolHandler = Arc::new(move |input: &Value| {
-        let state = state.clone();
-        let input = input.clone();
-        Box::pin(async move {
-            let agent_id = match input.get("agent_id").and_then(|v| v.as_str()) {
-                Some(id) => id.to_string(),
-                None => return "Error: missing required parameter 'agent_id'".to_string(),
-            };
+    // BUG-002 FIX: Use ContextAwareToolHandler to get agent_id from context
+    let handler: ContextAwareToolHandler =
+        Arc::new(move |input: &Value, context: &ToolExecutionContext| {
+            let state = state.clone();
+            let input = input.clone();
+            let context = context.clone();
+            Box::pin(async move {
+                let start_ms = WallClockTime::new().monotonic_ms();
 
-            let query = match input.get("query").and_then(|v| v.as_str()) {
-                Some(q) => q.to_string(),
-                None => return "Error: missing required parameter 'query'".to_string(),
-            };
+                let agent_id = match get_agent_id(&context, &input) {
+                    Ok(id) => id,
+                    Err(e) => return ToolExecutionResult::failure(e, elapsed_ms(start_ms)),
+                };
 
-            // Parse start_date (optional)
-            let start_date = match input.get("start_date") {
-                Some(val) => match parse_date_param(val) {
-                    Ok(dt) => Some(dt),
-                    Err(e) => return format!("Error parsing start_date: {}", e),
-                },
-                None => None,
-            };
-
-            // Parse end_date (optional)
-            let end_date = match input.get("end_date") {
-                Some(val) => match parse_date_param(val) {
-                    Ok(dt) => Some(dt),
-                    Err(e) => return format!("Error parsing end_date: {}", e),
-                },
-                None => None,
-            };
-
-            // Validate date range
-            if let (Some(start), Some(end)) = (start_date, end_date) {
-                if start > end {
-                    return "Error: start_date must be before end_date".to_string();
-                }
-            }
-
-            let page = input.get("page").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
-            let page_size = 10;
-
-            // Get all messages and filter
-            match state.list_messages(&agent_id, 1000, None) {
-                Ok(messages) => {
-                    let query_lower = query.to_lowercase();
-                    let matching: Vec<_> = messages
-                        .iter()
-                        .filter(|m| {
-                            // Text filter
-                            let matches_query = m.content.to_lowercase().contains(&query_lower);
-
-                            // Date filter
-                            let matches_dates = match (start_date, end_date) {
-                                (Some(start), Some(end)) => {
-                                    m.created_at >= start && m.created_at <= end
-                                }
-                                (Some(start), None) => m.created_at >= start,
-                                (None, Some(end)) => m.created_at <= end,
-                                (None, None) => true,
-                            };
-
-                            matches_query && matches_dates
-                        })
-                        .skip(page * page_size)
-                        .take(page_size)
-                        .collect();
-
-                    if matching.is_empty() {
-                        "No matching conversations found in date range".to_string()
-                    } else {
-                        let results: Vec<String> = matching
-                            .iter()
-                            .map(|m| {
-                                format!(
-                                    "[{:?}] [{}]: {}",
-                                    m.role,
-                                    m.created_at.to_rfc3339(),
-                                    m.content
-                                )
-                            })
-                            .collect();
-                        format!(
-                            "Found {} results (page {}):\n{}",
-                            results.len(),
-                            page,
-                            results.join("\n---\n")
+                let query = match input.get("query").and_then(|v| v.as_str()) {
+                    Some(q) => q.to_string(),
+                    None => {
+                        return ToolExecutionResult::failure(
+                            "Error: missing required parameter 'query'",
+                            elapsed_ms(start_ms),
                         )
                     }
+                };
+
+                // Parse start_date (optional)
+                let start_date = match input.get("start_date") {
+                    Some(val) => match parse_date_param(val) {
+                        Ok(dt) => Some(dt),
+                        Err(e) => {
+                            return ToolExecutionResult::failure(
+                                format!("Error parsing start_date: {}", e),
+                                elapsed_ms(start_ms),
+                            )
+                        }
+                    },
+                    None => None,
+                };
+
+                // Parse end_date (optional)
+                let end_date = match input.get("end_date") {
+                    Some(val) => match parse_date_param(val) {
+                        Ok(dt) => Some(dt),
+                        Err(e) => {
+                            return ToolExecutionResult::failure(
+                                format!("Error parsing end_date: {}", e),
+                                elapsed_ms(start_ms),
+                            )
+                        }
+                    },
+                    None => None,
+                };
+
+                // Validate date range
+                if let (Some(start), Some(end)) = (start_date, end_date) {
+                    if start > end {
+                        return ToolExecutionResult::failure(
+                            "Error: start_date must be before end_date",
+                            elapsed_ms(start_ms),
+                        );
+                    }
                 }
-                Err(e) => format!("Error: {}", e),
-            }
-        })
-    });
+
+                let page = input.get("page").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
+                let page_size = 10;
+
+                // Get all messages and filter
+                match state.list_messages(&agent_id, 1000, None) {
+                    Ok(messages) => {
+                        let query_lower = query.to_lowercase();
+                        let matching: Vec<_> = messages
+                            .iter()
+                            .filter(|m| {
+                                // Text filter
+                                let matches_query = m.content.to_lowercase().contains(&query_lower);
+
+                                // Date filter
+                                let matches_dates = match (start_date, end_date) {
+                                    (Some(start), Some(end)) => {
+                                        m.created_at >= start && m.created_at <= end
+                                    }
+                                    (Some(start), None) => m.created_at >= start,
+                                    (None, Some(end)) => m.created_at <= end,
+                                    (None, None) => true,
+                                };
+
+                                matches_query && matches_dates
+                            })
+                            .skip(page * page_size)
+                            .take(page_size)
+                            .collect();
+
+                        if matching.is_empty() {
+                            ToolExecutionResult::success(
+                                "No matching conversations found in date range",
+                                elapsed_ms(start_ms),
+                            )
+                        } else {
+                            let results: Vec<String> = matching
+                                .iter()
+                                .map(|m| {
+                                    format!(
+                                        "[{:?}] [{}]: {}",
+                                        m.role,
+                                        m.created_at.to_rfc3339(),
+                                        m.content
+                                    )
+                                })
+                                .collect();
+                            ToolExecutionResult::success(
+                                format!(
+                                    "Found {} results (page {}):\n{}",
+                                    results.len(),
+                                    page,
+                                    results.join("\n---\n")
+                                ),
+                                elapsed_ms(start_ms),
+                            )
+                        }
+                    }
+                    Err(e) => {
+                        ToolExecutionResult::failure(format!("Error: {}", e), elapsed_ms(start_ms))
+                    }
+                }
+            })
+        });
 
     registry
-        .register_builtin(
+        .register_context_aware_builtin(
             "conversation_search_date",
-            "Search past conversation messages with date filtering. Returns paginated results matching the query within the specified date range. Supports ISO 8601, RFC 3339, and Unix timestamps.",
+            "Search past conversation messages with date filtering. Returns paginated results matching the query within the specified date range. Supports ISO 8601, RFC 3339, and Unix timestamps. The agent_id is automatically provided from context.",
             json!({
                 "type": "object",
                 "properties": {
-                    "agent_id": {
-                        "type": "string",
-                        "description": "The agent ID whose conversations to search"
-                    },
                     "query": {
                         "type": "string",
                         "description": "Search query"
@@ -528,7 +658,7 @@ async fn register_conversation_search_date<R: kelpie_core::Runtime + 'static>(
                         "default": 0
                     }
                 },
-                "required": ["agent_id", "query"]
+                "required": ["query"]
             }),
             handler,
         )
@@ -592,6 +722,7 @@ fn parse_date_param(val: &Value) -> Result<chrono::DateTime<chrono::Utc>, String
 mod tests {
     use super::*;
     use crate::models::{AgentState, AgentType, CreateAgentRequest, CreateBlockRequest};
+    use crate::tools::ToolExecutionContext;
 
     fn create_test_agent(name: &str) -> AgentState {
         AgentState::from_request(CreateAgentRequest {
@@ -645,15 +776,21 @@ mod tests {
         let registry = state.tool_registry();
         register_memory_tools(registry, state.clone()).await;
 
-        // Execute append
+        // Create context with agent_id (BUG-002 FIX: tools now get agent_id from context)
+        let context = ToolExecutionContext {
+            agent_id: Some(agent_id.clone()),
+            ..Default::default()
+        };
+
+        // Execute append - note: no agent_id in input since it comes from context
         let result = registry
-            .execute(
+            .execute_with_context(
                 "core_memory_append",
                 &json!({
-                    "agent_id": agent_id,
                     "label": "facts",
                     "content": "User likes pizza"
                 }),
+                Some(&context),
             )
             .await;
 
@@ -679,16 +816,22 @@ mod tests {
         let registry = state.tool_registry();
         register_memory_tools(registry, state.clone()).await;
 
+        // Create context with agent_id (BUG-002 FIX: tools now get agent_id from context)
+        let context = ToolExecutionContext {
+            agent_id: Some(agent_id.clone()),
+            ..Default::default()
+        };
+
         // Execute replace on existing persona block
         let result = registry
-            .execute(
+            .execute_with_context(
                 "core_memory_replace",
                 &json!({
-                    "agent_id": agent_id,
                     "label": "persona",
                     "old_content": "test agent",
                     "new_content": "helpful assistant"
                 }),
+                Some(&context),
             )
             .await;
 
@@ -716,14 +859,20 @@ mod tests {
         let registry = state.tool_registry();
         register_memory_tools(registry, state.clone()).await;
 
+        // Create context with agent_id (BUG-002 FIX: tools now get agent_id from context)
+        let context = ToolExecutionContext {
+            agent_id: Some(agent_id.clone()),
+            ..Default::default()
+        };
+
         // Insert into archival
         let result = registry
-            .execute(
+            .execute_with_context(
                 "archival_memory_insert",
                 &json!({
-                    "agent_id": agent_id,
                     "content": "User's favorite color is blue"
                 }),
+                Some(&context),
             )
             .await;
 
@@ -732,12 +881,12 @@ mod tests {
 
         // Search archival
         let result = registry
-            .execute(
+            .execute_with_context(
                 "archival_memory_search",
                 &json!({
-                    "agent_id": agent_id,
                     "query": "blue"
                 }),
+                Some(&context),
             )
             .await;
 
@@ -810,20 +959,26 @@ mod tests {
         let registry = state.tool_registry();
         register_memory_tools(registry, state.clone()).await;
 
+        // Create context with agent_id (BUG-002 FIX: tools now get agent_id from context)
+        let context = ToolExecutionContext {
+            agent_id: Some(agent_id.clone()),
+            ..Default::default()
+        };
+
         // Add test message (via send_message endpoint simulation)
         // Note: In real usage, messages are added through handle_message
         // For testing, we'll verify the tool executes without error
 
         // Search with valid date range
         let result = registry
-            .execute(
+            .execute_with_context(
                 "conversation_search_date",
                 &json!({
-                    "agent_id": agent_id,
                     "query": "test",
                     "start_date": "2024-01-01T00:00:00Z",
                     "end_date": "2024-12-31T23:59:59Z"
                 }),
+                Some(&context),
             )
             .await;
 
@@ -845,16 +1000,22 @@ mod tests {
         let registry = state.tool_registry();
         register_memory_tools(registry, state.clone()).await;
 
+        // Create context with agent_id (BUG-002 FIX: tools now get agent_id from context)
+        let context = ToolExecutionContext {
+            agent_id: Some(agent_id.clone()),
+            ..Default::default()
+        };
+
         // Search with Unix timestamps
         let result = registry
-            .execute(
+            .execute_with_context(
                 "conversation_search_date",
                 &json!({
-                    "agent_id": agent_id,
                     "query": "test",
                     "start_date": 1704067200, // 2024-01-01
                     "end_date": 1735689599   // 2024-12-31
                 }),
+                Some(&context),
             )
             .await;
 
@@ -874,16 +1035,22 @@ mod tests {
         let registry = state.tool_registry();
         register_memory_tools(registry, state.clone()).await;
 
+        // Create context with agent_id (BUG-002 FIX: tools now get agent_id from context)
+        let context = ToolExecutionContext {
+            agent_id: Some(agent_id.clone()),
+            ..Default::default()
+        };
+
         // Search with invalid range (start > end)
         let result = registry
-            .execute(
+            .execute_with_context(
                 "conversation_search_date",
                 &json!({
-                    "agent_id": agent_id,
                     "query": "test",
                     "start_date": "2024-12-31T00:00:00Z",
                     "end_date": "2024-01-01T00:00:00Z"
                 }),
+                Some(&context),
             )
             .await;
 
@@ -906,15 +1073,21 @@ mod tests {
         let registry = state.tool_registry();
         register_memory_tools(registry, state.clone()).await;
 
+        // Create context with agent_id (BUG-002 FIX: tools now get agent_id from context)
+        let context = ToolExecutionContext {
+            agent_id: Some(agent_id.clone()),
+            ..Default::default()
+        };
+
         // Search with invalid date format
         let result = registry
-            .execute(
+            .execute_with_context(
                 "conversation_search_date",
                 &json!({
-                    "agent_id": agent_id,
                     "query": "test",
                     "start_date": "not-a-date"
                 }),
+                Some(&context),
             )
             .await;
 
@@ -928,28 +1101,29 @@ mod tests {
         let registry = state.tool_registry();
         register_memory_tools(registry, state.clone()).await;
 
-        // Missing agent_id
+        // Missing agent_id in context (and no fallback in input)
+        let context_without_agent = ToolExecutionContext::default();
         let result = registry
-            .execute(
+            .execute_with_context(
                 "conversation_search_date",
                 &json!({
                     "query": "test"
                 }),
+                Some(&context_without_agent),
             )
             .await;
 
-        assert!(result
-            .output
-            .contains("Error: missing required parameter 'agent_id'"));
+        assert!(result.output.contains("agent_id not available"));
+
+        // Create context with agent_id for next test
+        let context = ToolExecutionContext {
+            agent_id: Some("test-id".to_string()),
+            ..Default::default()
+        };
 
         // Missing query
         let result = registry
-            .execute(
-                "conversation_search_date",
-                &json!({
-                    "agent_id": "test-id"
-                }),
-            )
+            .execute_with_context("conversation_search_date", &json!({}), Some(&context))
             .await;
 
         assert!(result
