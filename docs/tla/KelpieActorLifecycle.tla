@@ -249,9 +249,10 @@ Safety == TypeOK /\ LifecycleOrdering /\ GracefulDeactivation /\ IdleTimeoutResp
 \* All liveness properties combined
 Liveness == EventualDeactivation /\ EventualActivation /\ MessageProgress
 
-=============================================================================
 \* Modification History
-\* Updated 2026-01-27 by Claude for Kelpie project - added NoResurrection, 
+\* Updated 2026-01-27 by Claude for Kelpie project - added NoResurrection,
 \*   MessageProgress, DrainMessage, renamed actions per issue spec
 \* Created 2026-01-24 by Claude for Kelpie project
 \* Reference: GitHub Issue #8
+
+=============================================================================

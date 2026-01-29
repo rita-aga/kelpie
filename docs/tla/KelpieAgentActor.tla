@@ -333,7 +333,8 @@ THEOREM (~BUGGY) => (Spec => []CheckpointIntegrity)
 \* Liveness theorem: Crashed nodes eventually recover
 THEOREM Spec => EventualCrashRecovery
 
-=============================================================================
 \* Modification History
 \* Created 2026-01-24 for Kelpie project
 \* Reference: GitHub Issue #12 - Create KelpieAgentActor.tla Specification
+
+=============================================================================
