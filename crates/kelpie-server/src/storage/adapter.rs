@@ -345,40 +345,77 @@ impl AgentStorage for KvAdapter {
             });
         }
 
-        // Delete agent metadata
+        // IMPORTANT: Delete children FIRST, then agent metadata LAST.
+        // This ensures atomicity - if any child delete fails, the agent still exists
+        // and the operation can be retried. If we deleted the agent first and a child
+        // delete failed, we'd have orphaned data with no parent agent.
+
+        // 1. Delete associated messages first
+        // Note: Message keys are `message:{message_id}` (not scoped by agent_id in key),
+        // so we need to scan all messages and filter by agent_id from the value.
+        let message_prefix = Self::message_prefix(id);
+        let message_pairs = self
+            .kv
+            .scan_prefix(&self.actor_id, &message_prefix)
+            .await
+            .map_err(|e| Self::map_kv_error("delete_agent_messages", e))?;
+
+        for (key, value) in message_pairs {
+            // Deserialize to check if this message belongs to this agent
+            if let Ok(message) = Self::deserialize::<Message>(&value) {
+                if message.agent_id == id {
+                    self.kv
+                        .delete(&self.actor_id, &key)
+                        .await
+                        .map_err(|e| Self::map_kv_error("delete_message", e))?;
+                }
+            }
+        }
+
+        // 2. Delete associated sessions
+        // Note: Session keys are `session:{session_id}` (not scoped by agent_id in key),
+        // so we need to scan all sessions and filter by agent_id from the value.
+        let session_prefix = Self::session_prefix(id);
+        let session_pairs = self
+            .kv
+            .scan_prefix(&self.actor_id, &session_prefix)
+            .await
+            .map_err(|e| Self::map_kv_error("delete_agent_sessions", e))?;
+
+        for (key, value) in session_pairs {
+            // Deserialize to check if this session belongs to this agent
+            if let Ok(session) = Self::deserialize::<SessionState>(&value) {
+                if session.agent_id == id {
+                    self.kv
+                        .delete(&self.actor_id, &key)
+                        .await
+                        .map_err(|e| Self::map_kv_error("delete_session", e))?;
+                }
+            }
+        }
+
+        // 3. Delete associated blocks
+        let blocks_key = Self::blocks_key(id);
+        // Note: blocks may not exist, so we handle NotFound gracefully
+        match self.kv.delete(&self.actor_id, &blocks_key).await {
+            Ok(()) => {}
+            Err(e) => {
+                // Only propagate if it's not a "key not found" type error
+                // Most KV stores return Ok(()) for deleting non-existent keys,
+                // but we handle both cases to be safe
+                let err_str = format!("{:?}", e);
+                if !err_str.contains("NotFound") && !err_str.contains("not found") {
+                    return Err(Self::map_kv_error("delete_blocks", e));
+                }
+            }
+        }
+
+        // 4. Delete agent metadata LAST (after all children are deleted)
         let agent_key = Self::agent_key(id);
         self.kv
             .delete(&self.actor_id, &agent_key)
             .await
             .map_err(|e| Self::map_kv_error("delete_agent_metadata", e))?;
-
-        // Delete associated blocks
-        let blocks_key = Self::blocks_key(id);
-        let _ = self.kv.delete(&self.actor_id, &blocks_key).await; // Ignore if not exists
-
-        // Delete associated sessions
-        let session_prefix = Self::session_prefix(id);
-        let session_keys = self
-            .kv
-            .list_keys(&self.actor_id, &session_prefix)
-            .await
-            .map_err(|e| Self::map_kv_error("delete_agent_sessions", e))?;
-
-        for key in session_keys {
-            let _ = self.kv.delete(&self.actor_id, &key).await; // Continue on error
-        }
-
-        // Delete associated messages
-        let message_prefix = Self::message_prefix(id);
-        let message_keys = self
-            .kv
-            .list_keys(&self.actor_id, &message_prefix)
-            .await
-            .map_err(|e| Self::map_kv_error("delete_agent_messages", e))?;
-
-        for key in message_keys {
-            let _ = self.kv.delete(&self.actor_id, &key).await; // Continue on error
-        }
 
         Ok(())
     }
@@ -592,6 +629,8 @@ impl AgentStorage for KvAdapter {
         // Preconditions
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
 
+        // Note: Session keys are `session:{session_id}` (not scoped by agent_id in key),
+        // so we need to scan all sessions and filter by agent_id from the value.
         let prefix = Self::session_prefix(agent_id);
         let pairs = self
             .kv
@@ -599,10 +638,13 @@ impl AgentStorage for KvAdapter {
             .await
             .map_err(|e| Self::map_kv_error("list_sessions", e))?;
 
-        let mut sessions = Vec::with_capacity(pairs.len());
+        let mut sessions = Vec::new();
         for (_key, value) in pairs {
-            let session = Self::deserialize(&value)?;
-            sessions.push(session);
+            let session: SessionState = Self::deserialize(&value)?;
+            // Filter by agent_id since keys don't include agent scope
+            if session.agent_id == agent_id {
+                sessions.push(session);
+            }
         }
 
         Ok(sessions)
@@ -642,6 +684,8 @@ impl AgentStorage for KvAdapter {
         assert!(limit > 0, "limit must be positive");
         assert!(limit <= 10000, "limit too large: {}", limit);
 
+        // Note: Message keys are `message:{message_id}` (not scoped by agent_id in key),
+        // so we need to scan all messages and filter by agent_id from the value.
         let prefix = Self::message_prefix(agent_id);
 
         let pairs = self
@@ -650,10 +694,13 @@ impl AgentStorage for KvAdapter {
             .await
             .map_err(|e| Self::map_kv_error("load_messages", e))?;
 
-        let mut messages = Vec::with_capacity(pairs.len());
+        let mut messages = Vec::new();
         for (_key, value) in pairs {
             let message: Message = Self::deserialize(&value)?;
-            messages.push(message);
+            // Filter by agent_id since keys don't include agent scope
+            if message.agent_id == agent_id {
+                messages.push(message);
+            }
         }
 
         // Sort by created_at (oldest first)
@@ -672,6 +719,8 @@ impl AgentStorage for KvAdapter {
         // Preconditions
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
 
+        // Note: Message keys are `message:{message_id}` (not scoped by agent_id in key),
+        // so we need to scan all messages and filter by agent_id from the value.
         let prefix = Self::message_prefix(agent_id);
         let pairs = self
             .kv
@@ -679,10 +728,13 @@ impl AgentStorage for KvAdapter {
             .await
             .map_err(|e| Self::map_kv_error("load_messages_since", e))?;
 
-        let mut messages = Vec::with_capacity(pairs.len());
+        let mut messages = Vec::new();
         for (_key, value) in pairs {
             let message: Message = Self::deserialize(&value)?;
-            if message.created_at.timestamp_millis() as u64 > since_ms {
+            // Filter by agent_id since keys don't include agent scope
+            if message.agent_id == agent_id
+                && message.created_at.timestamp_millis() as u64 > since_ms
+            {
                 messages.push(message);
             }
         }
@@ -697,31 +749,49 @@ impl AgentStorage for KvAdapter {
         // Preconditions
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
 
+        // Note: Message keys are `message:{message_id}` (not scoped by agent_id in key),
+        // so we need to scan all messages and count by agent_id from the value.
         let prefix = Self::message_prefix(agent_id);
 
-        let keys = self
+        let pairs = self
             .kv
-            .list_keys(&self.actor_id, &prefix)
+            .scan_prefix(&self.actor_id, &prefix)
             .await
             .map_err(|e| Self::map_kv_error("count_messages", e))?;
 
-        Ok(keys.len())
+        let mut count = 0;
+        for (_key, value) in pairs {
+            if let Ok(message) = Self::deserialize::<Message>(&value) {
+                if message.agent_id == agent_id {
+                    count += 1;
+                }
+            }
+        }
+
+        Ok(count)
     }
 
     async fn delete_messages(&self, agent_id: &str) -> Result<(), StorageError> {
         // Preconditions
         assert!(!agent_id.is_empty(), "agent id cannot be empty");
 
+        // Note: Message keys are `message:{message_id}` (not scoped by agent_id in key),
+        // so we need to scan all messages and filter by agent_id from the value.
         let prefix = Self::message_prefix(agent_id);
 
-        let keys = self
+        let pairs = self
             .kv
-            .list_keys(&self.actor_id, &prefix)
+            .scan_prefix(&self.actor_id, &prefix)
             .await
             .map_err(|e| Self::map_kv_error("delete_messages", e))?;
 
-        for key in keys {
-            let _ = self.kv.delete(&self.actor_id, &key).await; // Continue on error
+        for (key, value) in pairs {
+            // Deserialize to check if this message belongs to this agent
+            if let Ok(message) = Self::deserialize::<Message>(&value) {
+                if message.agent_id == agent_id {
+                    let _ = self.kv.delete(&self.actor_id, &key).await; // Continue on error
+                }
+            }
         }
 
         Ok(())
