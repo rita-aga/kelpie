@@ -1261,7 +1261,7 @@ impl McpClient {
     /// Start a background health monitor that periodically checks server health
     ///
     /// If health check fails, logs a warning. Full reconnection logic requires
-    /// Arc<Self> for proper lifecycle management.
+    /// `Arc<Self>` for proper lifecycle management.
     ///
     /// # Arguments
     /// * `interval_ms` - Interval between health checks in milliseconds
@@ -1286,7 +1286,7 @@ impl McpClient {
         );
 
         // Spawn health monitor task
-        // Note: Full reconnection logic requires Arc<Self> for proper lifecycle management
+        // Note: Full reconnection logic requires `Arc<Self>` for proper lifecycle management
         let runtime = kelpie_core::current_runtime();
         std::mem::drop(kelpie_core::Runtime::spawn(&runtime, async move {
             loop {
@@ -1301,7 +1301,7 @@ impl McpClient {
                     _ = kelpie_core::Runtime::sleep(&rt, interval) => {
                         debug!(server = %server_name, "Health monitor tick");
                         // Note: Full health check and reconnection would happen here
-                        // but requires Arc<Self> for proper lifecycle management
+                        // but requires `Arc<Self>` for proper lifecycle management
                     }
                 }
             }

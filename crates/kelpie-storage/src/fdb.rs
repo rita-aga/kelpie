@@ -264,7 +264,7 @@ use std::collections::HashMap;
 pub struct FdbActorTransaction {
     /// Actor ID this transaction is scoped to
     actor_id: ActorId,
-    /// Reference to the FDB KV store (cloned, shares Arc<Database> internally)
+    /// Reference to the FDB KV store (cloned, shares `Arc<Database>` internally)
     kv: FdbKV,
     /// Buffered writes: key -> Some(value) for set, None for delete
     write_buffer: HashMap<Vec<u8>, Option<Vec<u8>>>,
