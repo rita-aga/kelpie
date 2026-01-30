@@ -684,3 +684,253 @@ async fn test_full_memory_workflow_under_faults() {
 
     eprintln!("Workflow log (seed={}): {:?}", seed, workflow_log);
 }
+
+// =============================================================================
+// Error Handling Tests (Added during review to address coverage gap)
+// =============================================================================
+
+/// Test error handling when required parameters are missing
+///
+/// The real memory tools should return appropriate errors for missing params.
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_core_memory_append_missing_params() {
+    let seed = get_seed();
+    let rng = DeterministicRng::new(seed);
+    let fault_injector = Arc::new(FaultInjectorBuilder::new(rng).build());
+
+    let state = AppState::with_fault_injector(kelpie_core::current_runtime(), fault_injector);
+    let registry = state.tool_registry();
+    register_memory_tools(registry, state.clone()).await;
+
+    // Missing agent_id
+    let result = registry
+        .execute(
+            "core_memory_append",
+            &json!({
+                "label": "persona",
+                "content": "test content"
+            }),
+        )
+        .await;
+    assert!(
+        !result.success || result.output.contains("Error") || result.output.contains("required"),
+        "Should fail with missing agent_id"
+    );
+
+    // Missing content
+    let result = registry
+        .execute(
+            "core_memory_append",
+            &json!({
+                "agent_id": "test-agent",
+                "label": "persona"
+            }),
+        )
+        .await;
+    assert!(
+        !result.success || result.output.contains("Error") || result.output.contains("required"),
+        "Should fail with missing content"
+    );
+}
+
+/// Test error handling when agent doesn't exist
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_memory_operations_nonexistent_agent() {
+    let seed = get_seed();
+    let rng = DeterministicRng::new(seed);
+    let fault_injector = Arc::new(FaultInjectorBuilder::new(rng).build());
+
+    let state = AppState::with_fault_injector(kelpie_core::current_runtime(), fault_injector);
+    let registry = state.tool_registry();
+    register_memory_tools(registry, state.clone()).await;
+
+    // Try operations on non-existent agent
+    let result = registry
+        .execute(
+            "core_memory_append",
+            &json!({
+                "agent_id": "nonexistent-agent-12345",
+                "label": "persona",
+                "content": "test content"
+            }),
+        )
+        .await;
+    assert!(
+        !result.success || result.output.contains("not found") || result.output.contains("Error"),
+        "Should fail for non-existent agent: {}",
+        result.output
+    );
+
+    let result = registry
+        .execute(
+            "archival_memory_search",
+            &json!({
+                "agent_id": "nonexistent-agent-12345",
+                "query": "test"
+            }),
+        )
+        .await;
+    assert!(
+        !result.success
+            || result.output.contains("not found")
+            || result.output.contains("Error")
+            || result.output.contains("No results"),
+        "Should fail or return empty for non-existent agent: {}",
+        result.output
+    );
+}
+
+/// Test error handling when block doesn't exist for replace
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_core_memory_replace_block_not_found() {
+    let seed = get_seed();
+    let rng = DeterministicRng::new(seed);
+    let fault_injector = Arc::new(FaultInjectorBuilder::new(rng).build());
+
+    let state = AppState::with_fault_injector(kelpie_core::current_runtime(), fault_injector);
+
+    // Create agent without the "facts" block
+    let agent = create_test_agent("replace-test");
+    let agent_id = agent.id.clone();
+    state.create_agent(agent).unwrap();
+
+    let registry = state.tool_registry();
+    register_memory_tools(registry, state.clone()).await;
+
+    // Try to replace in non-existent block
+    let result = registry
+        .execute(
+            "core_memory_replace",
+            &json!({
+                "agent_id": agent_id,
+                "label": "nonexistent_block",
+                "old_content": "foo",
+                "new_content": "bar"
+            }),
+        )
+        .await;
+    assert!(
+        !result.success || result.output.contains("not found") || result.output.contains("Error"),
+        "Should fail for non-existent block: {}",
+        result.output
+    );
+}
+
+/// Test agent isolation - agents cannot access each other's memory
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_memory_agent_isolation() {
+    let seed = get_seed();
+    let rng = DeterministicRng::new(seed);
+    let fault_injector = Arc::new(FaultInjectorBuilder::new(rng).build());
+
+    let state = AppState::with_fault_injector(kelpie_core::current_runtime(), fault_injector);
+
+    // Create two agents
+    let agent1 = create_test_agent("isolation-agent-1");
+    let agent1_id = agent1.id.clone();
+    state.create_agent(agent1).unwrap();
+
+    let agent2 = create_test_agent("isolation-agent-2");
+    let agent2_id = agent2.id.clone();
+    state.create_agent(agent2).unwrap();
+
+    let registry = state.tool_registry();
+    register_memory_tools(registry, state.clone()).await;
+
+    // Agent 1 stores data
+    registry
+        .execute(
+            "core_memory_append",
+            &json!({
+                "agent_id": agent1_id,
+                "label": "secrets",
+                "content": "Agent 1 secret: password123"
+            }),
+        )
+        .await;
+
+    // Agent 2 stores different data
+    registry
+        .execute(
+            "core_memory_append",
+            &json!({
+                "agent_id": agent2_id,
+                "label": "secrets",
+                "content": "Agent 2 secret: hunter2"
+            }),
+        )
+        .await;
+
+    // Verify isolation - each agent should only see their own data
+    let agent1_block = state.get_block_by_label(&agent1_id, "secrets").unwrap();
+    let agent2_block = state.get_block_by_label(&agent2_id, "secrets").unwrap();
+
+    if let Some(block) = agent1_block {
+        assert!(
+            block.value.contains("Agent 1") && !block.value.contains("Agent 2"),
+            "Agent 1 should only see Agent 1's data: {}",
+            block.value
+        );
+    }
+
+    if let Some(block) = agent2_block {
+        assert!(
+            block.value.contains("Agent 2") && !block.value.contains("Agent 1"),
+            "Agent 2 should only see Agent 2's data: {}",
+            block.value
+        );
+    }
+}
+
+/// Test DST determinism - same seed produces same results
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_memory_tools_determinism() {
+    let seed = 42424242u64; // Fixed seed for determinism test
+
+    async fn run_with_seed(seed: u64) -> Vec<bool> {
+        let rng = DeterministicRng::new(seed);
+        let fault_injector = Arc::new(
+            FaultInjectorBuilder::new(rng)
+                .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.5))
+                .build(),
+        );
+
+        let state = AppState::with_fault_injector(kelpie_core::current_runtime(), fault_injector);
+        let agent = create_test_agent("determinism-test");
+        let agent_id = agent.id.clone();
+        state.create_agent(agent).unwrap();
+
+        let registry = state.tool_registry();
+        register_memory_tools(registry, state.clone()).await;
+
+        let mut results = Vec::new();
+        for i in 0..10 {
+            let result = registry
+                .execute(
+                    "core_memory_append",
+                    &json!({
+                        "agent_id": agent_id,
+                        "label": format!("fact_{}", i),
+                        "content": format!("Fact number {}", i)
+                    }),
+                )
+                .await;
+            results.push(result.success);
+        }
+        results
+    }
+
+    let run1 = run_with_seed(seed).await;
+    let run2 = run_with_seed(seed).await;
+
+    assert_eq!(
+        run1, run2,
+        "Same seed should produce identical results.\nRun 1: {:?}\nRun 2: {:?}",
+        run1, run2
+    );
+}
