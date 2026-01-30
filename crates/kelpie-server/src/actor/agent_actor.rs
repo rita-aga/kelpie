@@ -324,10 +324,23 @@ impl AgentActor {
         );
 
         // 4. Call LLM with tools
+        let llm_start = std::time::Instant::now();
+        tracing::info!(
+            agent_id = %ctx.id.id(),
+            message_count = llm_messages.len(),
+            "Starting LLM call"
+        );
         let mut response = self
             .llm
             .complete_with_tools(llm_messages.clone(), tools.clone())
             .await?;
+        tracing::info!(
+            agent_id = %ctx.id.id(),
+            elapsed_ms = llm_start.elapsed().as_millis() as u64,
+            prompt_tokens = response.prompt_tokens,
+            completion_tokens = response.completion_tokens,
+            "LLM call completed"
+        );
 
         let mut total_prompt_tokens = response.prompt_tokens;
         let mut total_completion_tokens = response.completion_tokens;
