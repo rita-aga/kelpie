@@ -9,8 +9,16 @@ pub use teleport_service::{
     TeleportPackageInfo, TeleportService,
 };
 
-use crate::actor::{HandleMessageFullRequest, HandleMessageFullResponse, StreamChunk};
-use crate::models::{AgentState, CreateAgentRequest, StreamEvent, UpdateAgentRequest};
+use crate::actor::{
+    ArchivalDeleteRequest, ArchivalInsertRequest, ArchivalInsertResponse, ArchivalSearchRequest,
+    ArchivalSearchResponse, ConversationSearchDateRequest, ConversationSearchRequest,
+    ConversationSearchResponse, CoreMemoryReplaceRequest, GetBlockRequest, GetBlockResponse,
+    HandleMessageFullRequest, HandleMessageFullResponse, ListMessagesRequest, ListMessagesResponse,
+    StreamChunk,
+};
+use crate::models::{
+    AgentState, ArchivalEntry, Block, CreateAgentRequest, Message, StreamEvent, UpdateAgentRequest,
+};
 use bytes::Bytes;
 use futures::stream::Stream;
 use kelpie_core::actor::ActorId;
@@ -408,6 +416,46 @@ impl<R: kelpie_core::Runtime> AgentService<R> {
         Ok(())
     }
 
+    /// Append content to a memory block by label
+    ///
+    /// # Arguments
+    /// * `agent_id` - Agent ID string
+    /// * `label` - Block label (e.g., "persona", "human")
+    /// * `content` - Content to append
+    ///
+    /// # Returns
+    /// Ok(()) on success
+    pub async fn core_memory_append(
+        &self,
+        agent_id: &str,
+        label: &str,
+        content: &str,
+    ) -> Result<()> {
+        let actor_id = ActorId::new("agents", agent_id)?;
+
+        // Build append request (matches CoreMemoryAppend struct in agent_actor)
+        let request = serde_json::json!({
+            "label": label,
+            "content": content,
+        });
+
+        // Serialize request
+        let payload = serde_json::to_vec(&request).map_err(|e| Error::Internal {
+            message: format!("Failed to serialize CoreMemoryAppend: {}", e),
+        })?;
+
+        // Invoke core_memory_append operation
+        self.dispatcher
+            .invoke(
+                actor_id,
+                "core_memory_append".to_string(),
+                Bytes::from(payload),
+            )
+            .await?;
+
+        Ok(())
+    }
+
     /// Stream message with LLM token streaming (Phase 7.7)
     ///
     /// Returns stream of chunks as LLM generates response.
@@ -466,5 +514,322 @@ impl<R: kelpie_core::Runtime> AgentService<R> {
         }));
 
         Ok(Box::pin(futures::stream::iter(chunks)))
+    }
+
+    // =========================================================================
+    // New methods for single source of truth (HashMap removal)
+    // =========================================================================
+
+    /// Insert into archival memory
+    ///
+    /// # Arguments
+    /// * `agent_id` - Agent ID string
+    /// * `content` - Content to store
+    /// * `metadata` - Optional metadata
+    ///
+    /// # Returns
+    /// The entry ID of the created archival entry
+    pub async fn archival_insert(
+        &self,
+        agent_id: &str,
+        content: &str,
+        metadata: Option<Value>,
+    ) -> Result<String> {
+        let actor_id = ActorId::new("agents", agent_id)?;
+
+        let request = ArchivalInsertRequest {
+            content: content.to_string(),
+            metadata,
+        };
+
+        let payload = serde_json::to_vec(&request).map_err(|e| Error::Internal {
+            message: format!("Failed to serialize ArchivalInsertRequest: {}", e),
+        })?;
+
+        let response = self
+            .dispatcher
+            .invoke(
+                actor_id,
+                "archival_insert".to_string(),
+                Bytes::from(payload),
+            )
+            .await?;
+
+        let result: ArchivalInsertResponse =
+            serde_json::from_slice(&response).map_err(|e| Error::Internal {
+                message: format!("Failed to deserialize ArchivalInsertResponse: {}", e),
+            })?;
+
+        Ok(result.entry_id)
+    }
+
+    /// Search archival memory
+    ///
+    /// # Arguments
+    /// * `agent_id` - Agent ID string
+    /// * `query` - Search query
+    /// * `limit` - Maximum results to return
+    ///
+    /// # Returns
+    /// Matching archival entries
+    pub async fn archival_search(
+        &self,
+        agent_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<ArchivalEntry>> {
+        let actor_id = ActorId::new("agents", agent_id)?;
+
+        let request = ArchivalSearchRequest {
+            query: query.to_string(),
+            limit,
+        };
+
+        let payload = serde_json::to_vec(&request).map_err(|e| Error::Internal {
+            message: format!("Failed to serialize ArchivalSearchRequest: {}", e),
+        })?;
+
+        let response = self
+            .dispatcher
+            .invoke(
+                actor_id,
+                "archival_search".to_string(),
+                Bytes::from(payload),
+            )
+            .await?;
+
+        let result: ArchivalSearchResponse =
+            serde_json::from_slice(&response).map_err(|e| Error::Internal {
+                message: format!("Failed to deserialize ArchivalSearchResponse: {}", e),
+            })?;
+
+        Ok(result.entries)
+    }
+
+    /// Delete an archival entry
+    ///
+    /// # Arguments
+    /// * `agent_id` - Agent ID string
+    /// * `entry_id` - ID of the entry to delete
+    pub async fn archival_delete(&self, agent_id: &str, entry_id: &str) -> Result<()> {
+        let actor_id = ActorId::new("agents", agent_id)?;
+
+        let request = ArchivalDeleteRequest {
+            entry_id: entry_id.to_string(),
+        };
+
+        let payload = serde_json::to_vec(&request).map_err(|e| Error::Internal {
+            message: format!("Failed to serialize ArchivalDeleteRequest: {}", e),
+        })?;
+
+        self.dispatcher
+            .invoke(
+                actor_id,
+                "archival_delete".to_string(),
+                Bytes::from(payload),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    /// Search conversation messages
+    ///
+    /// # Arguments
+    /// * `agent_id` - Agent ID string
+    /// * `query` - Search query
+    /// * `limit` - Maximum results to return
+    ///
+    /// # Returns
+    /// Matching messages
+    pub async fn conversation_search(
+        &self,
+        agent_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<Message>> {
+        let actor_id = ActorId::new("agents", agent_id)?;
+
+        let request = ConversationSearchRequest {
+            query: query.to_string(),
+            limit,
+        };
+
+        let payload = serde_json::to_vec(&request).map_err(|e| Error::Internal {
+            message: format!("Failed to serialize ConversationSearchRequest: {}", e),
+        })?;
+
+        let response = self
+            .dispatcher
+            .invoke(
+                actor_id,
+                "conversation_search".to_string(),
+                Bytes::from(payload),
+            )
+            .await?;
+
+        let result: ConversationSearchResponse =
+            serde_json::from_slice(&response).map_err(|e| Error::Internal {
+                message: format!("Failed to deserialize ConversationSearchResponse: {}", e),
+            })?;
+
+        Ok(result.messages)
+    }
+
+    /// Search conversation messages with date filter
+    ///
+    /// # Arguments
+    /// * `agent_id` - Agent ID string
+    /// * `query` - Search query
+    /// * `start_date` - Optional start date (RFC 3339 format)
+    /// * `end_date` - Optional end date (RFC 3339 format)
+    /// * `limit` - Maximum results to return
+    ///
+    /// # Returns
+    /// Matching messages within date range
+    pub async fn conversation_search_date(
+        &self,
+        agent_id: &str,
+        query: &str,
+        start_date: Option<&str>,
+        end_date: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Message>> {
+        let actor_id = ActorId::new("agents", agent_id)?;
+
+        let request = ConversationSearchDateRequest {
+            query: query.to_string(),
+            start_date: start_date.map(|s| s.to_string()),
+            end_date: end_date.map(|s| s.to_string()),
+            limit,
+        };
+
+        let payload = serde_json::to_vec(&request).map_err(|e| Error::Internal {
+            message: format!("Failed to serialize ConversationSearchDateRequest: {}", e),
+        })?;
+
+        let response = self
+            .dispatcher
+            .invoke(
+                actor_id,
+                "conversation_search_date".to_string(),
+                Bytes::from(payload),
+            )
+            .await?;
+
+        let result: ConversationSearchResponse =
+            serde_json::from_slice(&response).map_err(|e| Error::Internal {
+                message: format!("Failed to deserialize ConversationSearchResponse: {}", e),
+            })?;
+
+        Ok(result.messages)
+    }
+
+    /// Replace content in a memory block
+    ///
+    /// # Arguments
+    /// * `agent_id` - Agent ID string
+    /// * `label` - Block label
+    /// * `old_content` - Content to find and replace
+    /// * `new_content` - Replacement content
+    pub async fn core_memory_replace(
+        &self,
+        agent_id: &str,
+        label: &str,
+        old_content: &str,
+        new_content: &str,
+    ) -> Result<()> {
+        let actor_id = ActorId::new("agents", agent_id)?;
+
+        let request = CoreMemoryReplaceRequest {
+            label: label.to_string(),
+            old_content: old_content.to_string(),
+            new_content: new_content.to_string(),
+        };
+
+        let payload = serde_json::to_vec(&request).map_err(|e| Error::Internal {
+            message: format!("Failed to serialize CoreMemoryReplaceRequest: {}", e),
+        })?;
+
+        self.dispatcher
+            .invoke(
+                actor_id,
+                "core_memory_replace".to_string(),
+                Bytes::from(payload),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    /// Get a memory block by label
+    ///
+    /// # Arguments
+    /// * `agent_id` - Agent ID string
+    /// * `label` - Block label to find
+    ///
+    /// # Returns
+    /// The block if found, None otherwise
+    pub async fn get_block_by_label(&self, agent_id: &str, label: &str) -> Result<Option<Block>> {
+        let actor_id = ActorId::new("agents", agent_id)?;
+
+        let request = GetBlockRequest {
+            label: label.to_string(),
+        };
+
+        let payload = serde_json::to_vec(&request).map_err(|e| Error::Internal {
+            message: format!("Failed to serialize GetBlockRequest: {}", e),
+        })?;
+
+        let response = self
+            .dispatcher
+            .invoke(actor_id, "get_block".to_string(), Bytes::from(payload))
+            .await?;
+
+        let result: GetBlockResponse =
+            serde_json::from_slice(&response).map_err(|e| Error::Internal {
+                message: format!("Failed to deserialize GetBlockResponse: {}", e),
+            })?;
+
+        Ok(result.block)
+    }
+
+    /// List messages with pagination
+    ///
+    /// # Arguments
+    /// * `agent_id` - Agent ID string
+    /// * `limit` - Maximum messages to return
+    /// * `before` - Optional message ID to return messages before
+    ///
+    /// # Returns
+    /// List of messages
+    pub async fn list_messages(
+        &self,
+        agent_id: &str,
+        limit: usize,
+        before: Option<&str>,
+    ) -> Result<Vec<Message>> {
+        let actor_id = ActorId::new("agents", agent_id)?;
+
+        let request = ListMessagesRequest {
+            limit,
+            before: before.map(|s| s.to_string()),
+        };
+
+        let payload = serde_json::to_vec(&request).map_err(|e| Error::Internal {
+            message: format!("Failed to serialize ListMessagesRequest: {}", e),
+        })?;
+
+        let response = self
+            .dispatcher
+            .invoke(actor_id, "list_messages".to_string(), Bytes::from(payload))
+            .await?;
+
+        let result: ListMessagesResponse =
+            serde_json::from_slice(&response).map_err(|e| Error::Internal {
+                message: format!("Failed to deserialize ListMessagesResponse: {}", e),
+            })?;
+
+        Ok(result.messages)
     }
 }

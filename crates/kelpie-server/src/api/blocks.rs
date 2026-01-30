@@ -35,7 +35,7 @@ pub async fn list_blocks<R: Runtime + 'static>(
     Path(agent_id): Path<String>,
     Query(query): Query<ListBlocksParams>,
 ) -> Result<Json<Vec<Block>>, ApiError> {
-    // Phase 6: Get agent from actor system (or HashMap fallback)
+    // Get agent from actor system (AgentService required)
     let agent = state
         .get_agent_async(&agent_id)
         .await?
@@ -76,7 +76,7 @@ pub async fn get_block<R: Runtime + 'static>(
     State(state): State<AppState<R>>,
     Path((agent_id, block_id)): Path<(String, String)>,
 ) -> Result<Json<Block>, ApiError> {
-    // Phase 6: Get agent from actor system (or HashMap fallback)
+    // Get agent from actor system (AgentService required)
     let agent = state
         .get_agent_async(&agent_id)
         .await?
@@ -102,7 +102,7 @@ pub async fn update_block<R: Runtime + 'static>(
     Path((agent_id, block_id)): Path<(String, String)>,
     Json(request): Json<UpdateBlockRequest>,
 ) -> Result<Json<Block>, ApiError> {
-    // Phase 6: Get agent from actor system (or HashMap fallback)
+    // Get agent from actor system (AgentService required)
     let agent = state
         .get_agent_async(&agent_id)
         .await?
@@ -130,41 +130,34 @@ pub async fn update_block<R: Runtime + 'static>(
         }
     }
 
-    // Update block via AgentService
-    if let Some(service) = state.agent_service() {
-        // Use value from request, or keep current value
-        let new_value = request.value.unwrap_or_else(|| block.value.clone());
+    // Single source of truth: Require AgentService
+    let service = state
+        .agent_service()
+        .ok_or_else(|| ApiError::internal("AgentService not configured"))?;
 
-        service
-            .update_block_by_label(&agent_id, &label, new_value)
-            .await
-            .map_err(|e| ApiError::internal(format!("Failed to update block: {}", e)))?;
+    // Use value from request, or keep current value
+    let new_value = request.value.unwrap_or_else(|| block.value.clone());
 
-        // Get updated agent to return the updated block
-        let updated_agent = state
-            .get_agent_async(&agent_id)
-            .await?
-            .ok_or_else(|| ApiError::internal("Agent not found after update"))?;
+    service
+        .update_block_by_label(&agent_id, &label, new_value)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to update block: {}", e)))?;
 
-        let updated_block = updated_agent
-            .blocks
-            .iter()
-            .find(|b| b.id == block_id)
-            .cloned()
-            .ok_or_else(|| ApiError::internal("Block not found after update"))?;
+    // Get updated agent to return the updated block
+    let updated_agent = state
+        .get_agent_async(&agent_id)
+        .await?
+        .ok_or_else(|| ApiError::internal("Agent not found after update"))?;
 
-        tracing::info!(agent_id = %agent_id, block_id = %block_id, "updated block");
-        Ok(Json(updated_block))
-    } else {
-        // Fallback to HashMap-based update
-        #[allow(deprecated)]
-        let updated = state.update_block(&agent_id, &block_id, |block| {
-            block.apply_update(request);
-        })?;
+    let updated_block = updated_agent
+        .blocks
+        .iter()
+        .find(|b| b.id == block_id)
+        .cloned()
+        .ok_or_else(|| ApiError::internal("Block not found after update"))?;
 
-        tracing::info!(agent_id = %agent_id, block_id = %updated.id, "updated block");
-        Ok(Json(updated))
-    }
+    tracing::info!(agent_id = %agent_id, block_id = %block_id, "updated block");
+    Ok(Json(updated_block))
 }
 
 // =============================================================================
@@ -180,7 +173,7 @@ pub async fn get_block_by_label<R: Runtime + 'static>(
     State(state): State<AppState<R>>,
     Path((agent_id, label)): Path<(String, String)>,
 ) -> Result<Json<Block>, ApiError> {
-    // Get agent (works with both HashMap and AgentService)
+    // Get agent from actor system (AgentService required)
     let agent = state
         .get_agent_async(&agent_id)
         .await?
@@ -232,40 +225,34 @@ pub async fn update_block_by_label<R: Runtime + 'static>(
         }
     }
 
-    // Update block via AgentService (if available)
-    if let Some(service) = state.agent_service() {
-        // Use value from request, or keep current value
-        let new_value = request.value.unwrap_or_else(|| block.value.clone());
+    // Single source of truth: Require AgentService
+    let service = state
+        .agent_service()
+        .ok_or_else(|| ApiError::internal("AgentService not configured"))?;
 
-        service
-            .update_block_by_label(&agent_id, &label, new_value)
-            .await
-            .map_err(|e| ApiError::internal(format!("Failed to update block: {}", e)))?;
+    // Use value from request, or keep current value
+    let new_value = request.value.unwrap_or_else(|| block.value.clone());
 
-        // Get updated agent to return the updated block
-        let updated_agent = state
-            .get_agent_async(&agent_id)
-            .await?
-            .ok_or_else(|| ApiError::internal("Agent not found after update"))?;
+    service
+        .update_block_by_label(&agent_id, &label, new_value)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to update block: {}", e)))?;
 
-        let updated_block = updated_agent
-            .blocks
-            .iter()
-            .find(|b| b.label == label)
-            .cloned()
-            .ok_or_else(|| ApiError::internal("Block not found after update"))?;
+    // Get updated agent to return the updated block
+    let updated_agent = state
+        .get_agent_async(&agent_id)
+        .await?
+        .ok_or_else(|| ApiError::internal("Agent not found after update"))?;
 
-        tracing::info!(agent_id = %agent_id, label = %label, "updated block by label");
-        Ok(Json(updated_block))
-    } else {
-        // Fallback to HashMap-based update
-        let updated = state.update_block_by_label(&agent_id, &label, |block| {
-            block.apply_update(request);
-        })?;
+    let updated_block = updated_agent
+        .blocks
+        .iter()
+        .find(|b| b.label == label)
+        .cloned()
+        .ok_or_else(|| ApiError::internal("Block not found after update"))?;
 
-        tracing::info!(agent_id = %agent_id, label = %label, "updated block by label");
-        Ok(Json(updated))
-    }
+    tracing::info!(agent_id = %agent_id, label = %label, "updated block by label");
+    Ok(Json(updated_block))
 }
 
 // =============================================================================

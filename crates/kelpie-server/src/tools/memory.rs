@@ -110,7 +110,11 @@ async fn register_core_memory_append<R: kelpie_core::Runtime + 'static>(
                 };
 
                 // BUG-001 FIX: Use atomic append_or_create to eliminate TOCTOU race
-                match state.append_or_create_block_by_label(&agent_id, &label, &content) {
+                // Phase 6.11: Use async version that works with actor system
+                match state
+                    .append_or_create_block_by_label_async(&agent_id, &label, &content)
+                    .await
+                {
                     Ok(_) => ToolExecutionResult::success(
                         format!("Successfully updated memory block '{}'", label),
                         elapsed_ms(start_ms),
@@ -150,6 +154,7 @@ async fn register_core_memory_replace<R: kelpie_core::Runtime + 'static>(
     state: AppState<R>,
 ) {
     // BUG-002 FIX: Use ContextAwareToolHandler to get agent_id from context
+    // Single source of truth: AgentService required (no HashMap fallback)
     let handler: ContextAwareToolHandler =
         Arc::new(move |input: &Value, context: &ToolExecutionContext| {
             let state = state.clone();
@@ -157,6 +162,17 @@ async fn register_core_memory_replace<R: kelpie_core::Runtime + 'static>(
             let context = context.clone();
             Box::pin(async move {
                 let start_ms = WallClockTime::new().monotonic_ms();
+
+                // Require AgentService (no fallback)
+                let service = match state.agent_service() {
+                    Some(s) => s,
+                    None => {
+                        return ToolExecutionResult::failure(
+                            "Error: AgentService not configured",
+                            elapsed_ms(start_ms),
+                        )
+                    }
+                };
 
                 let agent_id = match get_agent_id(&context, &input) {
                     Ok(id) => id,
@@ -189,39 +205,11 @@ async fn register_core_memory_replace<R: kelpie_core::Runtime + 'static>(
                     .unwrap_or("")
                     .to_string();
 
-                // Get current block
-                let current_block = match state.get_block_by_label(&agent_id, &label) {
-                    Ok(Some(b)) => b,
-                    Ok(None) => {
-                        return ToolExecutionResult::failure(
-                            format!("Error: block '{}' not found", label),
-                            elapsed_ms(start_ms),
-                        )
-                    }
-                    Err(e) => {
-                        return ToolExecutionResult::failure(
-                            format!("Error: {}", e),
-                            elapsed_ms(start_ms),
-                        )
-                    }
-                };
-
-                // Check if old_content exists
-                if !current_block.value.contains(&old_content) {
-                    return ToolExecutionResult::failure(
-                        format!(
-                            "Error: content '{}' not found in block '{}'",
-                            old_content, label
-                        ),
-                        elapsed_ms(start_ms),
-                    );
-                }
-
-                // Perform replacement
-                match state.update_block_by_label(&agent_id, &label, |block| {
-                    block.value = block.value.replace(&old_content, &new_content);
-                }) {
-                    Ok(_) => ToolExecutionResult::success(
+                match service
+                    .core_memory_replace(&agent_id, &label, &old_content, &new_content)
+                    .await
+                {
+                    Ok(()) => ToolExecutionResult::success(
                         format!("Successfully replaced content in memory block '{}'", label),
                         elapsed_ms(start_ms),
                     ),
@@ -264,6 +252,7 @@ async fn register_archival_memory_insert<R: kelpie_core::Runtime + 'static>(
     state: AppState<R>,
 ) {
     // BUG-002 FIX: Use ContextAwareToolHandler to get agent_id from context
+    // Single source of truth: AgentService required (no HashMap fallback)
     let handler: ContextAwareToolHandler =
         Arc::new(move |input: &Value, context: &ToolExecutionContext| {
             let state = state.clone();
@@ -271,6 +260,17 @@ async fn register_archival_memory_insert<R: kelpie_core::Runtime + 'static>(
             let context = context.clone();
             Box::pin(async move {
                 let start_ms = WallClockTime::new().monotonic_ms();
+
+                // Require AgentService (no fallback)
+                let service = match state.agent_service() {
+                    Some(s) => s,
+                    None => {
+                        return ToolExecutionResult::failure(
+                            "Error: AgentService not configured",
+                            elapsed_ms(start_ms),
+                        )
+                    }
+                };
 
                 let agent_id = match get_agent_id(&context, &input) {
                     Ok(id) => id,
@@ -287,11 +287,11 @@ async fn register_archival_memory_insert<R: kelpie_core::Runtime + 'static>(
                     }
                 };
 
-                match state.add_archival(&agent_id, content, None) {
-                    Ok(entry) => ToolExecutionResult::success(
+                match service.archival_insert(&agent_id, &content, None).await {
+                    Ok(entry_id) => ToolExecutionResult::success(
                         format!(
                             "Successfully inserted into archival memory. Entry ID: {}",
-                            entry.id
+                            entry_id
                         ),
                         elapsed_ms(start_ms),
                     ),
@@ -326,6 +326,7 @@ async fn register_archival_memory_search<R: kelpie_core::Runtime + 'static>(
     state: AppState<R>,
 ) {
     // BUG-002 FIX: Use ContextAwareToolHandler to get agent_id from context
+    // Single source of truth: AgentService required (no HashMap fallback)
     let handler: ContextAwareToolHandler =
         Arc::new(move |input: &Value, context: &ToolExecutionContext| {
             let state = state.clone();
@@ -333,6 +334,17 @@ async fn register_archival_memory_search<R: kelpie_core::Runtime + 'static>(
             let context = context.clone();
             Box::pin(async move {
                 let start_ms = WallClockTime::new().monotonic_ms();
+
+                // Require AgentService (no fallback)
+                let service = match state.agent_service() {
+                    Some(s) => s,
+                    None => {
+                        return ToolExecutionResult::failure(
+                            "Error: AgentService not configured",
+                            elapsed_ms(start_ms),
+                        )
+                    }
+                };
 
                 let agent_id = match get_agent_id(&context, &input) {
                     Ok(id) => id,
@@ -350,32 +362,43 @@ async fn register_archival_memory_search<R: kelpie_core::Runtime + 'static>(
                 };
 
                 let page = input.get("page").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
-
                 let page_size = 10;
-                let offset = page * page_size;
 
-                match state.search_archival(&agent_id, Some(&query), page_size + offset) {
+                // Helper function to format results
+                fn format_results(
+                    entries: Vec<crate::models::ArchivalEntry>,
+                    page: usize,
+                    elapsed: u64,
+                ) -> ToolExecutionResult {
+                    if entries.is_empty() {
+                        ToolExecutionResult::success("No results found", elapsed)
+                    } else {
+                        let results: Vec<String> = entries
+                            .iter()
+                            .map(|e| format!("[{}] {}", e.id, e.content))
+                            .collect();
+                        ToolExecutionResult::success(
+                            format!(
+                                "Found {} results (page {}):\n{}",
+                                results.len(),
+                                page,
+                                results.join("\n---\n")
+                            ),
+                            elapsed,
+                        )
+                    }
+                }
+
+                let total_needed = (page + 1) * page_size;
+                match service
+                    .archival_search(&agent_id, &query, total_needed)
+                    .await
+                {
                     Ok(entries) => {
+                        let offset = page * page_size;
                         let page_entries: Vec<_> =
                             entries.into_iter().skip(offset).take(page_size).collect();
-
-                        if page_entries.is_empty() {
-                            ToolExecutionResult::success("No results found", elapsed_ms(start_ms))
-                        } else {
-                            let results: Vec<String> = page_entries
-                                .iter()
-                                .map(|e| format!("[{}] {}", e.id, e.content))
-                                .collect();
-                            ToolExecutionResult::success(
-                                format!(
-                                    "Found {} results (page {}):\n{}",
-                                    results.len(),
-                                    page,
-                                    results.join("\n---\n")
-                                ),
-                                elapsed_ms(start_ms),
-                            )
-                        }
+                        format_results(page_entries, page, elapsed_ms(start_ms))
                     }
                     Err(e) => {
                         ToolExecutionResult::failure(format!("Error: {}", e), elapsed_ms(start_ms))
@@ -413,6 +436,7 @@ async fn register_conversation_search<R: kelpie_core::Runtime + 'static>(
     state: AppState<R>,
 ) {
     // BUG-002 FIX: Use ContextAwareToolHandler to get agent_id from context
+    // Single source of truth: AgentService required (no HashMap fallback)
     let handler: ContextAwareToolHandler =
         Arc::new(move |input: &Value, context: &ToolExecutionContext| {
             let state = state.clone();
@@ -420,6 +444,17 @@ async fn register_conversation_search<R: kelpie_core::Runtime + 'static>(
             let context = context.clone();
             Box::pin(async move {
                 let start_ms = WallClockTime::new().monotonic_ms();
+
+                // Require AgentService (no fallback)
+                let service = match state.agent_service() {
+                    Some(s) => s,
+                    None => {
+                        return ToolExecutionResult::failure(
+                            "Error: AgentService not configured",
+                            elapsed_ms(start_ms),
+                        )
+                    }
+                };
 
                 let agent_id = match get_agent_id(&context, &input) {
                     Ok(id) => id,
@@ -437,40 +472,43 @@ async fn register_conversation_search<R: kelpie_core::Runtime + 'static>(
                 };
 
                 let page = input.get("page").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
-
                 let page_size = 10;
 
-                // Get all messages and filter
-                match state.list_messages(&agent_id, 1000, None) {
-                    Ok(messages) => {
-                        let query_lower = query.to_lowercase();
-                        let matching: Vec<_> = messages
+                // Helper function to format results
+                fn format_message_results(
+                    messages: Vec<crate::models::Message>,
+                    page: usize,
+                    elapsed: u64,
+                ) -> ToolExecutionResult {
+                    if messages.is_empty() {
+                        ToolExecutionResult::success("No matching conversations found", elapsed)
+                    } else {
+                        let results: Vec<String> = messages
                             .iter()
-                            .filter(|m| m.content.to_lowercase().contains(&query_lower))
-                            .skip(page * page_size)
-                            .take(page_size)
+                            .map(|m| format!("[{:?}]: {}", m.role, m.content))
                             .collect();
+                        ToolExecutionResult::success(
+                            format!(
+                                "Found {} results (page {}):\n{}",
+                                results.len(),
+                                page,
+                                results.join("\n---\n")
+                            ),
+                            elapsed,
+                        )
+                    }
+                }
 
-                        if matching.is_empty() {
-                            ToolExecutionResult::success(
-                                "No matching conversations found",
-                                elapsed_ms(start_ms),
-                            )
-                        } else {
-                            let results: Vec<String> = matching
-                                .iter()
-                                .map(|m| format!("[{:?}]: {}", m.role, m.content))
-                                .collect();
-                            ToolExecutionResult::success(
-                                format!(
-                                    "Found {} results (page {}):\n{}",
-                                    results.len(),
-                                    page,
-                                    results.join("\n---\n")
-                                ),
-                                elapsed_ms(start_ms),
-                            )
-                        }
+                let total_needed = (page + 1) * page_size;
+                match service
+                    .conversation_search(&agent_id, &query, total_needed)
+                    .await
+                {
+                    Ok(messages) => {
+                        let offset = page * page_size;
+                        let page_messages: Vec<_> =
+                            messages.into_iter().skip(offset).take(page_size).collect();
+                        format_message_results(page_messages, page, elapsed_ms(start_ms))
                     }
                     Err(e) => {
                         ToolExecutionResult::failure(format!("Error: {}", e), elapsed_ms(start_ms))
@@ -508,6 +546,7 @@ async fn register_conversation_search_date<R: kelpie_core::Runtime + 'static>(
     state: AppState<R>,
 ) {
     // BUG-002 FIX: Use ContextAwareToolHandler to get agent_id from context
+    // Single source of truth: AgentService required (no HashMap fallback)
     let handler: ContextAwareToolHandler =
         Arc::new(move |input: &Value, context: &ToolExecutionContext| {
             let state = state.clone();
@@ -515,6 +554,17 @@ async fn register_conversation_search_date<R: kelpie_core::Runtime + 'static>(
             let context = context.clone();
             Box::pin(async move {
                 let start_ms = WallClockTime::new().monotonic_ms();
+
+                // Require AgentService (no fallback)
+                let service = match state.agent_service() {
+                    Some(s) => s,
+                    None => {
+                        return ToolExecutionResult::failure(
+                            "Error: AgentService not configured",
+                            elapsed_ms(start_ms),
+                        )
+                    }
+                };
 
                 let agent_id = match get_agent_id(&context, &input) {
                     Ok(id) => id,
@@ -572,59 +622,61 @@ async fn register_conversation_search_date<R: kelpie_core::Runtime + 'static>(
                 let page = input.get("page").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
                 let page_size = 10;
 
-                // Get all messages and filter
-                match state.list_messages(&agent_id, 1000, None) {
-                    Ok(messages) => {
-                        let query_lower = query.to_lowercase();
-                        let matching: Vec<_> = messages
+                // Helper function to format results with dates
+                fn format_date_results(
+                    messages: Vec<crate::models::Message>,
+                    page: usize,
+                    elapsed: u64,
+                ) -> ToolExecutionResult {
+                    if messages.is_empty() {
+                        ToolExecutionResult::success(
+                            "No matching conversations found in date range",
+                            elapsed,
+                        )
+                    } else {
+                        let results: Vec<String> = messages
                             .iter()
-                            .filter(|m| {
-                                // Text filter
-                                let matches_query = m.content.to_lowercase().contains(&query_lower);
-
-                                // Date filter
-                                let matches_dates = match (start_date, end_date) {
-                                    (Some(start), Some(end)) => {
-                                        m.created_at >= start && m.created_at <= end
-                                    }
-                                    (Some(start), None) => m.created_at >= start,
-                                    (None, Some(end)) => m.created_at <= end,
-                                    (None, None) => true,
-                                };
-
-                                matches_query && matches_dates
-                            })
-                            .skip(page * page_size)
-                            .take(page_size)
-                            .collect();
-
-                        if matching.is_empty() {
-                            ToolExecutionResult::success(
-                                "No matching conversations found in date range",
-                                elapsed_ms(start_ms),
-                            )
-                        } else {
-                            let results: Vec<String> = matching
-                                .iter()
-                                .map(|m| {
-                                    format!(
-                                        "[{:?}] [{}]: {}",
-                                        m.role,
-                                        m.created_at.to_rfc3339(),
-                                        m.content
-                                    )
-                                })
-                                .collect();
-                            ToolExecutionResult::success(
+                            .map(|m| {
                                 format!(
-                                    "Found {} results (page {}):\n{}",
-                                    results.len(),
-                                    page,
-                                    results.join("\n---\n")
-                                ),
-                                elapsed_ms(start_ms),
-                            )
-                        }
+                                    "[{:?}] [{}]: {}",
+                                    m.role,
+                                    m.created_at.to_rfc3339(),
+                                    m.content
+                                )
+                            })
+                            .collect();
+                        ToolExecutionResult::success(
+                            format!(
+                                "Found {} results (page {}):\n{}",
+                                results.len(),
+                                page,
+                                results.join("\n---\n")
+                            ),
+                            elapsed,
+                        )
+                    }
+                }
+
+                let total_needed = (page + 1) * page_size;
+                // Convert dates to RFC 3339 strings for service
+                let start_str = start_date.map(|d| d.to_rfc3339());
+                let end_str = end_date.map(|d| d.to_rfc3339());
+
+                match service
+                    .conversation_search_date(
+                        &agent_id,
+                        &query,
+                        start_str.as_deref(),
+                        end_str.as_deref(),
+                        total_needed,
+                    )
+                    .await
+                {
+                    Ok(messages) => {
+                        let offset = page * page_size;
+                        let page_messages: Vec<_> =
+                            messages.into_iter().skip(offset).take(page_size).collect();
+                        format_date_results(page_messages, page, elapsed_ms(start_ms))
                     }
                     Err(e) => {
                         ToolExecutionResult::failure(format!("Error: {}", e), elapsed_ms(start_ms))
@@ -721,11 +773,83 @@ fn parse_date_param(val: &Value) -> Result<chrono::DateTime<chrono::Utc>, String
 #[allow(deprecated)]
 mod tests {
     use super::*;
-    use crate::models::{AgentState, AgentType, CreateAgentRequest, CreateBlockRequest};
+    use crate::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
+    use crate::models::{AgentType, CreateAgentRequest, CreateBlockRequest};
+    use crate::service::AgentService;
     use crate::tools::ToolExecutionContext;
+    use async_trait::async_trait;
+    use kelpie_core::Runtime;
+    use kelpie_dst::{DeterministicRng, FaultInjector, SimStorage};
+    use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
+    use std::sync::Arc;
 
-    fn create_test_agent(name: &str) -> AgentState {
-        AgentState::from_request(CreateAgentRequest {
+    /// Mock LLM client for testing that returns simple responses
+    struct MockLlmClient;
+
+    #[async_trait]
+    impl LlmClient for MockLlmClient {
+        async fn complete_with_tools(
+            &self,
+            _messages: Vec<LlmMessage>,
+            _tools: Vec<crate::llm::ToolDefinition>,
+        ) -> kelpie_core::Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: "Test response".to_string(),
+                tool_calls: vec![],
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stop_reason: "end_turn".to_string(),
+            })
+        }
+
+        async fn continue_with_tool_result(
+            &self,
+            _messages: Vec<LlmMessage>,
+            _tools: Vec<crate::llm::ToolDefinition>,
+            _assistant_blocks: Vec<crate::llm::ContentBlock>,
+            _tool_results: Vec<(String, String)>,
+        ) -> kelpie_core::Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: "Test response".to_string(),
+                tool_calls: vec![],
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stop_reason: "end_turn".to_string(),
+            })
+        }
+    }
+
+    /// Create a test AppState with AgentService (single source of truth)
+    async fn create_test_state_with_service() -> AppState<kelpie_core::TokioRuntime> {
+        let llm: Arc<dyn LlmClient> = Arc::new(MockLlmClient);
+        let actor = AgentActor::new(llm, Arc::new(UnifiedToolRegistry::new()));
+        let factory = Arc::new(CloneFactory::new(actor));
+
+        let rng = DeterministicRng::new(42);
+        let faults = Arc::new(FaultInjector::new(rng.fork()));
+        let storage = SimStorage::new(rng.fork(), faults);
+        let kv = Arc::new(storage);
+
+        let runtime = kelpie_core::TokioRuntime;
+
+        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState, _>::new(
+            factory,
+            kv,
+            DispatcherConfig::default(),
+            runtime.clone(),
+        );
+        let handle = dispatcher.handle();
+
+        drop(runtime.spawn(async move {
+            dispatcher.run().await;
+        }));
+
+        let service = AgentService::new(handle.clone());
+        AppState::with_agent_service(runtime, service, handle)
+    }
+
+    fn create_test_agent_request(name: &str) -> CreateAgentRequest {
+        CreateAgentRequest {
             name: name.to_string(),
             agent_type: AgentType::default(),
             model: None,
@@ -745,7 +869,7 @@ mod tests {
             project_id: None,
             user_id: None,
             org_id: None,
-        })
+        }
     }
 
     #[tokio::test]
@@ -765,12 +889,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_core_memory_append_integration() {
-        let state = AppState::new(kelpie_core::current_runtime());
+        let state = create_test_state_with_service().await;
 
-        // Create agent
-        let agent = create_test_agent("test-agent");
+        // Create agent via AgentService
+        let request = create_test_agent_request("test-agent");
+        let agent = state.create_agent_async(request).await.unwrap();
         let agent_id = agent.id.clone();
-        state.create_agent(agent).unwrap();
 
         // Register memory tools
         let registry = state.tool_registry();
@@ -797,20 +921,24 @@ mod tests {
         assert!(result.success, "Append failed: {}", result.output);
         assert!(result.output.contains("Successfully"));
 
-        // Verify block was created
-        let block = state.get_block_by_label(&agent_id, "facts").unwrap();
+        // Verify block was created via AgentService
+        let service = state.agent_service().unwrap();
+        let block = service
+            .get_block_by_label(&agent_id, "facts")
+            .await
+            .unwrap();
         assert!(block.is_some());
         assert!(block.unwrap().value.contains("pizza"));
     }
 
     #[tokio::test]
     async fn test_core_memory_replace_integration() {
-        let state = AppState::new(kelpie_core::current_runtime());
+        let state = create_test_state_with_service().await;
 
-        // Create agent with existing block
-        let agent = create_test_agent("test-agent");
+        // Create agent with existing block via AgentService
+        let request = create_test_agent_request("test-agent");
+        let agent = state.create_agent_async(request).await.unwrap();
         let agent_id = agent.id.clone();
-        state.create_agent(agent).unwrap();
 
         // Register memory tools
         let registry = state.tool_registry();
@@ -837,23 +965,25 @@ mod tests {
 
         assert!(result.success, "Replace failed: {}", result.output);
 
-        // Verify replacement
-        let block = state
+        // Verify replacement via AgentService
+        let service = state.agent_service().unwrap();
+        let block = service
             .get_block_by_label(&agent_id, "persona")
-            .unwrap()
+            .await
             .unwrap();
-        assert!(block.value.contains("helpful assistant"));
-        assert!(!block.value.contains("test agent"));
+        assert!(block.is_some(), "Block should exist");
+        assert!(block.as_ref().unwrap().value.contains("helpful assistant"));
+        assert!(!block.as_ref().unwrap().value.contains("test agent"));
     }
 
     #[tokio::test]
     async fn test_archival_memory_integration() {
-        let state = AppState::new(kelpie_core::current_runtime());
+        let state = create_test_state_with_service().await;
 
-        // Create agent
-        let agent = create_test_agent("test-agent");
+        // Create agent via AgentService
+        let request = create_test_agent_request("test-agent");
+        let agent = state.create_agent_async(request).await.unwrap();
         let agent_id = agent.id.clone();
-        state.create_agent(agent).unwrap();
 
         // Register memory tools
         let registry = state.tool_registry();
@@ -948,12 +1078,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_conversation_search_date() {
-        let state = AppState::new(kelpie_core::current_runtime());
+        let state = create_test_state_with_service().await;
 
-        // Create agent
-        let agent = create_test_agent("test-agent");
+        // Create agent via AgentService
+        let request = create_test_agent_request("test-agent");
+        let agent = state.create_agent_async(request).await.unwrap();
         let agent_id = agent.id.clone();
-        state.create_agent(agent).unwrap();
 
         // Register memory tools
         let registry = state.tool_registry();
@@ -989,12 +1119,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_conversation_search_date_unix_timestamp() {
-        let state = AppState::new(kelpie_core::current_runtime());
+        let state = create_test_state_with_service().await;
 
-        // Create agent
-        let agent = create_test_agent("test-agent");
+        // Create agent via AgentService
+        let request = create_test_agent_request("test-agent");
+        let agent = state.create_agent_async(request).await.unwrap();
         let agent_id = agent.id.clone();
-        state.create_agent(agent).unwrap();
 
         // Register memory tools
         let registry = state.tool_registry();
@@ -1024,12 +1154,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_conversation_search_date_invalid_range() {
-        let state = AppState::new(kelpie_core::current_runtime());
+        let state = create_test_state_with_service().await;
 
-        // Create agent
-        let agent = create_test_agent("test-agent");
+        // Create agent via AgentService
+        let request = create_test_agent_request("test-agent");
+        let agent = state.create_agent_async(request).await.unwrap();
         let agent_id = agent.id.clone();
-        state.create_agent(agent).unwrap();
 
         // Register memory tools
         let registry = state.tool_registry();
@@ -1062,12 +1192,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_conversation_search_date_invalid_format() {
-        let state = AppState::new(kelpie_core::current_runtime());
+        let state = create_test_state_with_service().await;
 
-        // Create agent
-        let agent = create_test_agent("test-agent");
+        // Create agent via AgentService
+        let request = create_test_agent_request("test-agent");
+        let agent = state.create_agent_async(request).await.unwrap();
         let agent_id = agent.id.clone();
-        state.create_agent(agent).unwrap();
 
         // Register memory tools
         let registry = state.tool_registry();
@@ -1097,7 +1227,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_conversation_search_date_missing_params() {
-        let state = AppState::new(kelpie_core::current_runtime());
+        let state = create_test_state_with_service().await;
         let registry = state.tool_registry();
         register_memory_tools(registry, state.clone()).await;
 

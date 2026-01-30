@@ -115,7 +115,10 @@ impl AgentActor {
         Ok(())
     }
 
-    /// Handle "core_memory_append" operation - append to a memory block
+    /// Handle "core_memory_append" operation - append to a memory block (or create if doesn't exist)
+    ///
+    /// Matches the behavior of `append_or_create_block_by_label` - creates the block if it
+    /// doesn't exist, otherwise appends to existing content.
     async fn handle_core_memory_append(
         &self,
         ctx: &mut ActorContext<AgentActorState>,
@@ -127,9 +130,8 @@ impl AgentActor {
         });
 
         if !updated {
-            return Err(Error::Internal {
-                message: format!("Block '{}' not found", append.label),
-            });
+            // Block doesn't exist - create it with the content
+            ctx.state.create_block(&append.label, &append.content);
         }
 
         Ok(())
@@ -595,6 +597,119 @@ impl AgentActor {
             Ok(messages.join("\n\n"))
         }
     }
+
+    // =========================================================================
+    // New handlers for single source of truth operations
+    // =========================================================================
+
+    /// Handle "archival_insert" operation - insert into archival memory
+    async fn handle_archival_insert(
+        &self,
+        ctx: &mut ActorContext<AgentActorState>,
+        request: ArchivalInsertRequest,
+    ) -> Result<ArchivalInsertResponse> {
+        let entry = ctx
+            .state
+            .add_archival_entry(request.content, request.metadata)
+            .map_err(|e| Error::Internal { message: e })?;
+
+        Ok(ArchivalInsertResponse { entry_id: entry.id })
+    }
+
+    /// Handle "archival_search" operation - search archival memory
+    async fn handle_archival_search(
+        &self,
+        ctx: &ActorContext<AgentActorState>,
+        request: ArchivalSearchRequest,
+    ) -> Result<ArchivalSearchResponse> {
+        let entries = ctx
+            .state
+            .search_archival(Some(&request.query), request.limit);
+        Ok(ArchivalSearchResponse { entries })
+    }
+
+    /// Handle "archival_delete" operation - delete from archival memory
+    async fn handle_archival_delete(
+        &self,
+        ctx: &mut ActorContext<AgentActorState>,
+        request: ArchivalDeleteRequest,
+    ) -> Result<()> {
+        ctx.state
+            .delete_archival_entry(&request.entry_id)
+            .map_err(|e| Error::Internal { message: e })
+    }
+
+    /// Handle "conversation_search" operation - search messages
+    async fn handle_conversation_search(
+        &self,
+        ctx: &ActorContext<AgentActorState>,
+        request: ConversationSearchRequest,
+    ) -> Result<ConversationSearchResponse> {
+        let messages = ctx.state.search_messages(&request.query, request.limit);
+        Ok(ConversationSearchResponse { messages })
+    }
+
+    /// Handle "conversation_search_date" operation - search messages with date filter
+    async fn handle_conversation_search_date(
+        &self,
+        ctx: &ActorContext<AgentActorState>,
+        request: ConversationSearchDateRequest,
+    ) -> Result<ConversationSearchResponse> {
+        // Parse dates
+        let start_date = request
+            .start_date
+            .as_ref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
+
+        let end_date = request
+            .end_date
+            .as_ref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
+
+        let messages = ctx.state.search_messages_with_date(
+            &request.query,
+            start_date,
+            end_date,
+            request.limit,
+        );
+
+        Ok(ConversationSearchResponse { messages })
+    }
+
+    /// Handle "core_memory_replace" operation - replace content in a memory block
+    async fn handle_core_memory_replace(
+        &self,
+        ctx: &mut ActorContext<AgentActorState>,
+        request: CoreMemoryReplaceRequest,
+    ) -> Result<()> {
+        ctx.state
+            .replace_block_content(&request.label, &request.old_content, &request.new_content)
+            .map_err(|e| Error::Internal { message: e })
+    }
+
+    /// Handle "get_block" operation - get a memory block by label
+    async fn handle_get_block(
+        &self,
+        ctx: &ActorContext<AgentActorState>,
+        request: GetBlockRequest,
+    ) -> Result<GetBlockResponse> {
+        let block = ctx.state.get_block(&request.label).cloned();
+        Ok(GetBlockResponse { block })
+    }
+
+    /// Handle "list_messages" operation - list messages with pagination
+    async fn handle_list_messages(
+        &self,
+        ctx: &ActorContext<AgentActorState>,
+        request: ListMessagesRequest,
+    ) -> Result<ListMessagesResponse> {
+        let messages = ctx
+            .state
+            .list_messages_paginated(request.limit, request.before.as_deref());
+        Ok(ListMessagesResponse { messages })
+    }
 }
 
 /// Block update request
@@ -657,6 +772,113 @@ struct HandleMessageRequest {
 struct HandleMessageResponse {
     role: String,
     content: String,
+}
+
+// =========================================================================
+// New operation request/response types for single source of truth
+// =========================================================================
+
+/// Archival memory insert request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchivalInsertRequest {
+    pub content: String,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Archival memory insert response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchivalInsertResponse {
+    pub entry_id: String,
+}
+
+/// Archival memory search request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchivalSearchRequest {
+    pub query: String,
+    #[serde(default = "default_search_limit")]
+    pub limit: usize,
+}
+
+fn default_search_limit() -> usize {
+    10
+}
+
+/// Archival memory search response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchivalSearchResponse {
+    pub entries: Vec<crate::models::ArchivalEntry>,
+}
+
+/// Archival memory delete request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchivalDeleteRequest {
+    pub entry_id: String,
+}
+
+/// Conversation search request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationSearchRequest {
+    pub query: String,
+    #[serde(default = "default_search_limit")]
+    pub limit: usize,
+}
+
+/// Conversation search response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationSearchResponse {
+    pub messages: Vec<Message>,
+}
+
+/// Conversation search with date filter request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationSearchDateRequest {
+    pub query: String,
+    #[serde(default)]
+    pub start_date: Option<String>,
+    #[serde(default)]
+    pub end_date: Option<String>,
+    #[serde(default = "default_search_limit")]
+    pub limit: usize,
+}
+
+/// Core memory replace request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoreMemoryReplaceRequest {
+    pub label: String,
+    pub old_content: String,
+    pub new_content: String,
+}
+
+/// Get block by label request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetBlockRequest {
+    pub label: String,
+}
+
+/// Get block response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetBlockResponse {
+    pub block: Option<crate::models::Block>,
+}
+
+/// List messages request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListMessagesRequest {
+    #[serde(default = "default_messages_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub before: Option<String>,
+}
+
+fn default_messages_limit() -> usize {
+    100
+}
+
+/// List messages response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListMessagesResponse {
+    pub messages: Vec<Message>,
 }
 
 #[async_trait]
@@ -744,6 +966,100 @@ impl Actor for AgentActor {
             "delete_agent" => {
                 self.handle_delete_agent(ctx).await?;
                 Ok(Bytes::from("{}"))
+            }
+            // =========================================================================
+            // New operations for single source of truth
+            // =========================================================================
+            "archival_insert" => {
+                let request: ArchivalInsertRequest =
+                    serde_json::from_slice(&payload).map_err(|e| Error::Internal {
+                        message: format!("Failed to deserialize ArchivalInsertRequest: {}", e),
+                    })?;
+                let response = self.handle_archival_insert(ctx, request).await?;
+                let response_bytes =
+                    serde_json::to_vec(&response).map_err(|e| Error::Internal {
+                        message: format!("Failed to serialize ArchivalInsertResponse: {}", e),
+                    })?;
+                Ok(Bytes::from(response_bytes))
+            }
+            "archival_search" => {
+                let request: ArchivalSearchRequest =
+                    serde_json::from_slice(&payload).map_err(|e| Error::Internal {
+                        message: format!("Failed to deserialize ArchivalSearchRequest: {}", e),
+                    })?;
+                let response = self.handle_archival_search(ctx, request).await?;
+                let response_bytes =
+                    serde_json::to_vec(&response).map_err(|e| Error::Internal {
+                        message: format!("Failed to serialize ArchivalSearchResponse: {}", e),
+                    })?;
+                Ok(Bytes::from(response_bytes))
+            }
+            "archival_delete" => {
+                let request: ArchivalDeleteRequest =
+                    serde_json::from_slice(&payload).map_err(|e| Error::Internal {
+                        message: format!("Failed to deserialize ArchivalDeleteRequest: {}", e),
+                    })?;
+                self.handle_archival_delete(ctx, request).await?;
+                Ok(Bytes::from("{}"))
+            }
+            "conversation_search" => {
+                let request: ConversationSearchRequest =
+                    serde_json::from_slice(&payload).map_err(|e| Error::Internal {
+                        message: format!("Failed to deserialize ConversationSearchRequest: {}", e),
+                    })?;
+                let response = self.handle_conversation_search(ctx, request).await?;
+                let response_bytes =
+                    serde_json::to_vec(&response).map_err(|e| Error::Internal {
+                        message: format!("Failed to serialize ConversationSearchResponse: {}", e),
+                    })?;
+                Ok(Bytes::from(response_bytes))
+            }
+            "conversation_search_date" => {
+                let request: ConversationSearchDateRequest = serde_json::from_slice(&payload)
+                    .map_err(|e| Error::Internal {
+                        message: format!(
+                            "Failed to deserialize ConversationSearchDateRequest: {}",
+                            e
+                        ),
+                    })?;
+                let response = self.handle_conversation_search_date(ctx, request).await?;
+                let response_bytes =
+                    serde_json::to_vec(&response).map_err(|e| Error::Internal {
+                        message: format!("Failed to serialize ConversationSearchResponse: {}", e),
+                    })?;
+                Ok(Bytes::from(response_bytes))
+            }
+            "core_memory_replace" => {
+                let request: CoreMemoryReplaceRequest =
+                    serde_json::from_slice(&payload).map_err(|e| Error::Internal {
+                        message: format!("Failed to deserialize CoreMemoryReplaceRequest: {}", e),
+                    })?;
+                self.handle_core_memory_replace(ctx, request).await?;
+                Ok(Bytes::from("{}"))
+            }
+            "get_block" => {
+                let request: GetBlockRequest =
+                    serde_json::from_slice(&payload).map_err(|e| Error::Internal {
+                        message: format!("Failed to deserialize GetBlockRequest: {}", e),
+                    })?;
+                let response = self.handle_get_block(ctx, request).await?;
+                let response_bytes =
+                    serde_json::to_vec(&response).map_err(|e| Error::Internal {
+                        message: format!("Failed to serialize GetBlockResponse: {}", e),
+                    })?;
+                Ok(Bytes::from(response_bytes))
+            }
+            "list_messages" => {
+                let request: ListMessagesRequest =
+                    serde_json::from_slice(&payload).map_err(|e| Error::Internal {
+                        message: format!("Failed to deserialize ListMessagesRequest: {}", e),
+                    })?;
+                let response = self.handle_list_messages(ctx, request).await?;
+                let response_bytes =
+                    serde_json::to_vec(&response).map_err(|e| Error::Internal {
+                        message: format!("Failed to serialize ListMessagesResponse: {}", e),
+                    })?;
+                Ok(Bytes::from(response_bytes))
             }
             _ => Err(Error::Internal {
                 message: format!("Unknown operation: {}", operation),
@@ -893,6 +1209,20 @@ impl Actor for AgentActor {
         // 3. Write message count
         let count_value = Bytes::from(message_count.to_string());
         ctx.kv_set(b"message_count", &count_value).await?;
+
+        // 4. Write archival entries as individual keys (archival:0, archival:1, ...)
+        let archival_count = ctx.state.archival.len() as u64;
+        for (idx, entry) in ctx.state.archival.iter().enumerate() {
+            let archival_key = format!("archival:{}", idx);
+            let archival_value = serde_json::to_vec(entry).map_err(|e| Error::Internal {
+                message: format!("Failed to serialize archival entry {}: {}", idx, e),
+            })?;
+            ctx.kv_set(archival_key.as_bytes(), &archival_value).await?;
+        }
+
+        // 5. Write archival count
+        let archival_count_value = Bytes::from(archival_count.to_string());
+        ctx.kv_set(b"archival_count", &archival_count_value).await?;
 
         Ok(())
     }

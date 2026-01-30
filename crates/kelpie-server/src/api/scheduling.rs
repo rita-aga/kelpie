@@ -158,15 +158,83 @@ async fn delete_job<R: Runtime + 'static>(
 mod tests {
     use super::*;
     use crate::api;
+    use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
+    use kelpie_core::Runtime;
+    use kelpie_dst::{DeterministicRng, FaultInjector, SimStorage};
+    use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
+    use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
     use kelpie_server::models::{AgentState, JobAction, JobStatus, ScheduleType};
+    use kelpie_server::service::AgentService;
+    use kelpie_server::tools::UnifiedToolRegistry;
+    use std::sync::Arc;
     use tower::ServiceExt;
 
-    /// Create test app
+    /// Mock LLM client for testing
+    struct MockLlmClient;
+
+    #[async_trait]
+    impl LlmClient for MockLlmClient {
+        async fn complete_with_tools(
+            &self,
+            _messages: Vec<LlmMessage>,
+            _tools: Vec<kelpie_server::llm::ToolDefinition>,
+        ) -> kelpie_core::Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: "Test response".to_string(),
+                tool_calls: vec![],
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stop_reason: "end_turn".to_string(),
+            })
+        }
+
+        async fn continue_with_tool_result(
+            &self,
+            _messages: Vec<LlmMessage>,
+            _tools: Vec<kelpie_server::llm::ToolDefinition>,
+            _assistant_blocks: Vec<kelpie_server::llm::ContentBlock>,
+            _tool_results: Vec<(String, String)>,
+        ) -> kelpie_core::Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: "Test response".to_string(),
+                tool_calls: vec![],
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stop_reason: "end_turn".to_string(),
+            })
+        }
+    }
+
+    /// Create test app with AgentService (single source of truth)
     async fn test_app() -> Router {
-        let state = AppState::new(kelpie_core::TokioRuntime);
+        let llm: Arc<dyn LlmClient> = Arc::new(MockLlmClient);
+        let actor = AgentActor::new(llm, Arc::new(UnifiedToolRegistry::new()));
+        let factory = Arc::new(CloneFactory::new(actor));
+
+        let rng = DeterministicRng::new(42);
+        let faults = Arc::new(FaultInjector::new(rng.fork()));
+        let storage = SimStorage::new(rng.fork(), faults);
+        let kv = Arc::new(storage);
+
+        let runtime = kelpie_core::TokioRuntime;
+
+        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState, _>::new(
+            factory,
+            kv,
+            DispatcherConfig::default(),
+            runtime.clone(),
+        );
+        let handle = dispatcher.handle();
+
+        drop(runtime.spawn(async move {
+            dispatcher.run().await;
+        }));
+
+        let service = AgentService::new(handle.clone());
+        let state = AppState::with_agent_service(runtime, service, handle);
         api::router(state)
     }
 

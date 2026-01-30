@@ -70,6 +70,7 @@ impl AgentType {
                     "archival_memory_search".to_string(),
                     "conversation_search".to_string(),
                     "pause_heartbeats".to_string(),
+                    "propose_improvement".to_string(),
                 ],
                 supports_heartbeats: true,
                 system_prompt_template: None, // Use default
