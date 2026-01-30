@@ -92,8 +92,27 @@ All modified test files pass:
 ```
 real_llm_adapter_streaming_dst: 7 tests passed
 full_lifecycle_dst: 4 tests passed
-real_adapter_simhttp_dst: 6 tests passed
+real_adapter_simhttp_dst: 8 tests passed (after code review additions)
+tla_bug_patterns_dst: 5 tests passed
 ```
+
+All changes verified with:
+- `cargo test --all` - All tests pass
+- `cargo clippy` - No warnings
+- `cargo fmt --check` - Properly formatted
+
+## Code Review Feedback Addressed
+
+After Phase 4 completion, a code review was performed. The following recommendations were implemented:
+
+1. **Extract shared FaultInjectedHttpClient** - Created `tests/common/sim_http.rs` with reusable HTTP fault injection infrastructure
+2. **Add explanatory comment to tla_bug_patterns_dst.rs** - Documented why TLA+ tests don't use random fault injection
+3. **Add LlmRateLimited test coverage** - Added `test_dst_llm_rate_limited_fault` to real_adapter_simhttp_dst.rs
+4. **Standardize common module structure** - Updated `tests/common/mod.rs` with conditional DST exports
+
+**Final test counts:**
+- `real_adapter_simhttp_dst.rs`: 8 tests (added LlmRateLimited)
+- Shared infrastructure in `tests/common/sim_http.rs` for future reuse
 
 ## Files Modified
 
@@ -110,3 +129,6 @@ real_adapter_simhttp_dst: 6 tests passed
 - `crates/kelpie-server/tests/real_llm_adapter_streaming_dst.rs`
 - `crates/kelpie-server/tests/full_lifecycle_dst.rs`
 - `crates/kelpie-server/tests/real_adapter_simhttp_dst.rs`
+- `crates/kelpie-server/tests/tla_bug_patterns_dst.rs`
+- `crates/kelpie-server/tests/common/mod.rs`
+- `crates/kelpie-server/tests/common/sim_http.rs` (NEW)
