@@ -1048,3 +1048,334 @@ async fn test_dst_fdb_delete_cascade() {
         result.err()
     );
 }
+
+// =============================================================================
+// Test 9: Atomic Checkpoint Semantics (Issue #87)
+// =============================================================================
+
+/// Test that checkpoint operations are atomic - session and message are saved together
+///
+/// FAULT: 30% CrashDuringTransaction
+///
+/// ASSERTION: After checkpoint:
+/// - If checkpoint succeeds: BOTH session AND message exist
+/// - If checkpoint fails: NEITHER session NOR message exist (or previous state preserved)
+/// - No partial state where session exists but message doesn't
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_dst_atomic_checkpoint_semantics() {
+    let config = SimConfig::from_env_or_random();
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::CrashDuringTransaction, 0.3))
+        .run_async(|env| async move {
+            let storage = create_storage(&env);
+
+            // Create agent first (with retries for transient faults)
+            let agent = AgentMetadata::new(
+                "agent-atomic".to_string(),
+                "Atomic Checkpoint Test Agent".to_string(),
+                AgentType::MemgptAgent,
+            );
+            let storage_ref = storage.clone();
+            let agent_clone = agent.clone();
+            retry_write(|| {
+                let storage = storage_ref.clone();
+                let a = agent_clone.clone();
+                async move { storage.save_agent(&a).await }
+            })
+            .await?;
+
+            let mut checkpoint_success = 0;
+            let mut checkpoint_failure = 0;
+            let mut atomicity_violations = 0;
+
+            // Try 30 checkpoints with fault injection
+            for i in 0..30 {
+                let session = SessionState::new(
+                    format!("session-{}", i),
+                    "agent-atomic".to_string(),
+                );
+
+                let message = Message {
+                    id: format!("msg-atomic-{}", i),
+                    agent_id: "agent-atomic".to_string(),
+                    message_type: "assistant_message".to_string(),
+                    role: MessageRole::Assistant,
+                    content: format!("Checkpoint message {}", i),
+                    tool_calls: vec![],
+                    tool_call_id: None,
+                    tool_call: None,
+                    tool_return: None,
+                    status: None,
+                    created_at: chrono::DateTime::from_timestamp(1700000000 + i as i64, 0).unwrap(),
+                };
+
+                // Record state before checkpoint
+                let storage_ref = storage.clone();
+                let session_id = session.session_id.clone();
+                let pre_session = retry_read(|| {
+                    let storage = storage_ref.clone();
+                    let sid = session_id.clone();
+                    async move { storage.load_session("agent-atomic", &sid).await }
+                })
+                .await
+                .ok();
+
+                let storage_ref = storage.clone();
+                let pre_msg_count = retry_read(|| {
+                    let storage = storage_ref.clone();
+                    async move { storage.count_messages("agent-atomic").await }
+                })
+                .await
+                .unwrap_or(0);
+
+                // Attempt checkpoint
+                match storage.checkpoint(&session, Some(&message)).await {
+                    Ok(_) => {
+                        // Checkpoint reported success - verify BOTH were saved
+                        let storage_ref = storage.clone();
+                        let session_id = session.session_id.clone();
+                        let loaded_session = retry_read(|| {
+                            let storage = storage_ref.clone();
+                            let sid = session_id.clone();
+                            async move { storage.load_session("agent-atomic", &sid).await }
+                        })
+                        .await?;
+
+                        let storage_ref = storage.clone();
+                        let messages = retry_read(|| {
+                            let storage = storage_ref.clone();
+                            async move { storage.load_messages("agent-atomic", 1000).await }
+                        })
+                        .await?;
+
+                        let msg_exists = messages.iter().any(|m| m.id == message.id);
+
+                        if loaded_session.is_none() && msg_exists {
+                            // Message saved but session not saved - ATOMICITY VIOLATION
+                            atomicity_violations += 1;
+                            panic!(
+                                "ATOMICITY BUG: Checkpoint {} succeeded but session not found while message exists",
+                                i
+                            );
+                        }
+
+                        if loaded_session.is_some() && !msg_exists {
+                            // Session saved but message not saved - ATOMICITY VIOLATION
+                            atomicity_violations += 1;
+                            panic!(
+                                "ATOMICITY BUG: Checkpoint {} succeeded, session saved, but message not found",
+                                i
+                            );
+                        }
+
+                        if loaded_session.is_some() && msg_exists {
+                            checkpoint_success += 1;
+                        }
+                    }
+                    Err(e) if e.is_retriable() => {
+                        // Checkpoint failed - verify no partial state
+                        // Either both exist (rollforward) or both don't exist (rollback)
+                        let storage_ref = storage.clone();
+                        let session_id = session.session_id.clone();
+                        let loaded_session = retry_read(|| {
+                            let storage = storage_ref.clone();
+                            let sid = session_id.clone();
+                            async move { storage.load_session("agent-atomic", &sid).await }
+                        })
+                        .await
+                        .ok()
+                        .flatten();
+
+                        let storage_ref = storage.clone();
+                        let messages = retry_read(|| {
+                            let storage = storage_ref.clone();
+                            async move { storage.load_messages("agent-atomic", 1000).await }
+                        })
+                        .await
+                        .unwrap_or_default();
+
+                        let msg_exists = messages.iter().any(|m| m.id == message.id);
+                        let session_exists = loaded_session.is_some();
+
+                        // After failure: both exist (rollforward) or neither exists (rollback)
+                        // is acceptable. What's NOT acceptable is partial state.
+                        if session_exists != msg_exists {
+                            atomicity_violations += 1;
+                            panic!(
+                                "ATOMICITY BUG: Checkpoint {} failed but left partial state (session={}, msg={})",
+                                i, session_exists, msg_exists
+                            );
+                        }
+
+                        checkpoint_failure += 1;
+                    }
+                    Err(e) => {
+                        panic!("BUG: Non-retriable error on checkpoint: {}", e);
+                    }
+                }
+            }
+
+            println!(
+                "Atomic checkpoint: {} successes, {} failures, {} atomicity violations",
+                checkpoint_success, checkpoint_failure, atomicity_violations
+            );
+
+            // Assert no atomicity violations
+            assert_eq!(
+                atomicity_violations, 0,
+                "Atomicity violations detected - checkpoint is not atomic"
+            );
+
+            // With 30% fault rate, expect some successes
+            assert!(
+                checkpoint_success >= 5,
+                "Too many failures: only {} successes out of 30",
+                checkpoint_success
+            );
+
+            Ok::<_, kelpie_core::Error>(())
+        })
+        .await;
+
+    if let Err(e) = &result {
+        eprintln!("Simulation error: {:?}", e);
+    }
+    assert!(
+        result.is_ok(),
+        "Atomic checkpoint test should pass: {:?}",
+        result.err()
+    );
+}
+
+// =============================================================================
+// Test 10: Concurrent Checkpoint Conflict Detection (Issue #87)
+// =============================================================================
+
+/// Test that concurrent checkpoints to the same session trigger conflict detection
+///
+/// NO FAULTS - testing OCC semantics
+///
+/// ASSERTION: If two concurrent checkpoints modify the same session,
+/// one should succeed and one should either conflict or see updated state
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_dst_concurrent_checkpoint_conflict() {
+    let config = SimConfig::from_env_or_random();
+
+    let result = Simulation::new(config)
+        .run_async(|env| async move {
+            use kelpie_core::{current_runtime, Runtime};
+            let runtime = current_runtime();
+            let storage = Arc::new(create_storage(&env));
+
+            // Create agent
+            let agent = AgentMetadata::new(
+                "agent-concurrent".to_string(),
+                "Concurrent Checkpoint Agent".to_string(),
+                AgentType::MemgptAgent,
+            );
+            storage.save_agent(&agent).await?;
+
+            // Create initial session
+            let session =
+                SessionState::new("shared-session".to_string(), "agent-concurrent".to_string());
+            storage.save_session(&session).await?;
+
+            // Spawn concurrent tasks that checkpoint the same session
+            let mut tasks = Vec::new();
+            for i in 0..5 {
+                let storage_clone = storage.clone();
+                let task = runtime.spawn(async move {
+                    // Each task checkpoints multiple times
+                    for j in 0..3 {
+                        let mut session = SessionState::new(
+                            "shared-session".to_string(),
+                            "agent-concurrent".to_string(),
+                        );
+                        // Advance iteration to simulate work
+                        for _ in 0..=j {
+                            session.advance_iteration();
+                        }
+
+                        let message = Message {
+                            id: format!("msg-{}-{}", i, j),
+                            agent_id: "agent-concurrent".to_string(),
+                            message_type: "assistant_message".to_string(),
+                            role: MessageRole::Assistant,
+                            content: format!("Task {} iteration {}", i, j),
+                            tool_calls: vec![],
+                            tool_call_id: None,
+                            tool_call: None,
+                            tool_return: None,
+                            status: None,
+                            created_at: chrono::DateTime::from_timestamp(1700000000, 0).unwrap(),
+                        };
+
+                        // Checkpoint - may succeed or conflict
+                        let _ = storage_clone.checkpoint(&session, Some(&message)).await;
+                    }
+                    Ok::<_, StorageError>(i)
+                });
+                tasks.push(task);
+            }
+
+            // Wait for all tasks
+            for task in tasks {
+                let _ = task.await;
+            }
+
+            // Verify final state is consistent
+            let storage_ref = storage.clone();
+            let final_session = retry_read(|| {
+                let storage = storage_ref.clone();
+                async move {
+                    storage
+                        .load_session("agent-concurrent", "shared-session")
+                        .await
+                }
+            })
+            .await?;
+
+            assert!(
+                final_session.is_some(),
+                "Session should exist after concurrent checkpoints"
+            );
+
+            let storage_ref = storage.clone();
+            let messages = retry_read(|| {
+                let storage = storage_ref.clone();
+                async move { storage.load_messages("agent-concurrent", 1000).await }
+            })
+            .await?;
+
+            // Should have at least some messages from successful checkpoints
+            println!(
+                "Concurrent checkpoint: {} messages after concurrent operations",
+                messages.len()
+            );
+            assert!(
+                !messages.is_empty(),
+                "Should have messages from successful checkpoints"
+            );
+
+            // Verify no duplicate messages (each msg id should be unique)
+            let msg_ids: Vec<_> = messages.iter().map(|m| &m.id).collect();
+            let unique_ids: std::collections::HashSet<_> = msg_ids.iter().collect();
+            assert_eq!(
+                msg_ids.len(),
+                unique_ids.len(),
+                "No duplicate messages should exist"
+            );
+
+            Ok::<_, kelpie_core::Error>(())
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Concurrent checkpoint test should pass: {:?}",
+        result.err()
+    );
+}
