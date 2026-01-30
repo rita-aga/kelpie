@@ -148,13 +148,39 @@ This ADR is formalized in [KelpieSingleActivation.tla](../tla/KelpieSingleActiva
 
 | ADR | TLA+ Spec | DST Tests | Status |
 |-----|-----------|-----------|--------|
-| ADR-001: Virtual Actor Model | KelpieSingleActivation.tla | single_activation_dst.rs | Complete |
-| ADR-002: FDB Integration | KelpieFDBTransaction.tla | fdb_transaction_dst.rs | Complete |
-| ADR-004: Linearizability | KelpieLease.tla, KelpieSingleActivation.tla | lease_dst.rs, single_activation_dst.rs | Complete |
-| ADR-022: WAL Design | KelpieWAL.tla | (pending) | TLA+ done, DST pending |
-| ADR-023: Actor Registry | KelpieRegistry.tla | cluster_dst.rs | Complete |
-| ADR-024: Migration Protocol | KelpieMigration.tla | cluster_dst.rs | Complete |
-| ADR-025: Cluster Membership | KelpieClusterMembership.tla | partition_tolerance_dst.rs, cluster_dst.rs | Complete |
+| ADR-001: Virtual Actor Model | KelpieSingleActivation.tla | single_activation_dst.rs | ✅ Complete |
+| ADR-002: FDB Integration | KelpieFDBTransaction.tla | fdb_transaction_dst.rs | ✅ Complete |
+| ADR-004: Linearizability | KelpieLinearizability.tla | single_activation_dst.rs, liveness_dst.rs | ⚠️ Partial (see below) |
+| ADR-022: WAL Design | KelpieWAL.tla | (pending) | 📋 TLA+ done, DST pending |
+| ADR-023: Actor Registry | KelpieRegistry.tla | cluster_dst.rs | ✅ Complete |
+| ADR-024: Migration Protocol | KelpieMigration.tla | cluster_dst.rs | ✅ Complete |
+| ADR-025: Cluster Membership | KelpieClusterMembership.tla | partition_tolerance_dst.rs, cluster_dst.rs | ✅ Complete |
+
+### ADR-004 Linearizability - Detailed Status
+
+**TLA+ Invariant Coverage:**
+
+| Invariant | DST Status | Location |
+|-----------|------------|----------|
+| `SequentialPerActor` | ✅ Covered | MPSC channel ordering (implicit) |
+| `OwnershipConsistency` | ✅ Covered | `single_activation_dst.rs:852-878` |
+| `EventualCompletion` | ✅ Covered | `liveness_dst.rs:706-769` |
+| `EventualClaim` | ✅ Covered | `liveness_dst.rs:775-846` |
+| `ReadYourWrites` | ❌ Missing | Needs `linearizability_dst.rs` |
+| `MonotonicReads` | ❌ Missing | Needs `linearizability_dst.rs` |
+| `DispatchConsistency` | ❌ Missing | Needs `linearizability_dst.rs` |
+
+**Implementation Layer Status:**
+
+| Layer | Linearizable? | Notes |
+|-------|---------------|-------|
+| Actor Runtime | ✅ Yes | MPSC channel, single-threaded dispatcher |
+| Storage (FDB) | ✅ Yes | Transactional with OCC |
+| Registry (FDB) | ✅ Yes | OCC conflict detection |
+| HTTP API | ❌ **No** | Missing: idempotency, durability, atomic ops |
+| Cluster | ⚠️ Partial | FDB backend integration incomplete |
+
+**Critical Gap:** The HTTP API layer does NOT provide linearizability guarantees to external clients. See [Issue #49](https://github.com/rita-aga/kelpie/issues/49) for details.
 
 ## Running Verification
 
