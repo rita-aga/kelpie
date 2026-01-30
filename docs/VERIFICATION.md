@@ -150,15 +150,16 @@ This ADR is formalized in [KelpieSingleActivation.tla](../tla/KelpieSingleActiva
 |-----|-----------|-----------|--------|
 | ADR-001: Virtual Actor Model | KelpieSingleActivation.tla | single_activation_dst.rs | ✅ Complete |
 | ADR-002: FDB Integration | KelpieFDBTransaction.tla | fdb_transaction_dst.rs | ✅ Complete |
-| ADR-004: Linearizability | KelpieLinearizability.tla | single_activation_dst.rs, liveness_dst.rs | ⚠️ Partial (see below) |
+| ADR-004: Linearizability | KelpieLinearizability.tla | single_activation_dst.rs, liveness_dst.rs, linearizability_dst.rs | ✅ Complete |
 | ADR-022: WAL Design | KelpieWAL.tla | (pending) | 📋 TLA+ done, DST pending |
 | ADR-023: Actor Registry | KelpieRegistry.tla | cluster_dst.rs | ✅ Complete |
 | ADR-024: Migration Protocol | KelpieMigration.tla | cluster_dst.rs | ✅ Complete |
 | ADR-025: Cluster Membership | KelpieClusterMembership.tla | partition_tolerance_dst.rs, cluster_dst.rs | ✅ Complete |
+| ADR-030: HTTP Linearizability | KelpieHttpApi.tla | http_api_dst.rs | ✅ Complete |
 
 ### ADR-004 Linearizability - Detailed Status
 
-**TLA+ Invariant Coverage:**
+**TLA+ Invariant Coverage (Actor Layer):**
 
 | Invariant | DST Status | Location |
 |-----------|------------|----------|
@@ -166,21 +167,33 @@ This ADR is formalized in [KelpieSingleActivation.tla](../tla/KelpieSingleActiva
 | `OwnershipConsistency` | ✅ Covered | `single_activation_dst.rs:852-878` |
 | `EventualCompletion` | ✅ Covered | `liveness_dst.rs:706-769` |
 | `EventualClaim` | ✅ Covered | `liveness_dst.rs:775-846` |
-| `ReadYourWrites` | ❌ Missing | Needs `linearizability_dst.rs` |
-| `MonotonicReads` | ❌ Missing | Needs `linearizability_dst.rs` |
-| `DispatchConsistency` | ❌ Missing | Needs `linearizability_dst.rs` |
+| `ReadYourWrites` | ✅ Covered | `linearizability_dst.rs` |
+| `MonotonicReads` | ✅ Covered | `linearizability_dst.rs` |
+| `DispatchConsistency` | ✅ Covered | `linearizability_dst.rs` |
+
+### ADR-030 HTTP Linearizability - Detailed Status
+
+**TLA+ Invariant Coverage (HTTP Layer):**
+
+| Invariant | DST Status | Location |
+|-----------|------------|----------|
+| `IdempotencyGuarantee` | ✅ Covered | `http_api_dst.rs:test_idempotency_exactly_once` |
+| `ExactlyOnceExecution` | ✅ Covered | `http_api_dst.rs:test_concurrent_idempotent_requests` |
+| `ReadAfterWriteConsistency` | ✅ Covered | `http_api_dst.rs:test_create_get_consistency` |
+| `DurableOnSuccess` | ✅ Covered | `http_api_dst.rs:test_durability_after_success` |
+| `AtomicOperation` | ✅ Covered | Via idempotency cache atomicity |
 
 **Implementation Layer Status:**
 
-| Layer | Linearizable? | Notes |
-|-------|---------------|-------|
-| Actor Runtime | ✅ Yes | MPSC channel, single-threaded dispatcher |
-| Storage (FDB) | ✅ Yes | Transactional with OCC |
-| Registry (FDB) | ✅ Yes | OCC conflict detection |
-| HTTP API | ❌ **No** | Missing: idempotency, durability, atomic ops |
-| Cluster | ⚠️ Partial | FDB backend integration incomplete |
+| Layer | Linearizable? | TLA+ Spec | DST Tests |
+|-------|---------------|-----------|-----------|
+| Actor Runtime | ✅ Yes | KelpieLinearizability.tla | single_activation_dst.rs, linearizability_dst.rs |
+| Storage (FDB) | ✅ Yes | KelpieFDBTransaction.tla | fdb_transaction_dst.rs |
+| Registry (FDB) | ✅ Yes | KelpieSingleActivation.tla | single_activation_dst.rs |
+| HTTP API | ✅ Yes | KelpieHttpApi.tla | http_api_dst.rs |
+| Cluster | ⚠️ Partial | KelpieClusterMembership.tla | cluster_dst.rs |
 
-**Critical Gap:** The HTTP API layer does NOT provide linearizability guarantees to external clients. See [Issue #49](https://github.com/rita-aga/kelpie/issues/49) for details.
+**Note:** The HTTP API layer now provides exactly-once semantics via idempotency tokens (ADR-030). Clients can safely retry requests with the same `Idempotency-Key` header.
 
 ## Running Verification
 
