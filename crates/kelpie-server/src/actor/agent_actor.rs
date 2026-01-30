@@ -9,7 +9,7 @@ use crate::models::{
     UpdateAgentRequest, UsageStats,
 };
 use crate::security::audit::SharedAuditLog;
-use crate::tools::{parse_pause_signal, ToolExecutionContext, ToolSignal, UnifiedToolRegistry};
+use crate::tools::{parse_pause_signal, UnifiedToolRegistry};
 use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::actor::{Actor, ActorContext};
@@ -61,6 +61,84 @@ impl AgentActor {
     pub fn with_audit_log(mut self, audit_log: SharedAuditLog) -> Self {
         self.audit_log = Some(audit_log);
         self
+    }
+
+    // =========================================================================
+    // Message Storage Helpers (DRY - avoid duplicate code)
+    // =========================================================================
+
+    /// Store an assistant message in the conversation history
+    fn store_assistant_message(ctx: &mut ActorContext<AgentActorState>, content: &str) {
+        let msg = Message {
+            id: uuid::Uuid::new_v4().to_string(),
+            agent_id: ctx.id.id().to_string(),
+            message_type: "assistant_message".to_string(),
+            role: MessageRole::Assistant,
+            content: content.to_string(),
+            tool_call_id: None,
+            tool_calls: vec![],
+            tool_call: None,
+            tool_return: None,
+            status: None,
+            created_at: chrono::Utc::now(),
+        };
+        ctx.state.add_message(msg);
+    }
+
+    /// Store tool call messages for each tool call in the response
+    fn store_tool_call_messages(
+        ctx: &mut ActorContext<AgentActorState>,
+        tool_calls: &[LlmToolCall],
+        response_content: &str,
+    ) {
+        for tool_call in tool_calls {
+            let msg = Message {
+                id: uuid::Uuid::new_v4().to_string(),
+                agent_id: ctx.id.id().to_string(),
+                message_type: "tool_call_message".to_string(),
+                role: MessageRole::Assistant,
+                content: response_content.to_string(),
+                tool_call_id: None,
+                tool_calls: vec![ToolCall {
+                    id: tool_call.id.clone(),
+                    name: tool_call.name.clone(),
+                    arguments: tool_call.input.clone(),
+                }],
+                tool_call: Some(LettaToolCall {
+                    name: tool_call.name.clone(),
+                    arguments: serde_json::to_string(&tool_call.input)
+                        .unwrap_or_else(|_| "{}".to_string()),
+                    tool_call_id: tool_call.id.clone(),
+                }),
+                tool_return: None,
+                status: None,
+                created_at: chrono::Utc::now(),
+            };
+            ctx.state.add_message(msg);
+        }
+    }
+
+    /// Store a tool result message
+    fn store_tool_result_message(
+        ctx: &mut ActorContext<AgentActorState>,
+        tool_call_id: &str,
+        output: &str,
+        success: bool,
+    ) {
+        let msg = Message {
+            id: uuid::Uuid::new_v4().to_string(),
+            agent_id: ctx.id.id().to_string(),
+            message_type: "tool_return_message".to_string(),
+            role: MessageRole::Tool,
+            content: output.to_string(),
+            tool_call_id: Some(tool_call_id.to_string()),
+            tool_calls: vec![],
+            tool_call: None,
+            tool_return: Some(output.to_string()),
+            status: Some(if success { "success" } else { "error" }.to_string()),
+            created_at: chrono::Utc::now(),
+        };
+        ctx.state.add_message(msg);
     }
 
     /// Handle "create" operation - initialize agent from request
@@ -222,11 +300,21 @@ impl AgentActor {
     /// 4. Execute tool calls (loop up to 5 iterations)
     /// 5. Add assistant response to history
     /// 6. Return all messages + usage stats
+    ///
+    /// Handle message full - returns HandleMessageResult for continuation-based execution
+    ///
+    /// CONTINUATION-BASED ARCHITECTURE:
+    /// Instead of executing tools inline (which causes reentrant deadlock), this method
+    /// returns `NeedTools` when tools are required. The caller (AgentService) executes
+    /// tools outside the actor invocation and then calls `continue_with_tool_results`.
+    ///
+    /// This avoids the deadlock where tools calling dispatcher.invoke() wait on the
+    /// same actor that's blocked waiting for those tools to complete.
     async fn handle_message_full(
         &self,
         ctx: &mut ActorContext<AgentActorState>,
         request: HandleMessageFullRequest,
-    ) -> Result<HandleMessageFullResponse> {
+    ) -> Result<HandleMessageResult> {
         // TigerStyle: Validate preconditions
         assert!(
             !request.content.is_empty(),
@@ -316,241 +404,284 @@ impl AgentActor {
             })
             .collect();
 
+        let tool_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
+
         tracing::debug!(
             agent_id = %ctx.id.id(),
             total_tools = tools.len(),
-            tool_names = ?tools.iter().map(|t| &t.name).collect::<Vec<_>>(),
+            tool_names = ?tool_names,
             "Loaded tools for LLM prompt"
         );
 
         // 4. Call LLM with tools
-        let mut response = self
+        let llm_start = std::time::Instant::now();
+        tracing::info!(
+            agent_id = %ctx.id.id(),
+            message_count = llm_messages.len(),
+            "Starting LLM call"
+        );
+        let response = self
             .llm
-            .complete_with_tools(llm_messages.clone(), tools.clone())
+            .complete_with_tools(llm_messages.clone(), tools)
             .await?;
+        tracing::info!(
+            agent_id = %ctx.id.id(),
+            elapsed_ms = llm_start.elapsed().as_millis() as u64,
+            prompt_tokens = response.prompt_tokens,
+            completion_tokens = response.completion_tokens,
+            "LLM call completed"
+        );
 
-        let mut total_prompt_tokens = response.prompt_tokens;
-        let mut total_completion_tokens = response.completion_tokens;
-        let mut iterations = 0u32;
-        const MAX_ITERATIONS: u32 = 5;
+        let total_prompt_tokens = response.prompt_tokens;
+        let total_completion_tokens = response.completion_tokens;
 
-        // TigerStyle: Explicit limit enforcement
-        #[allow(clippy::assertions_on_constants)]
-        {
-            assert!(MAX_ITERATIONS > 0, "MAX_ITERATIONS must be positive");
-        }
+        // 5. Check if tools are needed - if so, return NeedTools for external execution
+        if !response.tool_calls.is_empty() {
+            tracing::info!(
+                agent_id = %ctx.id.id(),
+                tool_count = response.tool_calls.len(),
+                tool_names = ?response.tool_calls.iter().map(|tc| &tc.name).collect::<Vec<_>>(),
+                "Returning NeedTools - tools will be executed outside actor"
+            );
 
-        // 5. Tool execution loop
-        while !response.tool_calls.is_empty() && iterations < MAX_ITERATIONS {
-            iterations += 1;
+            // Store messages using helpers
+            Self::store_assistant_message(ctx, &response.content);
+            Self::store_tool_call_messages(ctx, &response.tool_calls, &response.content);
 
-            // Store assistant message (without tool calls - those are separate messages in Letta format)
-            let assistant_msg = Message {
-                id: uuid::Uuid::new_v4().to_string(),
-                agent_id: ctx.id.id().to_string(),
-                message_type: "assistant_message".to_string(),
-                role: MessageRole::Assistant,
-                content: response.content.clone(),
-                tool_call_id: None,
-                tool_calls: vec![],
-                tool_call: None,
-                tool_return: None,
-                status: None,
-                created_at: chrono::Utc::now(),
-            };
-            ctx.state.add_message(assistant_msg);
-
-            // Execute each tool and create tool_call/tool_return messages per Letta format
-            let mut tool_results = Vec::new();
-            let mut should_break = false;
-            for tool_call in &response.tool_calls {
-                // Create tool_call message for this specific tool
-                let tool_call_msg = Message {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    agent_id: ctx.id.id().to_string(),
-                    message_type: "tool_call_message".to_string(),
-                    role: MessageRole::Assistant,
-                    content: response.content.clone(),
-                    tool_call_id: None,
-                    tool_calls: vec![ToolCall {
-                        id: tool_call.id.clone(),
-                        name: tool_call.name.clone(),
-                        arguments: tool_call.input.clone(),
-                    }],
-                    // Letta SDK format (singular tool_call)
-                    tool_call: Some(LettaToolCall {
-                        name: tool_call.name.clone(),
-                        arguments: serde_json::to_string(&tool_call.input)
-                            .unwrap_or_else(|_| "{}".to_string()),
-                        tool_call_id: tool_call.id.clone(),
-                    }),
-                    tool_return: None,
-                    status: None,
-                    created_at: chrono::Utc::now(),
-                };
-                ctx.state.add_message(tool_call_msg);
-                // TigerStyle (Issue #75 fix): Use propagated call context for nested calls
-                // This ensures cycle detection and depth limiting work across agent boundaries
-                let (call_depth, mut call_chain) = match &request.call_context {
-                    Some(ctx_info) => (ctx_info.call_depth, ctx_info.call_chain.clone()),
-                    None => (0, vec![]), // Top-level call (from API)
-                };
-
-                // Add current agent to call chain for nested call detection
-                let current_agent_id = ctx.id.id().to_string();
-                if !call_chain.contains(&current_agent_id) {
-                    call_chain.push(current_agent_id.clone());
-                }
-
-                let context = ToolExecutionContext {
-                    agent_id: Some(current_agent_id),
-                    project_id: agent.project_id.clone(),
-                    call_depth,
-                    call_chain,
-                    dispatcher: self.dispatcher.as_ref().map(|d| {
-                        Arc::new(super::dispatcher_adapter::DispatcherAdapter::new(d.clone()))
-                            as Arc<dyn crate::tools::AgentDispatcher>
-                    }),
-                    audit_log: self.audit_log.clone(),
-                };
-                let exec_result = self
-                    .tool_registry
-                    .execute_with_context(&tool_call.name, &tool_call.input, Some(&context))
-                    .await;
-                let result = exec_result.output.clone();
-                tool_results.push((tool_call.id.clone(), result.clone()));
-
-                // Store tool result message
-                let tool_msg = Message {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    agent_id: ctx.id.id().to_string(),
-                    message_type: "tool_return_message".to_string(),
-                    role: MessageRole::Tool,
-                    content: result.clone(),
-                    tool_call_id: Some(tool_call.id.clone()),
-                    tool_calls: vec![],
-                    tool_call: None,
-                    // Letta SDK format fields
-                    tool_return: Some(result),
-                    status: Some(
-                        if exec_result.success {
-                            "success"
-                        } else {
-                            "error"
-                        }
-                        .to_string(),
-                    ),
-                    created_at: chrono::Utc::now(),
-                };
-                ctx.state.add_message(tool_msg);
-
-                if let Some((minutes, pause_until_ms)) = parse_pause_signal(&exec_result.output) {
-                    if !capabilities.supports_heartbeats {
-                        tracing::warn!(
-                            agent_id = %ctx.id.id(),
-                            agent_type = ?agent.agent_type,
-                            "Agent called pause_heartbeats but type doesn't support heartbeats"
-                        );
-                    } else {
-                        ctx.state.is_paused = true;
-                        ctx.state.pause_until_ms = Some(pause_until_ms);
-                        should_break = true;
-                        tracing::info!(
-                            agent_id = %ctx.id.id(),
-                            pause_minutes = minutes,
-                            pause_until_ms = pause_until_ms,
-                            "Agent requested heartbeat pause"
-                        );
-                    }
-                }
-
-                if let ToolSignal::PauseHeartbeats {
-                    minutes,
-                    pause_until_ms,
-                } = exec_result.signal
-                {
-                    if !capabilities.supports_heartbeats {
-                        tracing::warn!(
-                            agent_id = %ctx.id.id(),
-                            agent_type = ?agent.agent_type,
-                            "Agent called pause_heartbeats but type doesn't support heartbeats (via signal)"
-                        );
-                    } else {
-                        ctx.state.is_paused = true;
-                        ctx.state.pause_until_ms = Some(pause_until_ms);
-                        should_break = true;
-                        tracing::info!(
-                            agent_id = %ctx.id.id(),
-                            pause_minutes = minutes,
-                            pause_until_ms = pause_until_ms,
-                            "Agent requested heartbeat pause (via signal)"
-                        );
-                    }
-                }
-            }
-
-            if should_break {
-                break;
-            }
-
-            // Build assistant content blocks for continuation
-            let mut assistant_blocks = Vec::new();
-            if !response.content.is_empty() {
-                assistant_blocks.push(crate::llm::ContentBlock::Text {
-                    text: response.content.clone(),
-                });
-            }
-            for tc in &response.tool_calls {
-                assistant_blocks.push(crate::llm::ContentBlock::ToolUse {
+            // Build pending tool calls
+            let pending_tool_calls: Vec<PendingToolCall> = response
+                .tool_calls
+                .iter()
+                .map(|tc| PendingToolCall {
                     id: tc.id.clone(),
                     name: tc.name.clone(),
                     input: tc.input.clone(),
-                });
-            }
+                })
+                .collect();
 
-            // Continue conversation after tool execution
-            response = self
-                .llm
-                .continue_with_tool_result(
-                    llm_messages.clone(),
-                    tools.clone(),
-                    assistant_blocks,
-                    tool_results,
-                )
-                .await?;
-            total_prompt_tokens += response.prompt_tokens;
-            total_completion_tokens += response.completion_tokens;
+            // Build continuation state
+            let continuation = AgentContinuation {
+                llm_messages,
+                tool_names,
+                total_prompt_tokens,
+                total_completion_tokens,
+                iterations: 0,
+                pending_response_content: response.content.clone(),
+                call_context: request.call_context.clone(),
+                supports_heartbeats: capabilities.supports_heartbeats,
+            };
+
+            return Ok(HandleMessageResult::NeedTools {
+                tool_calls: pending_tool_calls,
+                continuation,
+            });
         }
 
-        // 5. Store final assistant response (with dual-mode send_message support)
-        // Check if agent used send_message tool in final iteration
+        // 6. No tools needed - store final response and return Done
         let final_content = self.extract_send_message_content(&response, ctx).await?;
+        Self::store_assistant_message(ctx, &final_content);
 
-        let assistant_msg = Message {
-            id: uuid::Uuid::new_v4().to_string(),
-            agent_id: ctx.id.id().to_string(),
-            message_type: "assistant_message".to_string(),
-            role: MessageRole::Assistant,
-            content: final_content,
-            tool_call_id: None,
-            tool_calls: vec![],
-            tool_call: None,
-            tool_return: None,
-            status: None,
-            created_at: chrono::Utc::now(),
-        };
-        ctx.state.add_message(assistant_msg);
-
-        // 6. Return response with all conversation history
-        // Note: Tests expect full history, not just current turn messages
-        Ok(HandleMessageFullResponse {
+        Ok(HandleMessageResult::Done(HandleMessageFullResponse {
             messages: ctx.state.all_messages().to_vec(),
             usage: UsageStats {
                 prompt_tokens: total_prompt_tokens,
                 completion_tokens: total_completion_tokens,
                 total_tokens: total_prompt_tokens + total_completion_tokens,
             },
-        })
+        }))
+    }
+
+    /// Continue processing after tool execution
+    ///
+    /// This is called by AgentService after executing tools outside the actor invocation.
+    /// Takes the tool results and continuation state, continues the LLM conversation,
+    /// and may return NeedTools again or Done.
+    async fn handle_continue_with_tool_results(
+        &self,
+        ctx: &mut ActorContext<AgentActorState>,
+        request: ContinueWithToolResultsRequest,
+    ) -> Result<HandleMessageResult> {
+        let agent = ctx
+            .state
+            .agent()
+            .ok_or_else(|| Error::Internal {
+                message: "Agent not created".to_string(),
+            })?
+            .clone();
+
+        let _capabilities = agent.agent_type.capabilities();
+        let continuation = request.continuation;
+
+        // Get tool definitions again (needed for LLM call)
+        let all_tools = self.tool_registry.get_tool_definitions().await;
+        let tools: Vec<_> = all_tools
+            .into_iter()
+            .filter(|t| continuation.tool_names.contains(&t.name))
+            .collect();
+
+        let mut total_prompt_tokens = continuation.total_prompt_tokens;
+        let mut total_completion_tokens = continuation.total_completion_tokens;
+        let iterations = continuation.iterations + 1;
+        const MAX_ITERATIONS: u32 = 5;
+
+        // Store tool result messages and check for pause signals
+        let mut should_break = false;
+        let mut tool_results_for_llm = Vec::new();
+
+        for tool_result in &request.tool_results {
+            // Store tool result message using helper
+            Self::store_tool_result_message(
+                ctx,
+                &tool_result.tool_call_id,
+                &tool_result.output,
+                tool_result.success,
+            );
+
+            tool_results_for_llm
+                .push((tool_result.tool_call_id.clone(), tool_result.output.clone()));
+
+            // Check for pause signal
+            if let Some((minutes, pause_until_ms)) = parse_pause_signal(&tool_result.output) {
+                if continuation.supports_heartbeats {
+                    ctx.state.is_paused = true;
+                    ctx.state.pause_until_ms = Some(pause_until_ms);
+                    should_break = true;
+                    tracing::info!(
+                        agent_id = %ctx.id.id(),
+                        pause_minutes = minutes,
+                        pause_until_ms = pause_until_ms,
+                        "Agent requested heartbeat pause"
+                    );
+                }
+            }
+        }
+
+        // If pause was requested or max iterations reached, return current state
+        if should_break || iterations >= MAX_ITERATIONS {
+            let final_content = continuation.pending_response_content.clone();
+            Self::store_assistant_message(ctx, &final_content);
+
+            return Ok(HandleMessageResult::Done(HandleMessageFullResponse {
+                messages: ctx.state.all_messages().to_vec(),
+                usage: UsageStats {
+                    prompt_tokens: total_prompt_tokens,
+                    completion_tokens: total_completion_tokens,
+                    total_tokens: total_prompt_tokens + total_completion_tokens,
+                },
+            }));
+        }
+
+        // Build assistant content blocks for LLM continuation
+        let mut assistant_blocks = Vec::new();
+        if !continuation.pending_response_content.is_empty() {
+            assistant_blocks.push(crate::llm::ContentBlock::Text {
+                text: continuation.pending_response_content.clone(),
+            });
+        }
+        // Add tool use blocks from the previous response (reconstructed from tool results)
+        for tool_result in &request.tool_results {
+            // Find the input for this tool call from stored messages
+            let input = ctx
+                .state
+                .all_messages()
+                .iter()
+                .rev()
+                .find_map(|m| {
+                    m.tool_calls
+                        .iter()
+                        .find(|tc| tc.id == tool_result.tool_call_id)
+                        .map(|tc| tc.arguments.clone())
+                })
+                .unwrap_or_else(|| serde_json::json!({}));
+
+            assistant_blocks.push(crate::llm::ContentBlock::ToolUse {
+                id: tool_result.tool_call_id.clone(),
+                name: tool_result.tool_name.clone(),
+                input,
+            });
+        }
+
+        // Continue conversation with LLM
+        tracing::info!(
+            agent_id = %ctx.id.id(),
+            tool_results_count = tool_results_for_llm.len(),
+            iteration = iterations,
+            "Continuing LLM conversation after tool execution"
+        );
+
+        let response = self
+            .llm
+            .continue_with_tool_result(
+                continuation.llm_messages.clone(),
+                tools.clone(),
+                assistant_blocks,
+                tool_results_for_llm,
+            )
+            .await?;
+
+        total_prompt_tokens += response.prompt_tokens;
+        total_completion_tokens += response.completion_tokens;
+
+        tracing::info!(
+            agent_id = %ctx.id.id(),
+            prompt_tokens = response.prompt_tokens,
+            completion_tokens = response.completion_tokens,
+            has_tool_calls = !response.tool_calls.is_empty(),
+            "LLM continuation completed"
+        );
+
+        // Check if more tools are needed
+        if !response.tool_calls.is_empty() {
+            tracing::info!(
+                agent_id = %ctx.id.id(),
+                tool_count = response.tool_calls.len(),
+                tool_names = ?response.tool_calls.iter().map(|tc| &tc.name).collect::<Vec<_>>(),
+                "Returning NeedTools again - more tools required"
+            );
+
+            // Store messages using helpers
+            Self::store_assistant_message(ctx, &response.content);
+            Self::store_tool_call_messages(ctx, &response.tool_calls, &response.content);
+
+            let pending_tool_calls: Vec<PendingToolCall> = response
+                .tool_calls
+                .iter()
+                .map(|tc| PendingToolCall {
+                    id: tc.id.clone(),
+                    name: tc.name.clone(),
+                    input: tc.input.clone(),
+                })
+                .collect();
+
+            let new_continuation = AgentContinuation {
+                llm_messages: continuation.llm_messages,
+                tool_names: continuation.tool_names,
+                total_prompt_tokens,
+                total_completion_tokens,
+                iterations,
+                pending_response_content: response.content.clone(),
+                call_context: continuation.call_context,
+                supports_heartbeats: continuation.supports_heartbeats,
+            };
+
+            return Ok(HandleMessageResult::NeedTools {
+                tool_calls: pending_tool_calls,
+                continuation: new_continuation,
+            });
+        }
+
+        // Done - no more tools needed
+        let final_content = self.extract_send_message_content(&response, ctx).await?;
+        Self::store_assistant_message(ctx, &final_content);
+
+        Ok(HandleMessageResult::Done(HandleMessageFullResponse {
+            messages: ctx.state.all_messages().to_vec(),
+            usage: UsageStats {
+                prompt_tokens: total_prompt_tokens,
+                completion_tokens: total_completion_tokens,
+                total_tokens: total_prompt_tokens + total_completion_tokens,
+            },
+        }))
     }
 
     /// Extract send_message content for dual-mode support
@@ -760,6 +891,81 @@ pub struct HandleMessageFullResponse {
     pub usage: UsageStats,
 }
 
+// =============================================================================
+// Continuation-Based Tool Execution Types
+// =============================================================================
+//
+// These types enable tool execution OUTSIDE actor invocations, avoiding the
+// reentrant deadlock that occurs when tools call the dispatcher from within
+// an active invocation.
+//
+// Flow:
+// 1. AgentService calls "handle_message_full" or "start_message"
+// 2. Actor returns NeedTools { tool_calls, continuation } if tools needed
+// 3. AgentService executes tools OUTSIDE actor (can call dispatcher freely)
+// 4. AgentService calls "continue_with_tool_results" with results
+// 5. Actor continues, may return NeedTools again or Done
+
+/// Result from handle_message_full - either done or needs tools executed
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum HandleMessageResult {
+    /// Processing complete, here's the final response
+    Done(HandleMessageFullResponse),
+    /// Need tools executed before continuing
+    NeedTools {
+        /// Tools to execute (outside actor invocation)
+        tool_calls: Vec<PendingToolCall>,
+        /// State needed to resume after tool execution
+        continuation: AgentContinuation,
+    },
+}
+
+/// A tool call that needs to be executed
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingToolCall {
+    pub id: String,
+    pub name: String,
+    pub input: serde_json::Value,
+}
+
+/// State captured to resume agent processing after tool execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentContinuation {
+    /// LLM messages built so far (system + history)
+    pub llm_messages: Vec<LlmMessage>,
+    /// Tool definitions available
+    pub tool_names: Vec<String>,
+    /// Running token counts
+    pub total_prompt_tokens: u64,
+    pub total_completion_tokens: u64,
+    /// Current iteration count
+    pub iterations: u32,
+    /// The LLM response that requested tools
+    pub pending_response_content: String,
+    /// Call context for nested agent calls
+    pub call_context: Option<CallContextInfo>,
+    /// Agent capabilities (for pause detection)
+    pub supports_heartbeats: bool,
+}
+
+/// Request to continue after tool execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContinueWithToolResultsRequest {
+    /// Results from tool execution
+    pub tool_results: Vec<ToolResult>,
+    /// Continuation state from NeedTools
+    pub continuation: AgentContinuation,
+}
+
+/// Result from a single tool execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolResult {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub output: String,
+    pub success: bool,
+}
+
 /// Handle message request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct HandleMessageRequest {
@@ -959,7 +1165,22 @@ impl Actor for AgentActor {
                 let response = self.handle_message_full(ctx, request).await?;
                 let response_bytes =
                     serde_json::to_vec(&response).map_err(|e| Error::Internal {
-                        message: format!("Failed to serialize HandleMessageFullResponse: {}", e),
+                        message: format!("Failed to serialize HandleMessageResult: {}", e),
+                    })?;
+                Ok(Bytes::from(response_bytes))
+            }
+            "continue_with_tool_results" => {
+                let request: ContinueWithToolResultsRequest = serde_json::from_slice(&payload)
+                    .map_err(|e| Error::Internal {
+                        message: format!(
+                            "Failed to deserialize ContinueWithToolResultsRequest: {}",
+                            e
+                        ),
+                    })?;
+                let response = self.handle_continue_with_tool_results(ctx, request).await?;
+                let response_bytes =
+                    serde_json::to_vec(&response).map_err(|e| Error::Internal {
+                        message: format!("Failed to serialize HandleMessageResult: {}", e),
                     })?;
                 Ok(Bytes::from(response_bytes))
             }
