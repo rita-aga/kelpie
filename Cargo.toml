@@ -118,6 +118,7 @@ kelpie-core = { path = "crates/kelpie-core" }
 kelpie-runtime = { path = "crates/kelpie-runtime" }
 kelpie-registry = { path = "crates/kelpie-registry" }
 kelpie-storage = { path = "crates/kelpie-storage" }
+kelpie-server = { path = "crates/kelpie-server" }
 kelpie-wasm = { path = "crates/kelpie-wasm" }
 kelpie-cluster = { path = "crates/kelpie-cluster" }
 kelpie-dst = { path = "crates/kelpie-dst" }

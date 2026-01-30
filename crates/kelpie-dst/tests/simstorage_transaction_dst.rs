@@ -18,9 +18,7 @@
 
 use kelpie_core::Runtime;
 use kelpie_server::models::{AgentType, Block, Message, MessageRole};
-use kelpie_server::storage::{
-    AgentMetadata, AgentStorage, SessionState, SimStorage,
-};
+use kelpie_server::storage::{AgentMetadata, AgentStorage, SessionState, SimStorage};
 use std::sync::Arc;
 
 /// Create a test SimStorage instance

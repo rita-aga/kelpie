@@ -10,6 +10,7 @@
 //! 3. Session checkpointing with transaction conflicts
 
 #![cfg(feature = "dst")]
+#![allow(unused_assignments, unused_variables)]
 //! 4. Message persistence with high fault rates
 //! 5. Concurrent operations (race conditions)
 //! 6. Crash recovery (state survives crashes)
@@ -1114,7 +1115,7 @@ async fn test_dst_atomic_checkpoint_semantics() {
                 // Record state before checkpoint
                 let storage_ref = storage.clone();
                 let session_id = session.session_id.clone();
-                let pre_session = retry_read(|| {
+                let _pre_session = retry_read(|| {
                     let storage = storage_ref.clone();
                     let sid = session_id.clone();
                     async move { storage.load_session("agent-atomic", &sid).await }
@@ -1123,7 +1124,7 @@ async fn test_dst_atomic_checkpoint_semantics() {
                 .ok();
 
                 let storage_ref = storage.clone();
-                let pre_msg_count = retry_read(|| {
+                let _pre_msg_count = retry_read(|| {
                     let storage = storage_ref.clone();
                     async move { storage.count_messages("agent-atomic").await }
                 })
