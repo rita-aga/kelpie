@@ -10,7 +10,11 @@ pub mod registry_actor;
 pub mod state;
 
 pub use agent_actor::{
-    AgentActor, CallContextInfo, HandleMessageFullRequest, HandleMessageFullResponse,
+    AgentActor, ArchivalDeleteRequest, ArchivalInsertRequest, ArchivalInsertResponse,
+    ArchivalSearchRequest, ArchivalSearchResponse, CallContextInfo, ConversationSearchDateRequest,
+    ConversationSearchRequest, ConversationSearchResponse, CoreMemoryReplaceRequest,
+    GetBlockRequest, GetBlockResponse, HandleMessageFullRequest, HandleMessageFullResponse,
+    ListMessagesRequest, ListMessagesResponse,
 };
 pub use dispatcher_adapter::{DispatcherAdapter, AGENT_ACTOR_NAMESPACE};
 pub use llm_trait::{LlmClient, LlmMessage, LlmResponse, LlmToolCall, RealLlmAdapter, StreamChunk};

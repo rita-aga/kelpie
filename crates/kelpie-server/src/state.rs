@@ -739,256 +739,105 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
     }
 
     // =========================================================================
-    // Dual-Mode Agent Operations (Phase 6.1)
+    // Async Agent Operations (Single Source of Truth)
     // =========================================================================
     //
-    // These methods delegate to AgentService if available, otherwise fall back
-    // to HashMap. This enables incremental migration of HTTP handlers.
-    //
-    // After Phase 6 migration completes, these will be removed and handlers
-    // will call agent_service() directly.
+    // All operations require AgentService (actor system). No HashMap fallback.
 
-    /// Get an agent by ID (dual-mode)
+    /// Get an agent by ID
     ///
-    /// Phase 6.11: Prefers AgentService if available, falls back to HashMap.
+    /// Single source of truth: Requires AgentService (actor system).
     pub async fn get_agent_async(&self, id: &str) -> Result<Option<AgentState>, StateError> {
-        if let Some(service) = self.agent_service() {
-            match service.get_agent(id).await {
-                Ok(agent) => Ok(Some(agent)),
-                Err(kelpie_core::Error::ActorNotFound { .. }) => {
-                    // Actor not found is not an error, just means agent doesn't exist
-                    Ok(None)
-                }
-                Err(kelpie_core::Error::Internal { message })
-                    if message.contains("Agent not created") =>
-                {
-                    // Actor was activated but has no agent state (never called create)
-                    Ok(None)
-                }
-                Err(e) => Err(StateError::Internal {
-                    message: format!("Service error: {}", e),
-                }),
+        let service = self.agent_service().ok_or_else(|| StateError::Internal {
+            message: "AgentService not configured".to_string(),
+        })?;
+
+        match service.get_agent(id).await {
+            Ok(agent) => Ok(Some(agent)),
+            Err(kelpie_core::Error::ActorNotFound { .. }) => {
+                // Actor not found is not an error, just means agent doesn't exist
+                Ok(None)
             }
-        } else {
-            // Fallback to HashMap for backward compatibility
-            self.get_agent(id)
+            Err(kelpie_core::Error::Internal { message })
+                if message.contains("Agent not created") =>
+            {
+                // Actor was activated but has no agent state (never called create)
+                Ok(None)
+            }
+            Err(e) => Err(StateError::Internal {
+                message: format!("Service error: {}", e),
+            }),
         }
     }
 
-    /// Create an agent (dual-mode)
+    /// Create an agent (async)
     ///
-    /// Phase 6.11: Prefers AgentService if available, falls back to HashMap.
+    /// Single source of truth: Requires AgentService (actor system).
     pub async fn create_agent_async(
         &self,
         request: crate::models::CreateAgentRequest,
     ) -> Result<AgentState, StateError> {
-        if let Some(service) = self.agent_service() {
-            let agent = service
-                .create_agent(request)
-                .await
-                .map_err(|e| StateError::Internal {
-                    message: format!("Service error: {}", e),
-                })?;
+        let service = self.agent_service().ok_or_else(|| StateError::Internal {
+            message: "AgentService not configured".to_string(),
+        })?;
 
-            // TigerStyle: Also store in HashMap for backward compatibility
-            // Methods like get_agent() still read from HashMap
-            {
-                let mut agents = self
-                    .inner
-                    .agents
-                    .write()
-                    .map_err(|_| StateError::LockPoisoned)?;
-                agents.insert(agent.id.clone(), agent.clone());
-            }
+        // Single source of truth: Actor system handles all state
+        let agent = service
+            .create_agent(request)
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("Service error: {}", e),
+            })?;
 
-            // Initialize messages vec for this agent
-            {
-                let mut messages = self
-                    .inner
-                    .messages
-                    .write()
-                    .map_err(|_| StateError::LockPoisoned)?;
-                messages.insert(agent.id.clone(), Vec::new());
-            }
-
-            // Initialize archival vec for this agent
-            {
-                let mut archival = self
-                    .inner
-                    .archival
-                    .write()
-                    .map_err(|_| StateError::LockPoisoned)?;
-                archival.insert(agent.id.clone(), Vec::new());
-            }
-
-            Ok(agent)
-        } else {
-            // Fallback: write to storage directly (no AgentService)
-            // TigerStyle: Storage is the single source of truth
-            #[allow(deprecated)]
-            let agent = AgentState::from_request(request);
-
-            // Write to storage if available
-            if let Some(storage) = &self.inner.storage {
-                use crate::storage::AgentMetadata;
-
-                // Convert AgentState to AgentMetadata (subset of fields)
-                let metadata = AgentMetadata {
-                    id: agent.id.clone(),
-                    name: agent.name.clone(),
-                    agent_type: agent.agent_type.clone(),
-                    model: agent.model.clone(),
-                    embedding: agent.embedding.clone(),
-                    system: agent.system.clone(),
-                    description: agent.description.clone(),
-                    tool_ids: agent.tool_ids.clone(),
-                    tags: agent.tags.clone(),
-                    metadata: agent.metadata.clone(),
-                    created_at: agent.created_at,
-                    updated_at: agent.updated_at,
-                };
-
-                storage
-                    .save_agent(&metadata)
-                    .await
-                    .map_err(|e| StateError::StorageError {
-                        message: format!("Failed to save agent: {}", e),
-                    })?;
-
-                // Also save blocks if present
-                if !agent.blocks.is_empty() {
-                    storage
-                        .save_blocks(&agent.id, &agent.blocks)
-                        .await
-                        .map_err(|e| StateError::StorageError {
-                            message: format!("Failed to save blocks: {}", e),
-                        })?;
-                }
-            }
-
-            // Also update HashMap for backward compatibility
-            let mut agents = self
-                .inner
-                .agents
-                .write()
-                .map_err(|_| StateError::LockPoisoned)?;
-            agents.insert(agent.id.clone(), agent.clone());
-
-            // Initialize messages vec for this agent
-            {
-                let mut messages = self
-                    .inner
-                    .messages
-                    .write()
-                    .map_err(|_| StateError::LockPoisoned)?;
-                messages.insert(agent.id.clone(), Vec::new());
-            }
-
-            // Initialize archival vec for this agent
-            {
-                let mut archival = self
-                    .inner
-                    .archival
-                    .write()
-                    .map_err(|_| StateError::LockPoisoned)?;
-                archival.insert(agent.id.clone(), Vec::new());
-            }
-
-            Ok(agent)
-        }
+        Ok(agent)
     }
 
-    /// Update an agent (dual-mode)
+    /// Update an agent
     ///
-    /// Phase 6.11: Prefers AgentService if available, falls back to HashMap.
+    /// Single source of truth: Requires AgentService (actor system).
     pub async fn update_agent_async(
         &self,
         id: &str,
         update: serde_json::Value,
     ) -> Result<AgentState, StateError> {
-        if let Some(service) = self.agent_service() {
-            let agent =
-                service
-                    .update_agent(id, update)
-                    .await
-                    .map_err(|e| StateError::Internal {
-                        message: format!("Service error: {}", e),
-                    })?;
+        let service = self.agent_service().ok_or_else(|| StateError::Internal {
+            message: "AgentService not configured".to_string(),
+        })?;
 
-            // TigerStyle: Also update HashMap to keep list in sync (memory mode)
-            if self.inner.storage.is_none() {
-                let mut agents = self
-                    .inner
-                    .agents
-                    .write()
-                    .map_err(|_| StateError::LockPoisoned)?;
-                agents.insert(agent.id.clone(), agent.clone());
-            }
+        // Single source of truth: Actor system handles all state
+        let agent = service
+            .update_agent(id, update)
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("Service error: {}", e),
+            })?;
 
-            Ok(agent)
-        } else {
-            // Fallback: For HashMap mode, parse update and apply manually
-            let update_req: crate::models::UpdateAgentRequest = serde_json::from_value(update)
-                .map_err(|e| StateError::Internal {
-                    message: format!("Failed to parse update: {}", e),
-                })?;
-
-            // Apply update using closure-based update_agent
-            #[allow(deprecated)]
-            self.update_agent(id, |agent| {
-                if let Some(name) = update_req.name {
-                    agent.name = name;
-                }
-                if let Some(system) = update_req.system {
-                    agent.system = Some(system);
-                }
-                if let Some(description) = update_req.description {
-                    agent.description = Some(description);
-                }
-                if let Some(tags) = update_req.tags {
-                    agent.tags = tags;
-                }
-                if let Some(metadata) = update_req.metadata {
-                    agent.metadata = metadata;
-                }
-            })
-        }
+        Ok(agent)
     }
 
-    /// Delete an agent (dual-mode)
+    /// Delete an agent (async)
     ///
-    /// Phase 6.11: Prefers AgentService if available, falls back to HashMap.
+    /// Single source of truth: Requires AgentService (actor system).
     pub async fn delete_agent_async(&self, id: &str) -> Result<(), StateError> {
-        if let Some(service) = self.agent_service() {
-            service
-                .delete_agent(id)
-                .await
-                .map_err(|e| StateError::Internal {
-                    message: format!("Service error: {}", e),
-                })?;
+        let service = self.agent_service().ok_or_else(|| StateError::Internal {
+            message: "AgentService not configured".to_string(),
+        })?;
 
-            // TigerStyle: Also remove from HashMap to keep list in sync (memory mode)
-            if self.inner.storage.is_none() {
-                let mut agents = self
-                    .inner
-                    .agents
-                    .write()
-                    .map_err(|_| StateError::LockPoisoned)?;
-                agents.remove(id);
-            }
+        // Single source of truth: Actor system handles deletion
+        service
+            .delete_agent(id)
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("Service error: {}", e),
+            })?;
 
-            Ok(())
-        } else {
-            // Fallback to HashMap for backward compatibility
-            self.delete_agent(id)
-        }
+        Ok(())
     }
 
-    /// List agents (dual-mode)
+    /// List agents from durable storage
     ///
-    /// Phase 6.5: Currently always uses HashMap since AgentService doesn't have list support yet.
-    /// TigerStyle: List agents from durable storage when configured, otherwise from HashMap.
-    /// This ensures list operations reflect persisted state in FDB mode.
+    /// TigerStyle: Single source of truth - all data flows through storage.
+    /// Requires storage to be configured.
     ///
     /// # Arguments
     /// * `limit` - Maximum number of agents to return
@@ -1000,131 +849,86 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
         cursor: Option<&str>,
         name_filter: Option<&str>,
     ) -> Result<(Vec<AgentState>, Option<String>), StateError> {
-        // Use storage if available (works with or without dispatcher)
-        if let Some(storage) = &self.inner.storage {
-            // Fallback to direct storage access (backward compatible)
-            // Load all agents from storage
-            let agent_metadatas =
+        // Require storage - no HashMap fallback
+        let storage = self
+            .inner
+            .storage
+            .as_ref()
+            .ok_or_else(|| StateError::Internal {
+                message: "Storage not configured".to_string(),
+            })?;
+
+        // Load all agents from storage
+        let agent_metadatas = storage
+            .list_agents()
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("Failed to list agents from storage: {}", e),
+            })?;
+
+        // Convert AgentMetadata to AgentState
+        let mut agents: Vec<AgentState> = Vec::with_capacity(agent_metadatas.len());
+        for metadata in agent_metadatas {
+            // Load blocks for each agent
+            let blocks =
                 storage
-                    .list_agents()
+                    .load_blocks(&metadata.id)
                     .await
                     .map_err(|e| StateError::Internal {
-                        message: format!("Failed to list agents from storage: {}", e),
+                        message: format!("Failed to load blocks: {}", e),
                     })?;
 
-            // Convert AgentMetadata to AgentState
-            let mut agents: Vec<AgentState> = Vec::with_capacity(agent_metadatas.len());
-            for metadata in agent_metadatas {
-                // Load blocks for each agent
-                let blocks =
-                    storage
-                        .load_blocks(&metadata.id)
-                        .await
-                        .map_err(|e| StateError::Internal {
-                            message: format!("Failed to load blocks: {}", e),
-                        })?;
-
-                agents.push(AgentState {
-                    id: metadata.id,
-                    name: metadata.name,
-                    agent_type: metadata.agent_type,
-                    model: metadata.model,
-                    embedding: metadata.embedding,
-                    system: metadata.system,
-                    description: metadata.description,
-                    blocks,
-                    tool_ids: metadata.tool_ids,
-                    tags: metadata.tags,
-                    metadata: metadata.metadata,
-                    project_id: None, // TODO: Add project_id to AgentMetadata
-                    user_id: None,    // TODO: Add user_id to AgentMetadata
-                    org_id: None,     // TODO: Add org_id to AgentMetadata
-                    created_at: metadata.created_at,
-                    updated_at: metadata.updated_at,
-                });
-            }
-
-            // Sort by created_at descending (newest first)
-            agents.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-
-            // TigerStyle: Apply name filter BEFORE pagination to ensure correct results
-            if let Some(name) = name_filter {
-                agents.retain(|agent| agent.name == name);
-            }
-
-            // Apply cursor (skip until we find the cursor ID)
-            let start_idx = if let Some(cursor_id) = cursor {
-                agents
-                    .iter()
-                    .position(|a| a.id == cursor_id)
-                    .map(|i| i + 1)
-                    .unwrap_or(0)
-            } else {
-                0
-            };
-
-            // Paginate
-            let page: Vec<_> = agents.into_iter().skip(start_idx).take(limit + 1).collect();
-            let (items, next_cursor) = if page.len() > limit {
-                let items: Vec<_> = page.into_iter().take(limit).collect();
-                let next_cursor = items.last().map(|a| a.id.clone());
-                (items, next_cursor)
-            } else {
-                (page, None)
-            };
-
-            Ok((items, next_cursor))
-        } else {
-            // Fall back to HashMap for in-memory mode
-            // TigerStyle: Apply name filter BEFORE pagination (same as FDB path)
-            let agents_lock = self
-                .inner
-                .agents
-                .read()
-                .map_err(|_| StateError::LockPoisoned)?;
-
-            let mut all_agents: Vec<_> = agents_lock.values().cloned().collect();
-            drop(agents_lock); // Release lock early
-
-            // Sort by created_at descending (newest first, same as FDB path)
-            all_agents.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-
-            // TigerStyle: Apply name filter BEFORE pagination
-            if let Some(name) = name_filter {
-                all_agents.retain(|agent| agent.name == name);
-            }
-
-            // Apply cursor (skip until we find the cursor ID)
-            let start_idx = if let Some(cursor_id) = cursor {
-                all_agents
-                    .iter()
-                    .position(|a| a.id == cursor_id)
-                    .map(|i| i + 1)
-                    .unwrap_or(0)
-            } else {
-                0
-            };
-
-            // Paginate
-            let page: Vec<_> = all_agents
-                .into_iter()
-                .skip(start_idx)
-                .take(limit + 1)
-                .collect();
-            let (items, next_cursor) = if page.len() > limit {
-                let items: Vec<_> = page.into_iter().take(limit).collect();
-                let next_cursor = items.last().map(|a| a.id.clone());
-                (items, next_cursor)
-            } else {
-                (page, None)
-            };
-
-            Ok((items, next_cursor))
+            agents.push(AgentState {
+                id: metadata.id,
+                name: metadata.name,
+                agent_type: metadata.agent_type,
+                model: metadata.model,
+                embedding: metadata.embedding,
+                system: metadata.system,
+                description: metadata.description,
+                blocks,
+                tool_ids: metadata.tool_ids,
+                tags: metadata.tags,
+                metadata: metadata.metadata,
+                project_id: None, // TODO: Add project_id to AgentMetadata
+                user_id: None,    // TODO: Add user_id to AgentMetadata
+                org_id: None,     // TODO: Add org_id to AgentMetadata
+                created_at: metadata.created_at,
+                updated_at: metadata.updated_at,
+            });
         }
-    }
 
-    // Note: list_agents not yet implemented in AgentService
-    // For now, list handler will continue using HashMap directly
+        // Sort by created_at descending (newest first)
+        agents.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+        // TigerStyle: Apply name filter BEFORE pagination to ensure correct results
+        if let Some(name) = name_filter {
+            agents.retain(|agent| agent.name == name);
+        }
+
+        // Apply cursor (skip until we find the cursor ID)
+        let start_idx = if let Some(cursor_id) = cursor {
+            agents
+                .iter()
+                .position(|a| a.id == cursor_id)
+                .map(|i| i + 1)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        // Paginate
+        let page: Vec<_> = agents.into_iter().skip(start_idx).take(limit + 1).collect();
+        let (items, next_cursor) = if page.len() > limit {
+            let items: Vec<_> = page.into_iter().take(limit).collect();
+            let next_cursor = items.last().map(|a| a.id.clone());
+            (items, next_cursor)
+        } else {
+            (page, None)
+        };
+
+        Ok((items, next_cursor))
+    }
 
     // =========================================================================
     // Async Persistence Operations (for durable storage)
@@ -1227,10 +1031,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             updated_at: metadata.updated_at,
         };
 
-        // Populate cache
-        if let Ok(mut agents) = self.inner.agents.write() {
-            agents.insert(agent.id.clone(), agent.clone());
-        }
+        // HashMap cache population removed - storage is single source of truth
 
         Ok(Some(agent))
     }
@@ -1702,6 +1503,31 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
         }
     }
 
+    /// Atomic append or create block
+    ///
+    /// Single source of truth: Requires AgentService (actor system).
+    ///
+    /// TigerStyle: Atomic operation prevents race between check and modification.
+    pub async fn append_or_create_block_by_label_async(
+        &self,
+        agent_id: &str,
+        label: &str,
+        content: &str,
+    ) -> Result<(), StateError> {
+        let service = self.agent_service().ok_or_else(|| StateError::Internal {
+            message: "AgentService not configured".to_string(),
+        })?;
+
+        // Use agent service (actor-based)
+        service
+            .core_memory_append(agent_id, label, content)
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("Service error: {}", e),
+            })?;
+        Ok(())
+    }
+
     // =========================================================================
     // Standalone block operations (for letta-code compatibility)
     // =========================================================================
@@ -1883,11 +1709,10 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
 
     /// Add a message to an agent's history (async version with storage persistence)
     ///
-    /// This is the preferred method for adding messages. It:
-    /// 1. Persists the message to durable storage (FDB or SimStorage)
-    /// 2. Also updates the in-memory HashMap for backward compatibility
+    /// NOTE: For the actor-based flow, messages are stored in actor state via
+    /// handle_message_full operation. This method is kept for direct storage writes.
     ///
-    /// TigerStyle: Storage is the single source of truth. HashMap is a cache.
+    /// Single source of truth: Writes to storage only. HashMap cache removed.
     pub async fn add_message_async(
         &self,
         agent_id: &str,
@@ -1900,7 +1725,7 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             });
         }
 
-        // Step 1: Persist to storage FIRST (single source of truth)
+        // Single source of truth: Write to storage only
         if let Some(storage) = &self.inner.storage {
             storage
                 .append_message(agent_id, &message)
@@ -1910,29 +1735,9 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                 })?;
         }
 
-        // Step 2: Update in-memory HashMap (cache for backward compatibility)
-        let mut messages = self
-            .inner
-            .messages
-            .write()
-            .map_err(|_| StateError::LockPoisoned)?;
+        // HashMap writes removed - storage is single source of truth
 
-        // Initialize messages vec if agent doesn't exist in HashMap yet
-        // (agent might exist in storage but not in memory cache)
-        let agent_messages = messages
-            .entry(agent_id.to_string())
-            .or_insert_with(Vec::new);
-
-        if agent_messages.len() >= MESSAGES_PER_AGENT_MAX {
-            return Err(StateError::LimitExceeded {
-                resource: "messages",
-                limit: MESSAGES_PER_AGENT_MAX,
-            });
-        }
-
-        let result = message.clone();
-        agent_messages.push(message);
-        Ok(result)
+        Ok(message)
     }
 
     /// List messages for an agent with pagination
@@ -2527,12 +2332,10 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             .write()
             .map_err(|_| StateError::LockPoisoned)?;
 
+        // Auto-create archival storage for agent if it doesn't exist yet
         let entries = archival
-            .get_mut(agent_id)
-            .ok_or_else(|| StateError::NotFound {
-                resource: "agent",
-                id: agent_id.to_string(),
-            })?;
+            .entry(agent_id.to_string())
+            .or_insert_with(Vec::new);
 
         if entries.len() >= ARCHIVAL_ENTRIES_PER_AGENT_MAX {
             return Err(StateError::LimitExceeded {
@@ -2573,10 +2376,11 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             .read()
             .map_err(|_| StateError::LockPoisoned)?;
 
-        let entries = archival.get(agent_id).ok_or_else(|| StateError::NotFound {
-            resource: "agent",
-            id: agent_id.to_string(),
-        })?;
+        // Return empty list if agent has no archival entries yet (not an error)
+        let entries = match archival.get(agent_id) {
+            Some(e) => e,
+            None => return Ok(Vec::new()),
+        };
 
         // Simple text search if query is provided
         let results: Vec<_> = if let Some(q) = query {
@@ -3812,25 +3616,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_dual_mode_get_agent_hashmap() {
-        // Test dual-mode with HashMap (no service)
+    async fn test_async_methods_require_agent_service() {
+        // Test that async methods return error when AgentService is not configured
         let state = AppState::new(kelpie_core::TokioRuntime);
-        let agent = create_test_agent("dual-mode-test");
-        let agent_id = agent.id.clone();
 
-        // Create via HashMap
-        state.create_agent(agent).unwrap();
+        // get_agent_async should error without service
+        let result = state.get_agent_async("any-id").await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("AgentService not configured"));
 
-        // Get via dual-mode method (should use HashMap)
-        let retrieved = state.get_agent_async(&agent_id).await.unwrap();
-        assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().id, agent_id);
+        // create_agent_async should error without service
+        let request = crate::models::CreateAgentRequest {
+            name: "test".to_string(),
+            agent_type: crate::models::AgentType::default(),
+            model: None,
+            embedding: None,
+            system: None,
+            description: None,
+            memory_blocks: vec![],
+            block_ids: vec![],
+            tool_ids: vec![],
+            tags: vec![],
+            metadata: serde_json::json!({}),
+            project_id: None,
+            user_id: None,
+            org_id: None,
+        };
+        let result = state.create_agent_async(request).await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("AgentService not configured"));
 
-        // Delete via dual-mode
-        state.delete_agent_async(&agent_id).await.unwrap();
-
-        // Verify deleted
-        let retrieved = state.get_agent_async(&agent_id).await.unwrap();
-        assert!(retrieved.is_none());
+        // delete_agent_async should error without service
+        let result = state.delete_agent_async("any-id").await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("AgentService not configured"));
     }
 }
