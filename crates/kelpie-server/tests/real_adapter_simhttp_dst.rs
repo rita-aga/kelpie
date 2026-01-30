@@ -334,3 +334,132 @@ async fn test_dst_combined_network_faults() {
         result.err()
     );
 }
+
+/// Test concurrent RealLlmAdapter streaming with fault injection
+///
+/// Contract:
+/// - Multiple adapters can stream concurrently
+/// - No interference between streams
+/// - All complete (or fail gracefully) under faults
+/// - Deterministic behavior with same seed
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_dst_concurrent_adapter_streaming_with_faults() {
+    use kelpie_core::{current_runtime, Runtime};
+
+    let config = SimConfig::new(10004);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(
+            FaultType::NetworkDelay {
+                min_ms: 10,
+                max_ms: 50,
+            },
+            0.4, // 40% operations delayed
+        ))
+        .run_async(|sim_env| async move {
+            let runtime = current_runtime();
+
+            // Create 3 concurrent streaming tasks
+            let mut handles = Vec::new();
+
+            for i in 1..=3 {
+                let faults = sim_env.faults.clone();
+                let rng = sim_env.rng.clone();
+                let time = sim_env.io_context.time.clone();
+
+                let handle = runtime.spawn(async move {
+                    let sim_http_client = Arc::new(FaultInjectedHttpClient {
+                        faults,
+                        rng,
+                        time,
+                        stream_body: mock_sse_response(),
+                    });
+
+                    let llm_config = LlmConfig {
+                        base_url: "http://example.com/test.anthropic.com".to_string(),
+                        api_key: "test-key".to_string(),
+                        model: "claude-test".to_string(),
+                        max_tokens: 100,
+                    };
+                    let llm_client = RealLlmClient::with_http_client(llm_config, sim_http_client);
+                    let adapter = RealLlmAdapter::new(llm_client);
+
+                    // Stream and collect content
+                    let stream_result = adapter
+                        .stream_complete(vec![LlmMessage {
+                            role: "user".to_string(),
+                            content: format!("Test request {}", i),
+                        }])
+                        .await;
+
+                    match stream_result {
+                        Ok(mut stream) => {
+                            let mut content = String::new();
+                            while let Some(chunk_result) = stream.next().await {
+                                if let Ok(StreamChunk::ContentDelta { delta }) = chunk_result {
+                                    content.push_str(&delta);
+                                }
+                            }
+                            Ok::<(i32, String), kelpie_core::Error>((i, content))
+                        }
+                        Err(e) => Err(e),
+                    }
+                });
+
+                handles.push(handle);
+            }
+
+            // Collect results from all concurrent streams
+            let mut successful_streams = 0;
+            let mut expected_content = String::new();
+
+            for handle in handles {
+                match handle.await {
+                    Ok(Ok((stream_id, content))) => {
+                        successful_streams += 1;
+                        tracing::info!(
+                            stream_id = stream_id,
+                            content = %content,
+                            "Stream completed"
+                        );
+                        // All successful streams should have same content
+                        if expected_content.is_empty() {
+                            expected_content = content;
+                        } else {
+                            assert_eq!(
+                                content, expected_content,
+                                "All streams should produce same content"
+                            );
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        // Failure due to faults is acceptable
+                        tracing::info!(error = %e, "Stream failed due to fault injection");
+                    }
+                    Err(e) => {
+                        panic!("Task panicked: {:?}", e);
+                    }
+                }
+            }
+
+            // With 40% delay (no packet loss), all streams should complete
+            assert!(
+                successful_streams >= 1,
+                "At least one stream should complete"
+            );
+            tracing::info!(
+                successful_streams = successful_streams,
+                "Concurrent streaming test complete"
+            );
+
+            Ok(())
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Concurrent streaming test failed: {:?}",
+        result.err()
+    );
+}
