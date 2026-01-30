@@ -2638,6 +2638,7 @@ dependencies = [
  "kelpie-registry",
  "kelpie-runtime",
  "kelpie-sandbox",
+ "kelpie-server",
  "kelpie-storage",
  "kelpie-tools",
  "kelpie-vm",
@@ -2652,6 +2653,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

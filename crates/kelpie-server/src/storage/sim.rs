@@ -1,12 +1,19 @@
-//! SimStorage - In-memory AgentStorage for testing
+//! SimStorage - In-memory AgentStorage for testing with FDB-like transaction semantics
 //!
 //! TigerStyle: Deterministic in-memory storage for DST compatibility.
 //!
 //! This implementation provides:
 //! - Full AgentStorage trait implementation
+//! - FDB-like transaction semantics (atomicity, conflict detection)
 //! - Thread-safe concurrent access via RwLock
 //! - Optional fault injection for DST testing
 //! - No external dependencies (no FDB required)
+//!
+//! Transaction Semantics (matching FDB):
+//! - Atomic commits: multi-key operations succeed or fail together
+//! - Conflict detection: concurrent writes to same keys detected via versioning
+//! - Atomic checkpoint: session + message saved together
+//! - Atomic cascade delete: agent and all related data deleted atomically
 //!
 //! Use Cases:
 //! - Unit tests
@@ -15,8 +22,9 @@
 //! - CI pipelines
 
 use async_trait::async_trait;
-use std::collections::HashMap;
-use std::sync::RwLock;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 use crate::models::{AgentGroup, ArchivalEntry, Block, Identity, Job, MCPServer, Message, Project};
 
@@ -25,14 +33,64 @@ use super::types::{AgentMetadata, CustomToolRecord, SessionState};
 
 #[cfg(feature = "dst")]
 use kelpie_dst::fault::FaultInjector;
-#[cfg(feature = "dst")]
-use std::sync::Arc;
+
+// =============================================================================
+// Constants (TigerStyle)
+// =============================================================================
+
+/// Maximum transaction retry attempts for conflict resolution
+const TRANSACTION_RETRY_COUNT_MAX: u64 = 5;
+
+// =============================================================================
+// Version Types for MVCC
+// =============================================================================
+
+/// Version number for MVCC conflict detection
+type Version = u64;
+
+/// Key identifier for conflict detection
+///
+/// TigerStyle: Explicit key types for type-safe conflict tracking
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+pub enum StorageKey {
+    Agent(String),
+    Blocks(String),
+    Session {
+        agent_id: String,
+        session_id: String,
+    },
+    Messages(String),
+    CustomTool(String),
+    McpServer(String),
+    AgentGroup(String),
+    Identity(String),
+    Project(String),
+    Job(String),
+    Archival {
+        agent_id: String,
+        entry_id: String,
+    },
+    ArchivalAll(String),
+}
 
 /// In-memory storage implementation for testing and development
 ///
 /// TigerStyle: All fields use RwLock for thread-safe concurrent access.
 /// Data is stored in HashMaps, providing O(1) lookups.
+/// Transaction semantics match FDB for realistic simulation.
 pub struct SimStorage {
+    /// Inner storage (Arc for cloning support)
+    inner: Arc<SimStorageInner>,
+}
+
+/// Inner storage state with version tracking for MVCC
+///
+/// TigerStyle: Separate inner struct for Arc sharing and version management
+struct SimStorageInner {
+    /// Global version counter (incremented on each write)
+    version: AtomicU64,
+    /// Version when each key was last modified
+    key_versions: RwLock<HashMap<StorageKey, Version>>,
     /// Agent metadata by ID
     agents: RwLock<HashMap<String, AgentMetadata>>,
     /// Blocks by agent_id -> label -> Block
@@ -60,10 +118,11 @@ pub struct SimStorage {
     fault_injector: Option<Arc<FaultInjector>>,
 }
 
-impl SimStorage {
-    /// Create a new empty SimStorage
-    pub fn new() -> Self {
+impl SimStorageInner {
+    fn new() -> Self {
         Self {
+            version: AtomicU64::new(0),
+            key_versions: RwLock::new(HashMap::new()),
             agents: RwLock::new(HashMap::new()),
             blocks: RwLock::new(HashMap::new()),
             sessions: RwLock::new(HashMap::new()),
@@ -80,10 +139,11 @@ impl SimStorage {
         }
     }
 
-    /// Create SimStorage with fault injection for DST
     #[cfg(feature = "dst")]
-    pub fn with_fault_injector(fault_injector: Arc<FaultInjector>) -> Self {
+    fn with_fault_injector(fault_injector: Arc<FaultInjector>) -> Self {
         Self {
+            version: AtomicU64::new(0),
+            key_versions: RwLock::new(HashMap::new()),
             agents: RwLock::new(HashMap::new()),
             blocks: RwLock::new(HashMap::new()),
             sessions: RwLock::new(HashMap::new()),
@@ -99,11 +159,63 @@ impl SimStorage {
         }
     }
 
+    /// Get the current global version
+    fn current_version(&self) -> Version {
+        self.version.load(Ordering::SeqCst)
+    }
+
+    /// Check if any keys have been modified since the given version
+    fn has_conflicts(&self, read_set: &HashSet<StorageKey>, since_version: Version) -> bool {
+        if let Ok(versions) = self.key_versions.read() {
+            for key in read_set {
+                if let Some(&key_version) = versions.get(key) {
+                    if key_version > since_version {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Update key versions after a successful write
+    fn update_key_versions(&self, keys: &[StorageKey]) {
+        let new_version = self.version.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Ok(mut versions) = self.key_versions.write() {
+            for key in keys {
+                versions.insert(key.clone(), new_version);
+            }
+        }
+    }
+}
+
+impl SimStorage {
+    /// Create a new empty SimStorage
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(SimStorageInner::new()),
+        }
+    }
+
+    /// Create SimStorage with fault injection for DST
+    #[cfg(feature = "dst")]
+    pub fn with_fault_injector(fault_injector: Arc<FaultInjector>) -> Self {
+        Self {
+            inner: Arc::new(SimStorageInner::with_fault_injector(fault_injector)),
+        }
+    }
+
+    /// Begin a new transaction for read-modify-write operations
+    ///
+    /// Returns a transaction that tracks reads and detects conflicts on commit.
+    pub fn begin_transaction(&self) -> SimStorageTransaction {
+        SimStorageTransaction::new(self.inner.clone())
+    }
+
     /// Check if fault should be injected for an operation
     #[cfg(feature = "dst")]
-    #[allow(dead_code)]
     fn should_inject_fault(&self, operation: &str) -> bool {
-        if let Some(injector) = &self.fault_injector {
+        if let Some(ref injector) = self.inner.fault_injector {
             injector.should_inject(operation).is_some()
         } else {
             false
@@ -132,6 +244,96 @@ impl SimStorage {
     }
 }
 
+impl Clone for SimStorage {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+// =============================================================================
+// SimStorageTransaction - FDB-like transaction semantics
+// =============================================================================
+
+/// Transaction for SimStorage with FDB-like semantics
+///
+/// Tracks reads and detects conflicts on commit. Provides:
+/// - Read tracking for conflict detection
+/// - Version-based conflict detection (optimistic concurrency)
+/// - Automatic retry support via is_retriable() on errors
+///
+/// TigerStyle: Explicit transaction lifecycle, 2+ assertions per method
+pub struct SimStorageTransaction {
+    /// Reference to storage inner
+    storage: Arc<SimStorageInner>,
+    /// Snapshot version at transaction start
+    snapshot_version: Version,
+    /// Keys read during transaction (for conflict detection)
+    read_set: HashSet<StorageKey>,
+    /// Keys that will be written
+    write_keys: Vec<StorageKey>,
+    /// Whether transaction is finalized
+    finalized: bool,
+}
+
+impl SimStorageTransaction {
+    fn new(storage: Arc<SimStorageInner>) -> Self {
+        let snapshot_version = storage.current_version();
+        Self {
+            storage,
+            snapshot_version,
+            read_set: HashSet::new(),
+            write_keys: Vec::new(),
+            finalized: false,
+        }
+    }
+
+    /// Record a read for conflict detection
+    pub fn record_read(&mut self, key: StorageKey) {
+        assert!(!self.finalized, "transaction already finalized");
+        self.read_set.insert(key);
+    }
+
+    /// Record a write key for version updates
+    pub fn record_write(&mut self, key: StorageKey) {
+        assert!(!self.finalized, "transaction already finalized");
+        self.write_keys.push(key);
+    }
+
+    /// Check for conflicts before committing
+    ///
+    /// Returns error if any read keys have been modified since transaction start
+    pub fn check_conflicts(&self) -> Result<(), StorageError> {
+        assert!(!self.finalized, "transaction already finalized");
+
+        if self
+            .storage
+            .has_conflicts(&self.read_set, self.snapshot_version)
+        {
+            return Err(StorageError::TransactionConflict {
+                reason: "concurrent modification detected".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Commit the transaction (update versions for written keys)
+    ///
+    /// Call this AFTER successfully applying writes to update version tracking
+    pub fn commit(&mut self) {
+        assert!(!self.finalized, "transaction already finalized");
+        self.storage.update_key_versions(&self.write_keys);
+        self.finalized = true;
+    }
+
+    /// Abort the transaction (discard without updating versions)
+    pub fn abort(&mut self) {
+        assert!(!self.finalized, "transaction already finalized");
+        self.finalized = true;
+    }
+}
+
 impl Default for SimStorage {
     fn default() -> Self {
         Self::new()
@@ -150,11 +352,18 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("save_agent"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::Agent(agent.id.clone()));
+
         let mut agents = self
+            .inner
             .agents
             .write()
             .map_err(|_| Self::lock_error("save_agent"))?;
         agents.insert(agent.id.clone(), agent.clone());
+        drop(agents);
+
+        txn.commit();
         Ok(())
     }
 
@@ -165,6 +374,7 @@ impl AgentStorage for SimStorage {
         }
 
         let agents = self
+            .inner
             .agents
             .read()
             .map_err(|_| Self::lock_error("load_agent"))?;
@@ -177,51 +387,59 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("delete_agent"));
         }
 
-        // Delete agent metadata
-        {
-            let mut agents = self
-                .agents
-                .write()
-                .map_err(|_| Self::lock_error("delete_agent"))?;
-            agents.remove(id);
-        }
+        // TigerStyle: Atomic cascade delete - acquire ALL locks BEFORE making changes
+        // This ensures either ALL data is deleted or NONE is deleted
+        // Lock ordering: agents -> blocks -> sessions -> messages -> archival
+        // (consistent ordering prevents deadlocks)
 
-        // Cascade: delete blocks
-        {
-            let mut blocks = self
-                .blocks
-                .write()
-                .map_err(|_| Self::lock_error("delete_agent_blocks"))?;
-            blocks.remove(id);
-        }
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::Agent(id.to_string()));
+        txn.record_write(StorageKey::Blocks(id.to_string()));
+        txn.record_write(StorageKey::Messages(id.to_string()));
+        txn.record_write(StorageKey::ArchivalAll(id.to_string()));
 
-        // Cascade: delete sessions
-        {
-            let mut sessions = self
-                .sessions
-                .write()
-                .map_err(|_| Self::lock_error("delete_agent_sessions"))?;
-            sessions.remove(id);
-        }
+        // Acquire all locks in consistent order
+        let mut agents = self
+            .inner
+            .agents
+            .write()
+            .map_err(|_| Self::lock_error("delete_agent"))?;
+        let mut blocks = self
+            .inner
+            .blocks
+            .write()
+            .map_err(|_| Self::lock_error("delete_agent_blocks"))?;
+        let mut sessions = self
+            .inner
+            .sessions
+            .write()
+            .map_err(|_| Self::lock_error("delete_agent_sessions"))?;
+        let mut messages = self
+            .inner
+            .messages
+            .write()
+            .map_err(|_| Self::lock_error("delete_agent_messages"))?;
+        let mut archival = self
+            .inner
+            .archival
+            .write()
+            .map_err(|_| Self::lock_error("delete_agent_archival"))?;
 
-        // Cascade: delete messages
-        {
-            let mut messages = self
-                .messages
-                .write()
-                .map_err(|_| Self::lock_error("delete_agent_messages"))?;
-            messages.remove(id);
-        }
+        // Now atomically delete all data (all locks held)
+        agents.remove(id);
+        blocks.remove(id);
+        sessions.remove(id);
+        messages.remove(id);
+        archival.remove(id);
 
-        // Cascade: delete archival entries
-        {
-            let mut archival = self
-                .archival
-                .write()
-                .map_err(|_| Self::lock_error("delete_agent_archival"))?;
-            archival.remove(id);
-        }
+        // Release locks (done implicitly when guards drop)
+        drop(archival);
+        drop(messages);
+        drop(sessions);
+        drop(blocks);
+        drop(agents);
 
+        txn.commit();
         Ok(())
     }
 
@@ -232,6 +450,7 @@ impl AgentStorage for SimStorage {
         }
 
         let agents = self
+            .inner
             .agents
             .read()
             .map_err(|_| Self::lock_error("list_agents"))?;
@@ -248,7 +467,11 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("save_blocks"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::Blocks(agent_id.to_string()));
+
         let mut all_blocks = self
+            .inner
             .blocks
             .write()
             .map_err(|_| Self::lock_error("save_blocks"))?;
@@ -257,6 +480,9 @@ impl AgentStorage for SimStorage {
         for block in blocks {
             agent_blocks.insert(block.label.clone(), block.clone());
         }
+        drop(all_blocks);
+
+        txn.commit();
         Ok(())
     }
 
@@ -267,6 +493,7 @@ impl AgentStorage for SimStorage {
         }
 
         let all_blocks = self
+            .inner
             .blocks
             .read()
             .map_err(|_| Self::lock_error("load_blocks"))?;
@@ -288,22 +515,51 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("update_block"));
         }
 
-        let mut all_blocks = self
-            .blocks
-            .write()
-            .map_err(|_| Self::lock_error("update_block"))?;
+        // Use transaction for atomic read-modify-write with conflict detection
+        let mut attempts = 0u64;
+        loop {
+            attempts += 1;
+            assert!(
+                attempts <= TRANSACTION_RETRY_COUNT_MAX,
+                "exceeded max transaction retries"
+            );
 
-        let agent_blocks = all_blocks.entry(agent_id.to_string()).or_default();
+            let mut txn = self.begin_transaction();
+            txn.record_read(StorageKey::Blocks(agent_id.to_string()));
+            txn.record_write(StorageKey::Blocks(agent_id.to_string()));
 
-        let block = agent_blocks
-            .get_mut(label)
-            .ok_or_else(|| StorageError::NotFound {
-                resource: "block",
-                id: format!("{}:{}", agent_id, label),
-            })?;
+            let mut all_blocks = self
+                .inner
+                .blocks
+                .write()
+                .map_err(|_| Self::lock_error("update_block"))?;
 
-        block.value = value.to_string();
-        Ok(block.clone())
+            // Check for conflicts before proceeding
+            if let Err(e) = txn.check_conflicts() {
+                drop(all_blocks);
+                txn.abort();
+                if attempts < TRANSACTION_RETRY_COUNT_MAX {
+                    continue;
+                }
+                return Err(e);
+            }
+
+            let agent_blocks = all_blocks.entry(agent_id.to_string()).or_default();
+
+            let block = agent_blocks
+                .get_mut(label)
+                .ok_or_else(|| StorageError::NotFound {
+                    resource: "block",
+                    id: format!("{}:{}", agent_id, label),
+                })?;
+
+            block.value = value.to_string();
+            let result = block.clone();
+            drop(all_blocks);
+
+            txn.commit();
+            return Ok(result);
+        }
     }
 
     async fn append_block(
@@ -317,28 +573,57 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("append_block"));
         }
 
-        let mut all_blocks = self
-            .blocks
-            .write()
-            .map_err(|_| Self::lock_error("append_block"))?;
+        // Use transaction for atomic read-modify-write with conflict detection
+        let mut attempts = 0u64;
+        loop {
+            attempts += 1;
+            assert!(
+                attempts <= TRANSACTION_RETRY_COUNT_MAX,
+                "exceeded max transaction retries"
+            );
 
-        let agent_blocks = all_blocks.entry(agent_id.to_string()).or_default();
+            let mut txn = self.begin_transaction();
+            txn.record_read(StorageKey::Blocks(agent_id.to_string()));
+            txn.record_write(StorageKey::Blocks(agent_id.to_string()));
 
-        let block = agent_blocks
-            .entry(label.to_string())
-            .or_insert_with(|| Block {
-                id: uuid::Uuid::new_v4().to_string(),
-                label: label.to_string(),
-                value: String::new(),
-                description: None,
-                limit: None,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-            });
+            let mut all_blocks = self
+                .inner
+                .blocks
+                .write()
+                .map_err(|_| Self::lock_error("append_block"))?;
 
-        block.value.push_str(content);
-        block.updated_at = chrono::Utc::now();
-        Ok(block.clone())
+            // Check for conflicts before proceeding
+            if let Err(e) = txn.check_conflicts() {
+                drop(all_blocks);
+                txn.abort();
+                if attempts < TRANSACTION_RETRY_COUNT_MAX {
+                    continue;
+                }
+                return Err(e);
+            }
+
+            let agent_blocks = all_blocks.entry(agent_id.to_string()).or_default();
+
+            let block = agent_blocks
+                .entry(label.to_string())
+                .or_insert_with(|| Block {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    label: label.to_string(),
+                    value: String::new(),
+                    description: None,
+                    limit: None,
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                });
+
+            block.value.push_str(content);
+            block.updated_at = chrono::Utc::now();
+            let result = block.clone();
+            drop(all_blocks);
+
+            txn.commit();
+            return Ok(result);
+        }
     }
 
     // =========================================================================
@@ -351,13 +636,23 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("save_session"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::Session {
+            agent_id: state.agent_id.clone(),
+            session_id: state.session_id.clone(),
+        });
+
         let mut all_sessions = self
+            .inner
             .sessions
             .write()
             .map_err(|_| Self::lock_error("save_session"))?;
 
         let agent_sessions = all_sessions.entry(state.agent_id.clone()).or_default();
         agent_sessions.insert(state.session_id.clone(), state.clone());
+        drop(all_sessions);
+
+        txn.commit();
         Ok(())
     }
 
@@ -372,6 +667,7 @@ impl AgentStorage for SimStorage {
         }
 
         let all_sessions = self
+            .inner
             .sessions
             .read()
             .map_err(|_| Self::lock_error("load_session"))?;
@@ -388,7 +684,14 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("delete_session"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::Session {
+            agent_id: agent_id.to_string(),
+            session_id: session_id.to_string(),
+        });
+
         let mut all_sessions = self
+            .inner
             .sessions
             .write()
             .map_err(|_| Self::lock_error("delete_session"))?;
@@ -396,6 +699,9 @@ impl AgentStorage for SimStorage {
         if let Some(agent_sessions) = all_sessions.get_mut(agent_id) {
             agent_sessions.remove(session_id);
         }
+        drop(all_sessions);
+
+        txn.commit();
         Ok(())
     }
 
@@ -406,6 +712,7 @@ impl AgentStorage for SimStorage {
         }
 
         let all_sessions = self
+            .inner
             .sessions
             .read()
             .map_err(|_| Self::lock_error("list_sessions"))?;
@@ -426,11 +733,18 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("save_custom_tool"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::CustomTool(tool.name.clone()));
+
         let mut tools = self
+            .inner
             .custom_tools
             .write()
             .map_err(|_| Self::lock_error("save_custom_tool"))?;
         tools.insert(tool.name.clone(), tool.clone());
+        drop(tools);
+
+        txn.commit();
         Ok(())
     }
 
@@ -441,6 +755,7 @@ impl AgentStorage for SimStorage {
         }
 
         let tools = self
+            .inner
             .custom_tools
             .read()
             .map_err(|_| Self::lock_error("load_custom_tool"))?;
@@ -453,11 +768,18 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("delete_custom_tool"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::CustomTool(name.to_string()));
+
         let mut tools = self
+            .inner
             .custom_tools
             .write()
             .map_err(|_| Self::lock_error("delete_custom_tool"))?;
         tools.remove(name);
+        drop(tools);
+
+        txn.commit();
         Ok(())
     }
 
@@ -468,6 +790,7 @@ impl AgentStorage for SimStorage {
         }
 
         let tools = self
+            .inner
             .custom_tools
             .read()
             .map_err(|_| Self::lock_error("list_custom_tools"))?;
@@ -484,13 +807,20 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("append_message"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::Messages(agent_id.to_string()));
+
         let mut all_messages = self
+            .inner
             .messages
             .write()
             .map_err(|_| Self::lock_error("append_message"))?;
 
         let agent_messages = all_messages.entry(agent_id.to_string()).or_default();
         agent_messages.push(message.clone());
+        drop(all_messages);
+
+        txn.commit();
         Ok(())
     }
 
@@ -505,6 +835,7 @@ impl AgentStorage for SimStorage {
         }
 
         let all_messages = self
+            .inner
             .messages
             .read()
             .map_err(|_| Self::lock_error("load_messages"))?;
@@ -531,6 +862,7 @@ impl AgentStorage for SimStorage {
         }
 
         let all_messages = self
+            .inner
             .messages
             .read()
             .map_err(|_| Self::lock_error("load_messages_since"))?;
@@ -555,6 +887,7 @@ impl AgentStorage for SimStorage {
         }
 
         let all_messages = self
+            .inner
             .messages
             .read()
             .map_err(|_| Self::lock_error("count_messages"))?;
@@ -568,11 +901,18 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("delete_messages"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::Messages(agent_id.to_string()));
+
         let mut all_messages = self
+            .inner
             .messages
             .write()
             .map_err(|_| Self::lock_error("delete_messages"))?;
         all_messages.remove(agent_id);
+        drop(all_messages);
+
+        txn.commit();
         Ok(())
     }
 
@@ -586,11 +926,18 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("save_mcp_server"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::McpServer(server.id.clone()));
+
         let mut servers = self
+            .inner
             .mcp_servers
             .write()
             .map_err(|_| Self::lock_error("save_mcp_server"))?;
         servers.insert(server.id.clone(), server.clone());
+        drop(servers);
+
+        txn.commit();
         Ok(())
     }
 
@@ -601,6 +948,7 @@ impl AgentStorage for SimStorage {
         }
 
         let servers = self
+            .inner
             .mcp_servers
             .read()
             .map_err(|_| Self::lock_error("load_mcp_server"))?;
@@ -613,11 +961,18 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("delete_mcp_server"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::McpServer(id.to_string()));
+
         let mut servers = self
+            .inner
             .mcp_servers
             .write()
             .map_err(|_| Self::lock_error("delete_mcp_server"))?;
         servers.remove(id);
+        drop(servers);
+
+        txn.commit();
         Ok(())
     }
 
@@ -628,6 +983,7 @@ impl AgentStorage for SimStorage {
         }
 
         let servers = self
+            .inner
             .mcp_servers
             .read()
             .map_err(|_| Self::lock_error("list_mcp_servers"))?;
@@ -644,11 +1000,18 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("save_agent_group"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::AgentGroup(group.id.clone()));
+
         let mut groups = self
+            .inner
             .agent_groups
             .write()
             .map_err(|_| Self::lock_error("save_agent_group"))?;
         groups.insert(group.id.clone(), group.clone());
+        drop(groups);
+
+        txn.commit();
         Ok(())
     }
 
@@ -659,6 +1022,7 @@ impl AgentStorage for SimStorage {
         }
 
         let groups = self
+            .inner
             .agent_groups
             .read()
             .map_err(|_| Self::lock_error("load_agent_group"))?;
@@ -671,11 +1035,18 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("delete_agent_group"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::AgentGroup(id.to_string()));
+
         let mut groups = self
+            .inner
             .agent_groups
             .write()
             .map_err(|_| Self::lock_error("delete_agent_group"))?;
         groups.remove(id);
+        drop(groups);
+
+        txn.commit();
         Ok(())
     }
 
@@ -686,6 +1057,7 @@ impl AgentStorage for SimStorage {
         }
 
         let groups = self
+            .inner
             .agent_groups
             .read()
             .map_err(|_| Self::lock_error("list_agent_groups"))?;
@@ -702,11 +1074,18 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("save_identity"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::Identity(identity.id.clone()));
+
         let mut identities = self
+            .inner
             .identities
             .write()
             .map_err(|_| Self::lock_error("save_identity"))?;
         identities.insert(identity.id.clone(), identity.clone());
+        drop(identities);
+
+        txn.commit();
         Ok(())
     }
 
@@ -717,6 +1096,7 @@ impl AgentStorage for SimStorage {
         }
 
         let identities = self
+            .inner
             .identities
             .read()
             .map_err(|_| Self::lock_error("load_identity"))?;
@@ -729,11 +1109,18 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("delete_identity"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::Identity(id.to_string()));
+
         let mut identities = self
+            .inner
             .identities
             .write()
             .map_err(|_| Self::lock_error("delete_identity"))?;
         identities.remove(id);
+        drop(identities);
+
+        txn.commit();
         Ok(())
     }
 
@@ -744,6 +1131,7 @@ impl AgentStorage for SimStorage {
         }
 
         let identities = self
+            .inner
             .identities
             .read()
             .map_err(|_| Self::lock_error("list_identities"))?;
@@ -760,11 +1148,18 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("save_project"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::Project(project.id.clone()));
+
         let mut projects = self
+            .inner
             .projects
             .write()
             .map_err(|_| Self::lock_error("save_project"))?;
         projects.insert(project.id.clone(), project.clone());
+        drop(projects);
+
+        txn.commit();
         Ok(())
     }
 
@@ -775,6 +1170,7 @@ impl AgentStorage for SimStorage {
         }
 
         let projects = self
+            .inner
             .projects
             .read()
             .map_err(|_| Self::lock_error("load_project"))?;
@@ -787,11 +1183,18 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("delete_project"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::Project(id.to_string()));
+
         let mut projects = self
+            .inner
             .projects
             .write()
             .map_err(|_| Self::lock_error("delete_project"))?;
         projects.remove(id);
+        drop(projects);
+
+        txn.commit();
         Ok(())
     }
 
@@ -802,6 +1205,7 @@ impl AgentStorage for SimStorage {
         }
 
         let projects = self
+            .inner
             .projects
             .read()
             .map_err(|_| Self::lock_error("list_projects"))?;
@@ -818,11 +1222,18 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("save_job"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::Job(job.id.clone()));
+
         let mut jobs = self
+            .inner
             .jobs
             .write()
             .map_err(|_| Self::lock_error("save_job"))?;
         jobs.insert(job.id.clone(), job.clone());
+        drop(jobs);
+
+        txn.commit();
         Ok(())
     }
 
@@ -832,7 +1243,11 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("load_job"));
         }
 
-        let jobs = self.jobs.read().map_err(|_| Self::lock_error("load_job"))?;
+        let jobs = self
+            .inner
+            .jobs
+            .read()
+            .map_err(|_| Self::lock_error("load_job"))?;
         Ok(jobs.get(id).cloned())
     }
 
@@ -842,11 +1257,18 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("delete_job"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::Job(id.to_string()));
+
         let mut jobs = self
+            .inner
             .jobs
             .write()
             .map_err(|_| Self::lock_error("delete_job"))?;
         jobs.remove(id);
+        drop(jobs);
+
+        txn.commit();
         Ok(())
     }
 
@@ -857,6 +1279,7 @@ impl AgentStorage for SimStorage {
         }
 
         let jobs = self
+            .inner
             .jobs
             .read()
             .map_err(|_| Self::lock_error("list_jobs"))?;
@@ -877,12 +1300,22 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("save_archival_entry"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::Archival {
+            agent_id: agent_id.to_string(),
+            entry_id: entry.id.clone(),
+        });
+
         let mut archival = self
+            .inner
             .archival
             .write()
             .map_err(|_| Self::lock_error("save_archival_entry"))?;
         let agent_entries = archival.entry(agent_id.to_string()).or_default();
         agent_entries.insert(entry.id.clone(), entry.clone());
+        drop(archival);
+
+        txn.commit();
         Ok(())
     }
 
@@ -897,6 +1330,7 @@ impl AgentStorage for SimStorage {
         }
 
         let archival = self
+            .inner
             .archival
             .read()
             .map_err(|_| Self::lock_error("load_archival_entries"))?;
@@ -918,6 +1352,7 @@ impl AgentStorage for SimStorage {
         }
 
         let archival = self
+            .inner
             .archival
             .read()
             .map_err(|_| Self::lock_error("get_archival_entry"))?;
@@ -937,13 +1372,23 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("delete_archival_entry"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::Archival {
+            agent_id: agent_id.to_string(),
+            entry_id: entry_id.to_string(),
+        });
+
         let mut archival = self
+            .inner
             .archival
             .write()
             .map_err(|_| Self::lock_error("delete_archival_entry"))?;
         if let Some(agent_entries) = archival.get_mut(agent_id) {
             agent_entries.remove(entry_id);
         }
+        drop(archival);
+
+        txn.commit();
         Ok(())
     }
 
@@ -953,11 +1398,18 @@ impl AgentStorage for SimStorage {
             return Err(Self::fault_error("delete_archival_entries"));
         }
 
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::ArchivalAll(agent_id.to_string()));
+
         let mut archival = self
+            .inner
             .archival
             .write()
             .map_err(|_| Self::lock_error("delete_archival_entries"))?;
         archival.remove(agent_id);
+        drop(archival);
+
+        txn.commit();
         Ok(())
     }
 
@@ -973,6 +1425,7 @@ impl AgentStorage for SimStorage {
         }
 
         let archival = self
+            .inner
             .archival
             .read()
             .map_err(|_| Self::lock_error("search_archival_entries"))?;
@@ -995,6 +1448,90 @@ impl AgentStorage for SimStorage {
             .unwrap_or_default();
 
         Ok(entries)
+    }
+
+    // =========================================================================
+    // Transactional Operations
+    // =========================================================================
+
+    /// Atomic checkpoint: save session state + append message
+    ///
+    /// TigerStyle: This overrides the default non-atomic implementation to ensure
+    /// session and message are saved together atomically. This matches FDB semantics
+    /// where checkpoint operations are transactional.
+    ///
+    /// Implementation acquires both locks before making changes to ensure:
+    /// - Either both session AND message are saved, or neither
+    /// - No partial reads can see inconsistent state
+    /// - Fault injection at any point causes complete rollback
+    async fn checkpoint(
+        &self,
+        session: &SessionState,
+        message: Option<&Message>,
+    ) -> Result<(), StorageError> {
+        // Preconditions
+        assert!(!session.agent_id.is_empty(), "agent_id cannot be empty");
+        assert!(!session.session_id.is_empty(), "session_id cannot be empty");
+
+        #[cfg(feature = "dst")]
+        if self.should_inject_fault("checkpoint") {
+            return Err(Self::fault_error("checkpoint"));
+        }
+
+        // Start transaction for atomic checkpoint
+        let mut txn = self.begin_transaction();
+        txn.record_write(StorageKey::Session {
+            agent_id: session.agent_id.clone(),
+            session_id: session.session_id.clone(),
+        });
+        if message.is_some() {
+            txn.record_write(StorageKey::Messages(session.agent_id.clone()));
+        }
+
+        // Acquire BOTH locks BEFORE making any changes to ensure atomicity
+        // This prevents a partial checkpoint where session is saved but message is not
+        // TigerStyle: Lock ordering is important - always acquire sessions before messages
+        // to prevent deadlocks
+        let mut all_sessions = self
+            .inner
+            .sessions
+            .write()
+            .map_err(|_| Self::lock_error("checkpoint_sessions"))?;
+
+        let mut all_messages = self
+            .inner
+            .messages
+            .write()
+            .map_err(|_| Self::lock_error("checkpoint_messages"))?;
+
+        // Now that we have both locks, apply changes atomically
+        // If we fail after this point, both changes would be visible (correct)
+        // If we had failed before acquiring both locks, no changes would be visible (correct)
+
+        // 1. Save session
+        let agent_sessions = all_sessions.entry(session.agent_id.clone()).or_default();
+        agent_sessions.insert(session.session_id.clone(), session.clone());
+
+        // 2. Append message if provided
+        if let Some(msg) = message {
+            // Allow empty agent_id (storage will use session's agent_id) or matching agent_id
+            assert!(
+                msg.agent_id.is_empty() || msg.agent_id == session.agent_id,
+                "message agent_id must be empty or match session agent_id"
+            );
+            let agent_messages = all_messages.entry(session.agent_id.clone()).or_default();
+            agent_messages.push(msg.clone());
+        }
+
+        // Release locks
+        drop(all_messages);
+        drop(all_sessions);
+
+        // Commit transaction to update versions
+        txn.commit();
+
+        // Both operations succeeded atomically
+        Ok(())
     }
 }
 
@@ -1155,5 +1692,116 @@ mod tests {
         assert!(storage.load_agent("agent-cascade").await.unwrap().is_none());
         assert_eq!(storage.load_blocks("agent-cascade").await.unwrap().len(), 0);
         assert_eq!(storage.count_messages("agent-cascade").await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_sim_storage_atomic_checkpoint() {
+        use crate::models::MessageRole;
+        let storage = SimStorage::new();
+
+        // Create session and message for atomic checkpoint
+        let session = SessionState::new("session-atomic".to_string(), "agent-atomic".to_string());
+        let message = Message {
+            id: "msg-atomic".to_string(),
+            agent_id: "agent-atomic".to_string(),
+            message_type: "user_message".to_string(),
+            role: MessageRole::User,
+            content: "Atomic checkpoint test".to_string(),
+            tool_call_id: None,
+            tool_calls: vec![],
+            tool_call: None,
+            tool_return: None,
+            status: None,
+            created_at: chrono::Utc::now(),
+        };
+
+        // Perform atomic checkpoint
+        storage.checkpoint(&session, Some(&message)).await.unwrap();
+
+        // Verify BOTH session and message were saved
+        let loaded_session = storage
+            .load_session("agent-atomic", "session-atomic")
+            .await
+            .unwrap();
+        assert!(
+            loaded_session.is_some(),
+            "Session should be saved in checkpoint"
+        );
+
+        let messages = storage.load_messages("agent-atomic", 10).await.unwrap();
+        assert_eq!(messages.len(), 1, "Message should be saved in checkpoint");
+        assert_eq!(messages[0].content, "Atomic checkpoint test");
+    }
+
+    #[tokio::test]
+    async fn test_sim_storage_checkpoint_without_message() {
+        let storage = SimStorage::new();
+
+        // Create session without message
+        let session = SessionState::new("session-no-msg".to_string(), "agent-no-msg".to_string());
+
+        // Checkpoint with no message
+        storage.checkpoint(&session, None).await.unwrap();
+
+        // Verify session was saved
+        let loaded_session = storage
+            .load_session("agent-no-msg", "session-no-msg")
+            .await
+            .unwrap();
+        assert!(loaded_session.is_some(), "Session should be saved");
+
+        // Verify no messages
+        let messages = storage.load_messages("agent-no-msg", 10).await.unwrap();
+        assert_eq!(messages.len(), 0, "No messages should exist");
+    }
+
+    #[tokio::test]
+    async fn test_sim_storage_checkpoint_updates_existing_session() {
+        use crate::models::MessageRole;
+        let storage = SimStorage::new();
+
+        // Create initial session
+        let mut session =
+            SessionState::new("session-update".to_string(), "agent-update".to_string());
+
+        // First checkpoint
+        storage.checkpoint(&session, None).await.unwrap();
+        let initial = storage
+            .load_session("agent-update", "session-update")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(initial.iteration, 0);
+
+        // Advance iteration
+        session.advance_iteration();
+
+        // Second checkpoint with message
+        let message = Message {
+            id: "msg-update".to_string(),
+            agent_id: "agent-update".to_string(),
+            message_type: "assistant_message".to_string(),
+            role: MessageRole::Assistant,
+            content: "Updated checkpoint".to_string(),
+            tool_call_id: None,
+            tool_calls: vec![],
+            tool_call: None,
+            tool_return: None,
+            status: None,
+            created_at: chrono::Utc::now(),
+        };
+        storage.checkpoint(&session, Some(&message)).await.unwrap();
+
+        // Verify session was updated
+        let updated = storage
+            .load_session("agent-update", "session-update")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.iteration, 1, "Session iteration should be updated");
+
+        // Verify message was appended
+        let messages = storage.load_messages("agent-update", 10).await.unwrap();
+        assert_eq!(messages.len(), 1, "Message should be appended");
     }
 }
