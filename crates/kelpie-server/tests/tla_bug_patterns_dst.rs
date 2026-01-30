@@ -11,6 +11,22 @@
 //! 1. The buggy behavior produces invariant violations (test catches bugs)
 //! 2. The safe behavior produces NO violations (correct implementation)
 //!
+//! # Why No Random Fault Injection
+//!
+//! NOTE: These tests intentionally do NOT include random fault injection.
+//! Unlike resilience tests (which verify the system handles faults gracefully),
+//! these tests verify that specific TLA+ bug patterns are correctly detected.
+//!
+//! Random faults would mask the scenarios being tested. For example, if a
+//! TOCTOU race test fails due to an unrelated StorageWriteFail, it no longer
+//! verifies that TOCTOU detection works correctly.
+//!
+//! For fault resilience testing, see:
+//! - agent_actor_dst.rs
+//! - agent_service_dst.rs
+//! - real_adapter_simhttp_dst.rs
+//! - and other *_dst.rs files in this directory
+//!
 //! # TigerStyle Principles
 //!
 //! 1. Print DST_SEED for every test (even these deterministic ones)

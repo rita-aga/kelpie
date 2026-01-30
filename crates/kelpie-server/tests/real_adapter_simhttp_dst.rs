@@ -83,6 +83,9 @@ impl FaultInjectedHttpClient {
                 FaultType::LlmFailure => {
                     return Err("LLM API failure".to_string());
                 }
+                FaultType::LlmRateLimited => {
+                    return Err("LLM rate limited (429)".to_string());
+                }
                 _ => {}
             }
         }
@@ -690,6 +693,69 @@ async fn test_dst_comprehensive_llm_faults() {
     assert!(
         result.is_ok(),
         "Comprehensive LLM fault test failed: {:?}",
+        result.err()
+    );
+}
+
+/// Test with LlmRateLimited fault injection
+///
+/// Verifies that LlmRateLimited faults cause stream initiation to fail
+/// with a rate limit error. This is a common production failure mode.
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_dst_llm_rate_limited_fault() {
+    let config = SimConfig::new(10008);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::LlmRateLimited, 0.9)) // 90% rate limit
+        .run_async(|sim_env| async move {
+            let sim_http_client = Arc::new(FaultInjectedHttpClient {
+                faults: sim_env.faults.clone(),
+                rng: sim_env.rng.clone(),
+                time: sim_env.io_context.time.clone(),
+                stream_body: mock_sse_response(),
+            });
+
+            let llm_config = LlmConfig {
+                base_url: "http://example.com/test.anthropic.com".to_string(),
+                api_key: "test-key".to_string(),
+                model: "claude-test".to_string(),
+                max_tokens: 100,
+            };
+            let llm_client = RealLlmClient::with_http_client(llm_config, sim_http_client);
+            let adapter = RealLlmAdapter::new(llm_client);
+
+            let stream_result = adapter
+                .stream_complete(vec![LlmMessage {
+                    role: "user".to_string(),
+                    content: "Test".to_string(),
+                }])
+                .await;
+
+            match stream_result {
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    tracing::info!(error = %error_msg, "LLM rate limit triggered");
+                    assert!(
+                        error_msg.contains("rate")
+                            || error_msg.contains("429")
+                            || error_msg.contains("limit"),
+                        "Error should mention rate limit: {}",
+                        error_msg
+                    );
+                }
+                Ok(_) => {
+                    tracing::info!("Request succeeded despite 90% rate limit (lucky)");
+                }
+            }
+
+            Ok(())
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "LLM rate limit test failed: {:?}",
         result.err()
     );
 }
