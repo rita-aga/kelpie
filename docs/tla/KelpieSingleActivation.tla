@@ -39,7 +39,11 @@ EXTENDS Integers, FiniteSets
 
 CONSTANT
     Nodes,          \* Set of nodes that can activate actors (e.g., {n1, n2})
-    NONE            \* Sentinel value for "no holder"
+    NONE,           \* Sentinel value for "no holder"
+    BUGGY           \* TRUE: skip version check in CommitClaim (violates SingleActivation)
+
+\* Type constraints on constants
+ASSUME BUGGY \in BOOLEAN
 
 (***************************************************************************)
 (* VARIABLES                                                                *)
@@ -113,27 +117,47 @@ ReadFDB(n) ==
 
 \* Node attempts to commit claim transaction
 \* FDB commit semantics: succeeds only if key unchanged since read
+\* BUGGY mode: skips version check AND uses stale holder value from read time,
+\* allowing split-brain (multiple active nodes)
 CommitClaim(n) ==
     /\ node_state[n] = "Committing"
     /\ LET read_ver == node_read_version[n]
            current_ver == fdb_version
            current_holder == fdb_holder
        IN
-       \/ \* SUCCESS: No conflict (version same) and no current holder
-          /\ read_ver = current_ver
-          /\ current_holder = NONE
-          /\ fdb_holder' = n
-          /\ fdb_version' = fdb_version + 1      \* Version bumps on write
-          /\ node_state' = [node_state EXCEPT ![n] = "Active"]
-       \/ \* FAILURE: Version conflict (someone wrote since our read)
-          /\ read_ver # current_ver
-          /\ node_state' = [node_state EXCEPT ![n] = "Idle"]
-          /\ UNCHANGED <<fdb_holder, fdb_version>>
-       \/ \* FAILURE: Already has a holder
-          /\ read_ver = current_ver
-          /\ current_holder # NONE
-          /\ node_state' = [node_state EXCEPT ![n] = "Idle"]
-          /\ UNCHANGED <<fdb_holder, fdb_version>>
+       IF BUGGY THEN
+           \* BUGGY: Uses stale information from read phase, doesn't re-check
+           \* at commit time. The bug is that we check against read_ver=0 only,
+           \* not against the actual current state. This models a TOCTOU race.
+           \* If holder was NONE when we read (read_ver=0 implies no writes yet),
+           \* we blindly commit even if someone else committed since then.
+           IF read_ver = 0 THEN
+               \* We read when there was no holder - commit blindly!
+               \* This overwrites any holder that was set between our read and commit
+               /\ fdb_holder' = n
+               /\ fdb_version' = fdb_version + 1
+               /\ node_state' = [node_state EXCEPT ![n] = "Active"]
+           ELSE
+               \* We read when there was already a holder (version > 0), fail
+               /\ node_state' = [node_state EXCEPT ![n] = "Idle"]
+               /\ UNCHANGED <<fdb_holder, fdb_version>>
+       ELSE
+           \* SAFE: Full OCC with version checking
+           \/ \* SUCCESS: No conflict (version same) and no current holder
+              /\ read_ver = current_ver
+              /\ current_holder = NONE
+              /\ fdb_holder' = n
+              /\ fdb_version' = fdb_version + 1      \* Version bumps on write
+              /\ node_state' = [node_state EXCEPT ![n] = "Active"]
+           \/ \* FAILURE: Version conflict (someone wrote since our read)
+              /\ read_ver # current_ver
+              /\ node_state' = [node_state EXCEPT ![n] = "Idle"]
+              /\ UNCHANGED <<fdb_holder, fdb_version>>
+           \/ \* FAILURE: Already has a holder
+              /\ read_ver = current_ver
+              /\ current_holder # NONE
+              /\ node_state' = [node_state EXCEPT ![n] = "Idle"]
+              /\ UNCHANGED <<fdb_holder, fdb_version>>
     /\ UNCHANGED <<node_read_version>>
 
 \* Active node releases the actor

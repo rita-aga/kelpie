@@ -139,7 +139,15 @@ Models teleport state consistency for VM snapshot operations.
 
 ### KelpieSingleActivation.tla
 Models the single-activation guarantee with FDB transaction semantics.
-- **TLC Results**: PASS (714 distinct states, depth 27) / FAIL SingleActivation (buggy*)
+
+**Features:**
+- BUGGY mode: Skips OCC version check, allowing split-brain (multiple active nodes)
+- Models TOCTOU race condition when version checking is disabled
+
+**Bug Variant:**
+- `BUGGY=TRUE`: Commits based on stale read-time state, ignoring concurrent modifications
+
+- **TLC Results**: PASS (714 distinct states, depth 27) / FAIL SingleActivation (buggy)
 
 ### KelpieRegistry.tla
 Models the actor registry with node lifecycle and cache coherence.
@@ -278,11 +286,11 @@ Different specs use different sentinel values for "no value":
 Specs use different mechanisms for bug injection:
 | Pattern | Specs Using It |
 |---------|---------------|
-| `CONSTANT BUGGY` | KelpieClusterMembership, KelpieAgentActor |
+| `CONSTANT BUGGY` | KelpieClusterMembership, KelpieAgentActor, KelpieSingleActivation |
 | `SafeMode = FALSE` | KelpieActorState |
 | `SkipTransfer = TRUE` | KelpieMigration |
 | Config-level override | KelpieTeleport, KelpieFDBTransaction |
-| **Needs BUGGY added** | KelpieRegistry, KelpieSingleActivation, KelpieWAL |
+| **Needs BUGGY added** | KelpieRegistry, KelpieWAL |
 
 ### DST Fault Alignment
 | TLA+ Spec | Crash Modeling | DST Alignment |
@@ -293,7 +301,7 @@ Specs use different mechanisms for bug injection:
 | KelpieClusterMembership | Yes (partition, crash) | Aligned |
 | KelpieAgentActor | Yes (NodeCrash, NodeRecover) | Aligned |
 | KelpieFDBTransaction | No | Needs crash-during-commit |
-| KelpieSingleActivation | No | Needs crash-during-activation |
+| KelpieSingleActivation | Yes (BUGGY mode for TOCTOU) | Aligned |
 | KelpieLease | Yes (NodeCrash, NodeRestart, FalseSuspicion) | Aligned |
 | KelpieTeleport | No | Needs crash-during-snapshot |
 | KelpieActorState | No | Needs crash-during-invocation |
