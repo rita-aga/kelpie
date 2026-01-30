@@ -83,7 +83,11 @@ async fn test_agent_actor_tool_execution_is_audited() {
         dispatcher.run().await;
     });
 
-    let service = AgentService::new(handle);
+    let service = AgentService::with_tool_registry_and_audit(
+        handle,
+        tool_registry.clone(),
+        audit_log.clone(),
+    );
 
     // Create agent
     let request = CreateAgentRequest {

@@ -184,7 +184,11 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             }));
 
             // Create service
-            let service = AgentService::new(handle.clone());
+            let service = AgentService::with_tool_registry_and_audit(
+                handle.clone(),
+                tool_registry.clone(),
+                audit_log.clone(),
+            );
 
             // Create shutdown channel
             let (tx, _rx) = tokio::sync::broadcast::channel(1);
@@ -273,7 +277,11 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             }));
 
             // Create service
-            let service = AgentService::new(handle.clone());
+            let service = AgentService::with_tool_registry_and_audit(
+                handle.clone(),
+                tool_registry.clone(),
+                audit_log.clone(),
+            );
 
             // Create shutdown channel
             let (tx, _rx) = tokio::sync::broadcast::channel(1);
@@ -354,7 +362,11 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             }));
 
             // Create service
-            let service = AgentService::new(handle.clone());
+            let service = AgentService::with_tool_registry_and_audit(
+                handle.clone(),
+                tool_registry.clone(),
+                audit_log.clone(),
+            );
 
             // Create shutdown channel
             let (tx, _rx) = tokio::sync::broadcast::channel(1);
@@ -439,7 +451,11 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             }));
 
             // Create service
-            let service = AgentService::new(handle.clone());
+            let service = AgentService::with_tool_registry_and_audit(
+                handle.clone(),
+                tool_registry.clone(),
+                audit_log.clone(),
+            );
 
             // Create shutdown channel
             let (tx, _rx) = tokio::sync::broadcast::channel(1);
