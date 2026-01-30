@@ -1,12 +1,16 @@
 //! REST API module
 //!
 //! TigerStyle: Letta-compatible REST API for agent management.
+//!
+//! HTTP Linearizability: Idempotency middleware provides exactly-once semantics
+//! for mutating operations. See ADR-030 and `docs/tla/KelpieHttpApi.tla`.
 
 pub mod agent_groups;
 pub mod agents;
 pub mod archival;
 pub mod blocks;
 pub mod groups;
+pub mod idempotency;
 pub mod identities;
 pub mod import_export;
 pub mod mcp_servers;
@@ -22,6 +26,7 @@ pub mod tools;
 use axum::{
     extract::State,
     http::StatusCode,
+    middleware,
     response::{IntoResponse, Response},
     routing::get,
     Json, Router,
@@ -30,23 +35,35 @@ use kelpie_core::Runtime;
 use kelpie_server::models::{ErrorResponse, HealthResponse};
 use kelpie_server::state::{AppState, StateError};
 use serde::Serialize;
+use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
+use self::idempotency::IdempotencyCache;
+
 /// Create the API router with all routes
+///
+/// TLA+ Reference: `docs/tla/KelpieHttpApi.tla`
+/// ADR: `docs/adr/030-http-linearizability.md`
+///
+/// Idempotency middleware is applied to mutating endpoints (POST, PUT, DELETE)
+/// to provide exactly-once semantics when clients use the `Idempotency-Key` header.
 pub fn router<R: Runtime + 'static>(state: AppState<R>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
+    // Create idempotency cache for exactly-once semantics
+    let idempotency_cache = Arc::new(IdempotencyCache::new());
+
     Router::new()
-        // Health check
+        // Health check (no idempotency needed - read-only)
         .route("/health", get(health_check))
         .route("/v1/health", get(health_check))
-        // Metrics endpoint (Prometheus)
+        // Metrics endpoint (Prometheus - read-only)
         .route("/metrics", get(metrics))
-        // Capabilities
+        // Capabilities (read-only)
         .route("/v1/capabilities", get(capabilities))
         // Agent routes
         .nest(
@@ -71,6 +88,12 @@ pub fn router<R: Runtime + 'static>(state: AppState<R>) -> Router {
         .nest("/v1", scheduling::router())
         // Projects routes (Phase 6)
         .nest("/v1", projects::router())
+        // Idempotency middleware for exactly-once semantics on mutating requests
+        // TLA+ Invariant: IdempotencyGuarantee, ExactlyOnceExecution
+        .layer(middleware::from_fn_with_state(
+            idempotency_cache,
+            idempotency::idempotency_middleware,
+        ))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state)
