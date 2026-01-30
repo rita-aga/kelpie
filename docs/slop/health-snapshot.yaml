@@ -1,0 +1,22 @@
+snapshot_at: '2026-01-29T18:35:27.700873'
+commit: d3002c982235
+overall_health: 0.32
+scores:
+  verification_chain: 0.0
+  dst_quality: 0.0
+  code_quality: 0.6
+  issue_health: 0.85
+raw_counts:
+  components_total: 0
+  components_with_adr: 0
+  components_with_tla: 0
+  tla_specs_verified: 0
+  components_with_dst: 0
+  dst_tests_total: 0
+  dst_with_seeded_rng: 0
+  dst_with_simulated_time: 0
+  dst_with_fault_injection: 0
+  issues_open: 0
+  issues_critical: 0
+  issues_high: 0
+  issues_recurring: 0

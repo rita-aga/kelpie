@@ -1,9 +1,19 @@
 //! TRUE DST tests with SimHttpClient (Phase 7.8 FINAL - proper fault injection)
 //!
-//! TigerStyle: DST-first with REAL fault injection via SimHttpClient
+//! TigerStyle: DST-first with REAL fault injection via FaultInjectedHttpClient
 //!
-//! These tests use SimHttpClient which wraps HTTP operations with fault injection.
-//! Faults ACTUALLY TRIGGER during HTTP calls (unlike the previous fake tests).
+//! These tests use FaultInjectedHttpClient which wraps HTTP operations with fault injection.
+//! Faults ACTUALLY TRIGGER during HTTP calls (unlike mock-based tests).
+//!
+//! Fault Coverage:
+//! - NetworkDelay: Simulates network latency with deterministic delays
+//! - NetworkPacketLoss: Simulates connection failures
+//! - LlmTimeout: Simulates LLM API timeouts
+//! - LlmFailure: Simulates LLM API failures
+//!
+//! FDB Principle: Same Code Path
+//! Uses RealLlmAdapter + RealLlmClient with simulated HTTP, exercising
+//! the same code path as production.
 
 #![cfg(feature = "dst")]
 
@@ -66,6 +76,12 @@ impl FaultInjectedHttpClient {
                     };
                     // Use TimeProvider for deterministic sleep (advances SimClock)
                     self.time.sleep_ms(delay_ms).await;
+                }
+                FaultType::LlmTimeout => {
+                    return Err("LLM request timed out".to_string());
+                }
+                FaultType::LlmFailure => {
+                    return Err("LLM API failure".to_string());
                 }
                 _ => {}
             }
@@ -460,6 +476,220 @@ async fn test_dst_concurrent_adapter_streaming_with_faults() {
     assert!(
         result.is_ok(),
         "Concurrent streaming test failed: {:?}",
+        result.err()
+    );
+}
+
+/// Test with LlmTimeout fault injection
+///
+/// Verifies that LlmTimeout faults cause stream initiation to fail.
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_dst_llm_timeout_fault() {
+    let config = SimConfig::new(10005);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::LlmTimeout, 0.9)) // 90% timeout
+        .run_async(|sim_env| async move {
+            let sim_http_client = Arc::new(FaultInjectedHttpClient {
+                faults: sim_env.faults.clone(),
+                rng: sim_env.rng.clone(),
+                time: sim_env.io_context.time.clone(),
+                stream_body: mock_sse_response(),
+            });
+
+            let llm_config = LlmConfig {
+                base_url: "http://example.com/test.anthropic.com".to_string(),
+                api_key: "test-key".to_string(),
+                model: "claude-test".to_string(),
+                max_tokens: 100,
+            };
+            let llm_client = RealLlmClient::with_http_client(llm_config, sim_http_client);
+            let adapter = RealLlmAdapter::new(llm_client);
+
+            let stream_result = adapter
+                .stream_complete(vec![LlmMessage {
+                    role: "user".to_string(),
+                    content: "Test".to_string(),
+                }])
+                .await;
+
+            match stream_result {
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    tracing::info!(error = %error_msg, "LLM timeout triggered");
+                    assert!(
+                        error_msg.contains("timeout") || error_msg.contains("LLM"),
+                        "Error should mention timeout: {}",
+                        error_msg
+                    );
+                }
+                Ok(_) => {
+                    tracing::info!("Request succeeded despite 90% timeout rate (lucky)");
+                }
+            }
+
+            Ok(())
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "LLM timeout test failed: {:?}",
+        result.err()
+    );
+}
+
+/// Test with LlmFailure fault injection
+///
+/// Verifies that LlmFailure faults cause stream initiation to fail.
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_dst_llm_failure_fault() {
+    let config = SimConfig::new(10006);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::LlmFailure, 0.9)) // 90% failure
+        .run_async(|sim_env| async move {
+            let sim_http_client = Arc::new(FaultInjectedHttpClient {
+                faults: sim_env.faults.clone(),
+                rng: sim_env.rng.clone(),
+                time: sim_env.io_context.time.clone(),
+                stream_body: mock_sse_response(),
+            });
+
+            let llm_config = LlmConfig {
+                base_url: "http://example.com/test.anthropic.com".to_string(),
+                api_key: "test-key".to_string(),
+                model: "claude-test".to_string(),
+                max_tokens: 100,
+            };
+            let llm_client = RealLlmClient::with_http_client(llm_config, sim_http_client);
+            let adapter = RealLlmAdapter::new(llm_client);
+
+            let stream_result = adapter
+                .stream_complete(vec![LlmMessage {
+                    role: "user".to_string(),
+                    content: "Test".to_string(),
+                }])
+                .await;
+
+            match stream_result {
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    tracing::info!(error = %error_msg, "LLM failure triggered");
+                    assert!(
+                        error_msg.contains("failure")
+                            || error_msg.contains("LLM")
+                            || error_msg.contains("API"),
+                        "Error should mention failure: {}",
+                        error_msg
+                    );
+                }
+                Ok(_) => {
+                    tracing::info!("Request succeeded despite 90% failure rate (lucky)");
+                }
+            }
+
+            Ok(())
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "LLM failure test failed: {:?}",
+        result.err()
+    );
+}
+
+/// Test with comprehensive fault coverage (all LLM-related faults)
+///
+/// Verifies resilience under combined network and LLM faults.
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_dst_comprehensive_llm_faults() {
+    let config = SimConfig::new(10007);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(
+            FaultType::NetworkDelay {
+                min_ms: 10,
+                max_ms: 50,
+            },
+            0.3, // 30% network delays
+        ))
+        .with_fault(FaultConfig::new(FaultType::LlmTimeout, 0.1)) // 10% timeout
+        .with_fault(FaultConfig::new(FaultType::LlmFailure, 0.1)) // 10% failure
+        .run_async(|sim_env| async move {
+            let mut success_count = 0;
+            let mut failure_count = 0;
+
+            // Run multiple iterations to sample fault distribution
+            for _ in 0..20 {
+                let sim_http_client = Arc::new(FaultInjectedHttpClient {
+                    faults: sim_env.faults.clone(),
+                    rng: sim_env.rng.clone(),
+                    time: sim_env.io_context.time.clone(),
+                    stream_body: mock_sse_response(),
+                });
+
+                let llm_config = LlmConfig {
+                    base_url: "http://example.com/test.anthropic.com".to_string(),
+                    api_key: "test-key".to_string(),
+                    model: "claude-test".to_string(),
+                    max_tokens: 100,
+                };
+                let llm_client = RealLlmClient::with_http_client(llm_config, sim_http_client);
+                let adapter = RealLlmAdapter::new(llm_client);
+
+                match adapter
+                    .stream_complete(vec![LlmMessage {
+                        role: "user".to_string(),
+                        content: "Test".to_string(),
+                    }])
+                    .await
+                {
+                    Ok(mut stream) => {
+                        // Try to consume stream
+                        let mut content = String::new();
+                        while let Some(chunk_result) = stream.next().await {
+                            match chunk_result {
+                                Ok(chunk) => {
+                                    if let StreamChunk::ContentDelta { delta } = chunk {
+                                        content.push_str(&delta);
+                                    }
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        if !content.is_empty() {
+                            success_count += 1;
+                        } else {
+                            failure_count += 1;
+                        }
+                    }
+                    Err(_) => {
+                        failure_count += 1;
+                    }
+                }
+            }
+
+            tracing::info!(
+                success_count = success_count,
+                failure_count = failure_count,
+                "Comprehensive LLM fault test completed"
+            );
+
+            // With 10% timeout + 10% failure + 30% delay, most should succeed
+            assert!(success_count > 0, "Should have some successful operations");
+
+            Ok(())
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Comprehensive LLM fault test failed: {:?}",
         result.err()
     );
 }

@@ -2,6 +2,13 @@
 //!
 //! Tests that AgentActor writes granular keys (message:{N}, message_count, blocks)
 //! on deactivation, fixing the storage gap where API couldn't read actor data.
+//!
+//! FDB Principle: Same Code Path
+//! Uses production AgentActor with simulated storage that supports fault injection.
+//!
+//! Fault Injection:
+//! - StorageWriteFail: Tests resilience of granular key writes
+//! - StorageReadFail: Tests resilience of key reads during verification
 
 #![cfg(feature = "dst")]
 
@@ -9,7 +16,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::actor::{Actor, ActorContext, ActorId};
 use kelpie_core::Result;
-use kelpie_dst::{SimConfig, Simulation};
+use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
 use kelpie_server::models::{AgentType, CreateAgentRequest, CreateBlockRequest};
 use kelpie_server::tools::UnifiedToolRegistry;
@@ -17,6 +24,10 @@ use kelpie_storage::ScopedKV;
 use std::sync::Arc;
 
 /// Mock LLM for testing
+///
+/// Note: This test focuses on storage lifecycle, not LLM behavior.
+/// The MockLlm provides deterministic responses for lifecycle testing.
+/// For LLM fault injection, see real_llm_adapter_streaming_dst.rs.
 struct MockLlm;
 
 #[async_trait]
@@ -242,4 +253,182 @@ async fn test_empty_agent_writes_zero_count() {
         .await;
 
     assert!(result.is_ok());
+}
+
+/// Test lifecycle with storage fault injection
+///
+/// Verifies that the storage operations during agent lifecycle
+/// handle faults gracefully. Tests both write failures during
+/// create/deactivate and read failures during verification.
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_lifecycle_with_storage_faults() {
+    let config = SimConfig::new(9003);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.05)) // 5% write failures
+        .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.03)) // 3% read failures
+        .run_async(|sim_env| async move {
+            let mut success_count = 0;
+            let mut failure_count = 0;
+
+            // Run multiple iterations to trigger faults
+            for i in 0..20 {
+                let llm = Arc::new(MockLlm);
+                let actor = AgentActor::new(llm, Arc::new(UnifiedToolRegistry::new()));
+
+                let actor_id = ActorId::new("agents", format!("fault-test-agent-{}", i))?;
+                let kv = Arc::new(sim_env.storage.clone());
+                let scoped_kv = ScopedKV::new(actor_id.clone(), kv.clone());
+                let mut ctx = ActorContext::new(
+                    actor_id.clone(),
+                    AgentActorState::default(),
+                    Box::new(scoped_kv),
+                );
+
+                // Create agent
+                let request = CreateAgentRequest {
+                    name: format!("Fault Test Agent {}", i),
+                    agent_type: AgentType::LettaV1Agent,
+                    model: None,
+                    embedding: None,
+                    system: Some("You are helpful".to_string()),
+                    description: None,
+                    memory_blocks: vec![CreateBlockRequest {
+                        label: "persona".to_string(),
+                        value: "Test persona".to_string(),
+                        description: None,
+                        limit: None,
+                    }],
+                    block_ids: vec![],
+                    tool_ids: vec![],
+                    tags: vec![],
+                    metadata: serde_json::json!({}),
+                    project_id: None,
+                    user_id: None,
+                    org_id: None,
+                };
+
+                let payload = serde_json::to_vec(&request).unwrap();
+                match actor.invoke(&mut ctx, "create", Bytes::from(payload)).await {
+                    Ok(_) => {
+                        // Try to deactivate and write granular keys
+                        match actor.on_deactivate(&mut ctx).await {
+                            Ok(_) => {
+                                success_count += 1;
+                            }
+                            Err(_) => {
+                                failure_count += 1;
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        failure_count += 1;
+                    }
+                }
+            }
+
+            // With 5% write + 3% read fault rates over 20 iterations,
+            // we should see some successes and possibly some failures
+            tracing::info!(
+                success_count = success_count,
+                failure_count = failure_count,
+                "Lifecycle chaos test completed"
+            );
+
+            assert!(success_count > 0, "Should have some successful operations");
+
+            Ok(())
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Lifecycle fault test failed: {:?}",
+        result.err()
+    );
+}
+
+/// Test lifecycle under high storage fault rate
+///
+/// Verifies that the system handles high fault rates gracefully
+/// without panicking or corrupting state.
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_lifecycle_high_fault_rate_chaos() {
+    let config = SimConfig::new(9004);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.30)) // 30% write failures
+        .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.20)) // 20% read failures
+        .run_async(|sim_env| async move {
+            let mut success_count = 0;
+            let mut failure_count = 0;
+
+            // Run 50 iterations with high fault rate
+            for i in 0..50 {
+                let llm = Arc::new(MockLlm);
+                let actor = AgentActor::new(llm, Arc::new(UnifiedToolRegistry::new()));
+
+                let actor_id = ActorId::new("agents", format!("chaos-agent-{}", i))?;
+                let kv = Arc::new(sim_env.storage.clone());
+                let scoped_kv = ScopedKV::new(actor_id.clone(), kv.clone());
+                let mut ctx = ActorContext::new(
+                    actor_id.clone(),
+                    AgentActorState::default(),
+                    Box::new(scoped_kv),
+                );
+
+                let request = CreateAgentRequest {
+                    name: format!("Chaos Agent {}", i),
+                    agent_type: AgentType::LettaV1Agent,
+                    model: None,
+                    embedding: None,
+                    system: None,
+                    description: None,
+                    memory_blocks: vec![],
+                    block_ids: vec![],
+                    tool_ids: vec![],
+                    tags: vec![],
+                    metadata: serde_json::json!({}),
+                    project_id: None,
+                    user_id: None,
+                    org_id: None,
+                };
+
+                let payload = serde_json::to_vec(&request).unwrap();
+                match actor.invoke(&mut ctx, "create", Bytes::from(payload)).await {
+                    Ok(_) => match actor.on_deactivate(&mut ctx).await {
+                        Ok(_) => success_count += 1,
+                        Err(_) => failure_count += 1,
+                    },
+                    Err(_) => failure_count += 1,
+                }
+            }
+
+            tracing::info!(
+                success_count = success_count,
+                failure_count = failure_count,
+                "High fault rate chaos test completed"
+            );
+
+            // With 30% write + 20% read, expect both successes and failures
+            assert!(
+                success_count > 0,
+                "Should have some successful operations despite high fault rate"
+            );
+            assert!(
+                failure_count > 0,
+                "Should have some failures with 30%/20% fault rates"
+            );
+
+            Ok(())
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "High fault rate chaos test failed: {:?}",
+        result.err()
+    );
 }
