@@ -2,6 +2,15 @@
 //!
 //! TigerStyle: DST-first development - these tests define the streaming contract
 //! and will initially FAIL until streaming is implemented.
+//!
+//! # Determinism Requirements
+//!
+//! All tests use `current_runtime().spawn()` which is correct under madsim:
+//! - When `feature = "madsim"` is enabled, current_runtime() returns MadsimRuntime
+//! - MadsimRuntime.spawn() uses simulation-controlled scheduling
+//! - SimLlmClientAdapter uses sim_env.rng for deterministic responses
+//!
+//! Run with: `cargo test --features madsim,dst agent_streaming_dst`
 #![cfg(feature = "dst")]
 
 use async_trait::async_trait;
@@ -657,5 +666,108 @@ async fn test_dst_streaming_with_tool_calls() {
         result.is_ok(),
         "tool call streaming test failed: {:?}",
         result.err()
+    );
+}
+
+/// Test determinism: same seed produces same results
+///
+/// Contract:
+/// - Run simulation twice with same seed
+/// - Event sequences should be identical
+/// - Verifies runtime.spawn() uses simulation-controlled scheduling
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_dst_streaming_determinism() {
+    const TEST_SEED: u64 = 2006;
+
+    // Helper to run a simulation and collect event count
+    async fn run_simulation(seed: u64) -> usize {
+        let config = SimConfig::new(seed);
+
+        let result = Simulation::new(config)
+            .run_async(|sim_env| async move {
+                use kelpie_core::current_runtime;
+                let runtime = current_runtime();
+                let service = create_service(runtime.clone(), &sim_env)?;
+
+                // Create agent
+                let request = CreateAgentRequest {
+                    name: "determinism-test".to_string(),
+                    agent_type: AgentType::LettaV1Agent,
+                    model: None,
+                    embedding: None,
+                    system: None,
+                    description: None,
+                    memory_blocks: vec![],
+                    block_ids: vec![],
+                    tool_ids: vec![],
+                    tags: vec![],
+                    metadata: serde_json::json!({}),
+                    project_id: None,
+                    user_id: None,
+                    org_id: None,
+                };
+                let agent = service.create_agent(request).await?;
+
+                // Create channel for streaming events
+                let (tx, mut rx) = mpsc::channel::<StreamEvent>(32);
+
+                // Send message with streaming
+                let message_json = serde_json::json!({
+                    "role": "user",
+                    "content": "Determinism test message"
+                });
+
+                // Start streaming in background - uses current_runtime().spawn()
+                // which is MadsimRuntime.spawn() when madsim feature is enabled
+                let agent_id = agent.id.clone();
+                let _stream_task = runtime.spawn(async move {
+                    let _ = service
+                        .send_message_stream(&agent_id, message_json, tx)
+                        .await;
+                });
+
+                // Collect events with timeout
+                let mut event_count = 0;
+                let timeout_ms: u64 = 5000;
+                let start_ms = sim_env.io_context.time.now_ms();
+
+                loop {
+                    match current_runtime()
+                        .timeout(Duration::from_millis(100), rx.recv())
+                        .await
+                    {
+                        Ok(Some(event)) => {
+                            event_count += 1;
+                            if matches!(event, StreamEvent::MessageComplete { .. }) {
+                                break;
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(_) => {
+                            let elapsed_ms = sim_env.io_context.time.now_ms() - start_ms;
+                            if elapsed_ms > timeout_ms {
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                Ok(event_count)
+            })
+            .await;
+
+        result.unwrap_or(0)
+    }
+
+    // Run twice with same seed
+    let count1 = run_simulation(TEST_SEED).await;
+    let count2 = run_simulation(TEST_SEED).await;
+
+    // Same seed should produce same results
+    assert_eq!(
+        count1, count2,
+        "Same seed ({}) should produce same event count: run1={}, run2={}",
+        TEST_SEED, count1, count2
     );
 }

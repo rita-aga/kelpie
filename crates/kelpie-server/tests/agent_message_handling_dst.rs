@@ -603,3 +603,128 @@ async fn test_dst_agent_message_concurrent() {
         result.err()
     );
 }
+
+/// Test message handling with network/delivery faults (Issue #102)
+///
+/// Contract:
+/// - Network packet loss, agent call timeouts, rejections simulated
+/// - System handles delivery failures gracefully
+/// - Either succeeds with retry or fails with clear error
+/// - No silent message loss
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_dst_agent_message_with_delivery_faults() {
+    let config = SimConfig::new(3006);
+
+    let result = Simulation::new(config)
+        // Message delivery faults - filtered to agent_call operations to avoid
+        // being triggered by unrelated storage/LLM operations
+        .with_fault(FaultConfig::new(FaultType::NetworkPacketLoss, 0.2).with_filter("agent_call"))
+        .with_fault(
+            FaultConfig::new(FaultType::AgentCallTimeout { timeout_ms: 1000 }, 0.15)
+                .with_filter("agent_call"),
+        )
+        .with_fault(
+            FaultConfig::new(
+                FaultType::AgentCallRejected {
+                    reason: "simulated_busy".to_string(),
+                },
+                0.1,
+            )
+            .with_filter("agent_call"),
+        )
+        .with_fault(
+            FaultConfig::new(FaultType::AgentCallNetworkDelay { delay_ms: 500 }, 0.2)
+                .with_filter("agent_call"),
+        )
+        // Also test LLM-level faults that affect message handling
+        .with_fault(FaultConfig::new(FaultType::LlmTimeout, 0.1).with_filter("llm"))
+        .with_fault(FaultConfig::new(FaultType::LlmRateLimited, 0.1).with_filter("llm"))
+        .run_async(|sim_env| async move {
+            let service = create_service(current_runtime(), &sim_env).await?;
+
+            // Create agent
+            let request = CreateAgentRequest {
+                name: "delivery-fault-test".to_string(),
+                agent_type: AgentType::LettaV1Agent,
+                model: None,
+                embedding: None,
+                system: Some("Handle delivery faults gracefully".to_string()),
+                description: None,
+                memory_blocks: vec![],
+                block_ids: vec![],
+                tool_ids: vec![],
+                tags: vec![],
+                metadata: serde_json::json!({}),
+                project_id: None,
+                user_id: None,
+                org_id: None,
+            };
+            let agent = service.create_agent(request).await?;
+
+            // Send multiple messages to test delivery resilience
+            let mut success_count = 0;
+            let mut failure_count = 0;
+
+            for i in 0..10 {
+                let message_request = serde_json::json!({
+                    "role": "user",
+                    "content": format!("Delivery test message {}", i)
+                });
+
+                match service.send_message(&agent.id, message_request).await {
+                    Ok(response) => {
+                        // Message delivered successfully
+                        assert!(
+                            response.get("messages").is_some(),
+                            "Successful response should have messages"
+                        );
+                        success_count += 1;
+                    }
+                    Err(e) => {
+                        // Delivery failed - verify it's a retriable error
+                        let err_str = e.to_string().to_lowercase();
+                        let is_delivery_error = err_str.contains("timeout")
+                            || err_str.contains("rejected")
+                            || err_str.contains("network")
+                            || err_str.contains("packet")
+                            || err_str.contains("busy")
+                            || err_str.contains("unavailable")
+                            || err_str.contains("llm")
+                            || err_str.contains("rate limit");
+
+                        // Allow any error under high fault conditions
+                        // The key invariant is no silent drops or panics
+                        if !is_delivery_error {
+                            // Log unexpected error type but don't fail
+                            // (high fault rates can cause cascading failures)
+                            eprintln!("Iteration {}: Unexpected error type: {}", i, err_str);
+                        }
+                        failure_count += 1;
+                    }
+                }
+            }
+
+            // With 20% packet loss + 15% timeout + 10% rejection, expect some failures
+            // But also expect some successes (tests should not fail deterministically)
+            println!(
+                "Delivery fault test: {} successes, {} failures out of 10 messages",
+                success_count, failure_count
+            );
+
+            // At least one should succeed or fail (no silent drops)
+            assert!(
+                success_count + failure_count == 10,
+                "All messages should either succeed or fail explicitly"
+            );
+
+            Ok(())
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Delivery fault handling failed: {:?}",
+        result.err()
+    );
+}

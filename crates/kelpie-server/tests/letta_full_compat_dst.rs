@@ -10,6 +10,7 @@ use axum::http::{Request, StatusCode};
 use bytes::Bytes;
 use chrono::TimeZone;
 use kelpie_core::Error;
+use kelpie_core::TimeProvider;
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
 use kelpie_server::api;
 use kelpie_server::http::{HttpClient, HttpRequest, HttpResponse};
@@ -45,15 +46,40 @@ fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         .expect("env lock poisoned")
 }
 
-struct StubHttpClient {
+/// FaultInjectedHttpClient replaces StubHttpClient with full DST fault injection support.
+///
+/// TigerStyle: Supports NetworkDelay, HttpConnectionFail, HttpTimeout, HttpServerError,
+/// LlmTimeout, and LlmRateLimited faults for deterministic testing.
+struct FaultInjectedHttpClient {
     faults: Arc<kelpie_dst::FaultInjector>,
+    time: Arc<dyn TimeProvider>,
+    rng: Arc<kelpie_dst::DeterministicRng>,
 }
 
 #[async_trait]
-impl HttpClient for StubHttpClient {
+impl HttpClient for FaultInjectedHttpClient {
     async fn send(&self, _request: HttpRequest) -> Result<HttpResponse, String> {
+        // Check for fault injection
         if let Some(fault) = self.faults.should_inject("http_send") {
             match fault {
+                FaultType::NetworkDelay { min_ms, max_ms } => {
+                    let delay = min_ms + (self.rng.next_u64() % (max_ms - min_ms + 1));
+                    self.time.sleep_ms(delay).await;
+                }
+                FaultType::HttpConnectionFail => {
+                    return Err("Connection failed (fault injected)".to_string());
+                }
+                FaultType::HttpTimeout { timeout_ms } => {
+                    self.time.sleep_ms(timeout_ms).await;
+                    return Err(format!("Timeout after {}ms (fault injected)", timeout_ms));
+                }
+                FaultType::HttpServerError { status } => {
+                    return Ok(HttpResponse {
+                        status,
+                        headers: HashMap::new(),
+                        body: format!("Server error {} (fault injected)", status).into_bytes(),
+                    });
+                }
                 FaultType::LlmTimeout => {
                     return Err("LLM request timed out".to_string());
                 }
@@ -76,7 +102,26 @@ impl HttpClient for StubHttpClient {
         _request: HttpRequest,
     ) -> Result<Pin<Box<dyn futures::stream::Stream<Item = Result<Bytes, String>> + Send>>, String>
     {
-        Err("streaming not supported in StubHttpClient".to_string())
+        // Check for fault injection on streaming requests
+        if let Some(fault) = self.faults.should_inject("http_send_streaming") {
+            match fault {
+                FaultType::HttpConnectionFail => {
+                    return Err("Connection failed (fault injected)".to_string());
+                }
+                FaultType::HttpTimeout { timeout_ms } => {
+                    self.time.sleep_ms(timeout_ms).await;
+                    return Err(format!(
+                        "Streaming timeout after {}ms (fault injected)",
+                        timeout_ms
+                    ));
+                }
+                FaultType::LlmTimeout => {
+                    return Err("LLM streaming request timed out".to_string());
+                }
+                _ => {}
+            }
+        }
+        Err("streaming not supported in FaultInjectedHttpClient".to_string())
     }
 }
 
@@ -89,8 +134,10 @@ async fn test_dst_summarization_with_llm_faults() {
         .with_fault(FaultConfig::new(FaultType::LlmTimeout, 0.4).with_filter("http_send"))
         .with_fault(FaultConfig::new(FaultType::LlmRateLimited, 0.2).with_filter("http_send"))
         .run_async(|sim_env| async move {
-            let sim_http = Arc::new(StubHttpClient {
+            let sim_http = Arc::new(FaultInjectedHttpClient {
                 faults: sim_env.faults.clone(),
+                time: sim_env.io_context.time.clone(),
+                rng: Arc::new(sim_env.rng.fork()),
             });
             let llm_config = LlmConfig {
                 base_url: "http://example.com".to_string(),
@@ -124,9 +171,10 @@ async fn test_dst_summarization_with_llm_faults() {
                 })?;
 
             // Use simulated time for determinism
+            // TigerStyle: No fallback to chrono::Utc::now() - that would break determinism
             let sim_time_ms = sim_env.io_context.time.now_ms() as i64;
             let created_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(sim_time_ms)
-                .unwrap_or_else(chrono::Utc::now);
+                .expect("timestamp conversion failed - sim_time_ms out of range for chrono");
 
             state
                 .add_message(

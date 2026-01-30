@@ -10,7 +10,29 @@
 //! 5. BUG-001 style timing windows
 //!
 //! ALL TESTS MUST FAIL INITIALLY (AppState doesn't have service yet)
+//!
+//! # DST Test Requirements (Issue #105)
+//!
+//! These tests MUST be run with madsim feature for determinism:
+//! ```bash
+//! cargo test --features madsim,dst appstate_integration_dst
+//! ```
+//!
+//! Without madsim, `current_runtime()` returns TokioRuntime which uses
+//! wall-clock time, breaking determinism. When madsim is enabled:
+//! - `current_runtime()` returns MadsimRuntime
+//! - All spawn() calls use simulation-controlled scheduling
+//! - All sleep/timeout calls use simulated time
+//! - Fault injection is deterministic based on seed
 #![cfg(feature = "dst")]
+
+// Issue #105: Compile-time check that madsim feature is enabled for DST tests
+// This prevents accidental non-deterministic test runs
+#[cfg(all(test, not(feature = "madsim")))]
+compile_error!(
+    "appstate_integration_dst tests require --features madsim for determinism. \
+     Run with: cargo test --features madsim,dst appstate_integration_dst"
+);
 
 use async_trait::async_trait;
 use kelpie_core::{current_runtime, Result, Runtime};
