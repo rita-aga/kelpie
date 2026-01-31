@@ -472,22 +472,6 @@ impl UnifiedToolRegistry {
         );
     }
 
-    /// Unregister a tool from the registry
-    ///
-    /// TigerStyle: Cleanup operation for MCP server deletion or custom tool removal
-    pub async fn unregister_tool(&self, name: &str) {
-        assert!(!name.is_empty(), "tool name cannot be empty");
-
-        if self.tools.write().await.remove(name).is_some() {
-            tracing::debug!(tool_name = %name, "Unregistered tool from registry");
-
-            // Also remove from custom tools if present
-            self.custom_tools.write().await.remove(name);
-        } else {
-            tracing::warn!(tool_name = %name, "Attempted to unregister non-existent tool");
-        }
-    }
-
     /// Set simulated MCP client for DST testing
     #[cfg(feature = "dst")]
     pub async fn set_sim_mcp_client(&self, client: Arc<kelpie_tools::SimMcpClient>) {
@@ -1110,12 +1094,24 @@ impl UnifiedToolRegistry {
         script
     }
 
-    /// Unregister a tool
+    /// Unregister a tool from all registries
+    ///
+    /// Removes the tool from the main tools registry, builtin handlers, and custom tools.
+    /// Returns true if the tool was found and removed from any registry.
+    ///
+    /// TigerStyle: Cleanup operation for MCP server deletion or custom tool removal
     pub async fn unregister(&self, name: &str) -> bool {
+        assert!(!name.is_empty(), "tool name cannot be empty");
+
         let removed_tool = self.tools.write().await.remove(name).is_some();
         let removed_handler = self.builtin_handlers.write().await.remove(name).is_some();
         let removed_custom = self.custom_tools.write().await.remove(name).is_some();
-        removed_tool || removed_handler || removed_custom
+
+        let removed = removed_tool || removed_handler || removed_custom;
+        if removed {
+            tracing::debug!(tool_name = %name, "Unregistered tool from registry");
+        }
+        removed
     }
 
     /// Clear all tools

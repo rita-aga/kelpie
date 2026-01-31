@@ -335,6 +335,8 @@ pub fn validate_call_context(
 /// Create a new call context for a nested call
 ///
 /// Appends the calling agent to the call chain and increments depth.
+/// This function is part of the public API for external agent orchestration.
+#[allow(dead_code)] // Public API - used by external integrations
 pub fn create_nested_context(
     parent_context: &ToolExecutionContext,
     calling_agent_id: &str,

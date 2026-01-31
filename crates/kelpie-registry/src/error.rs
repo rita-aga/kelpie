@@ -68,6 +68,21 @@ pub enum RegistryError {
     LeaseExpired { actor_id: String, expiry_ms: u64 },
 }
 
+impl From<RegistryError> for kelpie_core::error::Error {
+    fn from(err: RegistryError) -> Self {
+        use kelpie_core::error::Error;
+        match err {
+            RegistryError::NodeNotFound { node_id } => Error::not_found("node", node_id),
+            RegistryError::ActorNotFound { actor_id } => Error::not_found("actor", actor_id),
+            RegistryError::HeartbeatTimeout {
+                node_id,
+                timeout_ms,
+            } => Error::timeout(format!("heartbeat for node {}", node_id), timeout_ms),
+            _ => Error::internal(err.to_string()),
+        }
+    }
+}
+
 impl RegistryError {
     /// Create a node not found error
     pub fn node_not_found(node_id: impl Into<String>) -> Self {
