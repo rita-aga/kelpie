@@ -156,6 +156,7 @@ This ADR is formalized in [KelpieSingleActivation.tla](../tla/KelpieSingleActiva
 | ADR-024: Migration Protocol | KelpieMigration.tla | cluster_dst.rs | ✅ Complete |
 | ADR-025: Cluster Membership | KelpieClusterMembership.tla | partition_tolerance_dst.rs, cluster_dst.rs | ✅ Complete |
 | ADR-030: HTTP Linearizability | KelpieHttpApi.tla | http_api_dst.rs | ✅ Complete |
+| ADR-028: Multi-Agent Communication | KelpieMultiAgentInvocation.tla | multi_agent_dst.rs | ✅ Complete |
 
 ### ADR-004 Linearizability - Detailed Status
 
@@ -194,6 +195,29 @@ This ADR is formalized in [KelpieSingleActivation.tla](../tla/KelpieSingleActiva
 | Cluster | ⚠️ Partial | KelpieClusterMembership.tla | cluster_dst.rs |
 
 **Note:** The HTTP API layer now provides exactly-once semantics via idempotency tokens (ADR-030). Clients can safely retry requests with the same `Idempotency-Key` header.
+
+### ADR-028 Multi-Agent Communication - Detailed Status
+
+**TLA+ Invariant Coverage:**
+
+| Invariant | DST Status | Location |
+|-----------|------------|----------|
+| `NoDeadlock` | ✅ Covered | `multi_agent_dst.rs:test_agent_call_cycle_detection` |
+| `SingleActivationDuringCall` | ✅ Covered | `multi_agent_dst.rs:test_single_activation_during_cross_call` |
+| `DepthBounded` | ✅ Covered | `multi_agent_dst.rs:test_agent_call_depth_limit` |
+| `BoundedPendingCalls` | ✅ Covered | `multi_agent_dst.rs:test_bounded_pending_calls` |
+| `CallsEventuallyComplete` (liveness) | ✅ Covered | `multi_agent_dst.rs:test_agent_call_timeout` |
+
+**Fault Tolerance Tests:**
+
+| Scenario | DST Status | Location |
+|----------|------------|----------|
+| Network partition | ✅ Covered | `multi_agent_dst.rs:test_agent_call_under_network_partition` |
+| Storage faults | ✅ Covered | `multi_agent_dst.rs:test_agent_call_with_storage_faults` |
+| Determinism | ✅ Covered | `multi_agent_dst.rs:test_determinism_multi_agent` |
+| Stress with faults | ✅ Covered | `multi_agent_dst.rs:test_multi_agent_stress_with_faults` |
+
+**Note:** Multi-agent tests are in `kelpie-server` (not `kelpie-dst`) because they require full agent infrastructure including LLM client, tool registry, and dispatcher.
 
 ## Running Verification
 

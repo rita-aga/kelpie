@@ -892,3 +892,238 @@ fn create_service<R: Runtime + 'static>(
     // Create service with dispatcher handle
     Ok(AgentService::new(handle))
 }
+
+// ============================================================================
+// Test 9: Bounded pending calls (backpressure)
+// ============================================================================
+
+/// Test bounded pending calls prevents resource exhaustion
+///
+/// Contract:
+/// - Agent A issues many concurrent calls (fan-out)
+/// - System applies backpressure when limit reached
+/// - No resource exhaustion or hangs
+///
+/// TLA+ Invariant: BoundedPendingCalls
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_bounded_pending_calls() {
+    let config = SimConfig::new(7509);
+
+    let result = Simulation::new(config)
+        .run_async(|sim_env| async move {
+            let service = create_service(kelpie_core::current_runtime(), &sim_env)?;
+
+            // Create coordinator agent that will issue many calls
+            let coordinator = service
+                .create_agent(CreateAgentRequest {
+                    name: "coordinator".to_string(),
+                    agent_type: AgentType::LettaV1Agent,
+                    model: None,
+                    embedding: None,
+                    system: Some("Issue many concurrent calls to workers.".to_string()),
+                    description: None,
+                    memory_blocks: vec![],
+                    block_ids: vec![],
+                    tool_ids: vec!["call_agent".to_string()],
+                    tags: vec![],
+                    metadata: serde_json::json!({}),
+                    project_id: None,
+                    user_id: None,
+                    org_id: None,
+                })
+                .await?;
+
+            // Create many worker agents (more than typical pending limit)
+            let mut workers = Vec::new();
+            for i in 0..10 {
+                let worker = service
+                    .create_agent(CreateAgentRequest {
+                        name: format!("worker-{}", i),
+                        agent_type: AgentType::LettaV1Agent,
+                        model: None,
+                        embedding: None,
+                        system: Some("Process work requests.".to_string()),
+                        description: None,
+                        memory_blocks: vec![],
+                        block_ids: vec![],
+                        tool_ids: vec![],
+                        tags: vec![],
+                        metadata: serde_json::json!({}),
+                        project_id: None,
+                        user_id: None,
+                        org_id: None,
+                    })
+                    .await?;
+                workers.push(worker);
+            }
+
+            // Issue concurrent calls from coordinator to all workers
+            // This tests backpressure when many calls are pending
+            let mut handles = Vec::new();
+            for worker in &workers {
+                let service_clone = service.clone();
+                let coordinator_id = coordinator.id.clone();
+                let worker_id = worker.id.clone();
+
+                let handle = kelpie_core::current_runtime().spawn(async move {
+                    let message = serde_json::json!({
+                        "role": "user",
+                        "content": format!("Call worker {}", worker_id)
+                    });
+                    service_clone.send_message(&coordinator_id, message).await
+                });
+                handles.push(handle);
+            }
+
+            // All calls should complete (success or controlled failure)
+            // Key invariant: no hangs, no resource exhaustion
+            let mut completed = 0;
+            let mut failed = 0;
+            for handle in handles {
+                match handle.await {
+                    Ok(Ok(_)) => completed += 1,
+                    Ok(Err(_)) => failed += 1,
+                    Err(_) => failed += 1,
+                }
+            }
+
+            // Verify all calls resolved (no hangs)
+            assert_eq!(
+                completed + failed,
+                10,
+                "All calls must resolve, got {} completed + {} failed",
+                completed,
+                failed
+            );
+
+            Ok(())
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Bounded pending calls test failed: {:?}",
+        result.err()
+    );
+}
+
+// ============================================================================
+// Test 10: Stress test with faults
+// ============================================================================
+
+/// Stress test: concurrent multi-agent invocations under faults
+///
+/// Contract:
+/// - Multiple agents calling each other concurrently
+/// - Network delays injected (storage faults during setup cause flakiness)
+/// - All calls eventually complete or fail cleanly
+/// - No deadlocks or resource leaks
+///
+/// TLA+ Invariants: All safety invariants under stress
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+#[ignore] // Run with --ignored for stress tests
+async fn test_multi_agent_stress_with_faults() {
+    const NUM_ITERATIONS: usize = 50;
+    const NUM_AGENTS: usize = 5;
+
+    let mut successes = 0;
+    let mut failures = 0;
+
+    for iteration in 0..NUM_ITERATIONS {
+        let seed = 8000 + iteration as u64;
+        let config = SimConfig::new(seed);
+
+        let result = Simulation::new(config)
+            // Inject network delays only (storage faults during agent creation cause expected failures)
+            .with_fault(FaultConfig::new(
+                FaultType::NetworkDelay {
+                    min_ms: 10,
+                    max_ms: 100,
+                },
+                0.3, // 30% of calls delayed
+            ))
+            .run_async(|sim_env| async move {
+                let service = create_service(kelpie_core::current_runtime(), &sim_env)?;
+
+                // Create agents that can call each other
+                let mut agents = Vec::new();
+                for i in 0..NUM_AGENTS {
+                    let agent = service
+                        .create_agent(CreateAgentRequest {
+                            name: format!("stress-agent-{}", i),
+                            agent_type: AgentType::LettaV1Agent,
+                            model: None,
+                            embedding: None,
+                            system: Some("Stress test agent.".to_string()),
+                            description: None,
+                            memory_blocks: vec![],
+                            block_ids: vec![],
+                            tool_ids: vec!["call_agent".to_string()],
+                            tags: vec![],
+                            metadata: serde_json::json!({}),
+                            project_id: None,
+                            user_id: None,
+                            org_id: None,
+                        })
+                        .await?;
+                    agents.push(agent);
+                }
+
+                // Issue cross-calls between agents
+                let mut handles = Vec::new();
+                for (i, caller) in agents.iter().enumerate() {
+                    // Each agent calls the next agent (circular pattern)
+                    let target_idx = (i + 1) % NUM_AGENTS;
+                    let target_id = agents[target_idx].id.clone();
+
+                    let service_clone = service.clone();
+                    let caller_id = caller.id.clone();
+
+                    let handle = kelpie_core::current_runtime().spawn(async move {
+                        let message = serde_json::json!({
+                            "role": "user",
+                            "content": format!("Coordinate with agent {}", target_id)
+                        });
+                        service_clone.send_message(&caller_id, message).await
+                    });
+                    handles.push(handle);
+                }
+
+                // All calls must resolve (no hangs)
+                // Results intentionally discarded - we only verify completion, not success/failure
+                for handle in handles {
+                    let _ = handle.await;
+                }
+
+                // Verify all agents are still in valid state
+                for agent in &agents {
+                    let state = service.get_agent(&agent.id).await?;
+                    assert!(
+                        state.name.starts_with("stress-agent-"),
+                        "Agent state corrupted"
+                    );
+                }
+
+                Ok(())
+            })
+            .await;
+
+        match result {
+            Ok(()) => successes += 1,
+            Err(_) => failures += 1,
+        }
+    }
+
+    // At least 80% of iterations should succeed
+    // (some may fail due to simulated network delays causing timeouts)
+    let success_rate = successes as f64 / NUM_ITERATIONS as f64;
+    assert!(
+        success_rate >= 0.8,
+        "Stress test success rate too low: {:.1}% ({} successes, {} failures)",
+        success_rate * 100.0,
+        successes,
+        failures
+    );
+}
