@@ -11,7 +11,7 @@ description = "VM core types and backend implementations for Kelpie"
 [features]
 default = []
 firecracker = ["dep:kelpie-sandbox", "kelpie-sandbox/firecracker"]
-vz = ["dep:kelpie-sandbox"]
+libkrun = ["dep:kelpie-sandbox"]
 # Enable automatic image download (requires reqwest and sha2)
 image-download = ["dep:reqwest", "dep:sha2", "dep:hex"]
 
@@ -36,4 +36,4 @@ kelpie-core = { workspace = true }
 kelpie-sandbox = { workspace = true, optional = true }
 
 [build-dependencies]
-cc = "1.0"
+pkg-config = "0.3"

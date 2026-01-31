@@ -2746,7 +2746,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
- "cc",
  "chrono",
  "crc32fast",
  "dirs 5.0.1",
@@ -2754,6 +2753,7 @@ dependencies = [
  "kelpie-core",
  "kelpie-sandbox",
  "libc",
+ "pkg-config",
  "reqwest",
  "serde",
  "serde_json",

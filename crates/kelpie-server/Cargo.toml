@@ -14,9 +14,9 @@ otel = ["kelpie-core/otel", "prometheus"]
 dst = ["kelpie-tools/dst", "dep:kelpie-dst"]
 fdb = ["dep:foundationdb", "kelpie-storage/fdb"]
 madsim = ["kelpie-core/madsim", "kelpie-dst?/madsim"]
-# Apple VZ sandbox support (macOS only, ARM64)
-# Enables VzSandbox for per-agent VM isolation
-vz = ["kelpie-vm/vz"]
+# libkrun sandbox support (macOS ARM64 and Linux)
+# Enables LibkrunSandbox for per-agent VM isolation
+libkrun = ["kelpie-vm/libkrun"]
 
 [dependencies]
 # Core kelpie crates

@@ -6,8 +6,8 @@
 //! Supports Python, JavaScript, TypeScript, R, and Java execution.
 //!
 //! The sandbox backend is selected by SandboxProvider based on:
-//! - Feature flags (vz feature enables Apple VZ support)
-//! - Runtime environment (macOS ARM64 required for VZ)
+//! - Feature flags (libkrun feature enables libkrun VM support)
+//! - Runtime environment (macOS ARM64 or Linux for libkrun)
 //! - Configuration (KELPIE_SANDBOX_BACKEND env var)
 
 use crate::tools::sandbox_provider;
@@ -193,7 +193,7 @@ struct ExecutionResult {
 /// Execute command in sandbox using SandboxProvider
 ///
 /// Uses the global SandboxProvider which selects the appropriate backend
-/// (ProcessSandbox or VzSandbox) based on configuration.
+/// (ProcessSandbox or LibkrunSandbox) based on configuration.
 async fn execute_in_sandbox(
     command: &str,
     args: &[String],
