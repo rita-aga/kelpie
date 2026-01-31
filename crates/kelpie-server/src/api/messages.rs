@@ -88,8 +88,12 @@ enum SseMessage {
     },
 }
 
+/// Information about a tool call in a streaming response
+///
+/// Used in SSE events to notify clients about tool invocations.
 #[derive(Debug, Clone, Serialize)]
 struct ToolCallInfo {
+    /// Name of the tool being called
     name: String,
     /// Arguments serialized as JSON string (Letta SDK compatibility)
     /// The Letta SDK sends arguments as a JSON string, not a nested object.
