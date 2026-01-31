@@ -106,8 +106,15 @@ impl AgentActor {
                 }],
                 tool_call: Some(LettaToolCall {
                     name: tool_call.name.clone(),
-                    arguments: serde_json::to_string(&tool_call.input)
-                        .unwrap_or_else(|_| "{}".to_string()),
+                    arguments: serde_json::to_string(&tool_call.input).unwrap_or_else(|e| {
+                        tracing::warn!(
+                            tool_call_id = %tool_call.id,
+                            tool_name = %tool_call.name,
+                            error = %e,
+                            "Failed to serialize tool call input, using empty object"
+                        );
+                        "{}".to_string()
+                    }),
                     tool_call_id: tool_call.id.clone(),
                 }),
                 tool_return: None,
@@ -139,6 +146,42 @@ impl AgentActor {
             created_at: chrono::Utc::now(),
         };
         ctx.state.add_message(msg);
+    }
+
+    // =========================================================================
+    // Response Building Helpers (DRY - reduce cognitive complexity)
+    // =========================================================================
+
+    /// Build pending tool calls from LLM response
+    ///
+    /// TigerStyle: Single responsibility - converts LlmToolCall to PendingToolCall
+    fn build_pending_tool_calls(tool_calls: &[LlmToolCall]) -> Vec<PendingToolCall> {
+        tool_calls
+            .iter()
+            .map(|tc| PendingToolCall {
+                id: tc.id.clone(),
+                name: tc.name.clone(),
+                input: tc.input.clone(),
+            })
+            .collect()
+    }
+
+    /// Build a Done response with usage stats
+    ///
+    /// TigerStyle: Single responsibility - constructs final response
+    fn build_done_response(
+        ctx: &ActorContext<AgentActorState>,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+    ) -> HandleMessageResult {
+        HandleMessageResult::Done(HandleMessageFullResponse {
+            messages: ctx.state.all_messages().to_vec(),
+            usage: UsageStats {
+                prompt_tokens,
+                completion_tokens,
+                total_tokens: prompt_tokens + completion_tokens,
+            },
+        })
     }
 
     /// Handle "create" operation - initialize agent from request
@@ -448,17 +491,6 @@ impl AgentActor {
             Self::store_assistant_message(ctx, &response.content);
             Self::store_tool_call_messages(ctx, &response.tool_calls, &response.content);
 
-            // Build pending tool calls
-            let pending_tool_calls: Vec<PendingToolCall> = response
-                .tool_calls
-                .iter()
-                .map(|tc| PendingToolCall {
-                    id: tc.id.clone(),
-                    name: tc.name.clone(),
-                    input: tc.input.clone(),
-                })
-                .collect();
-
             // Build continuation state
             let continuation = AgentContinuation {
                 llm_messages,
@@ -472,7 +504,7 @@ impl AgentActor {
             };
 
             return Ok(HandleMessageResult::NeedTools {
-                tool_calls: pending_tool_calls,
+                tool_calls: Self::build_pending_tool_calls(&response.tool_calls),
                 continuation,
             });
         }
@@ -481,14 +513,11 @@ impl AgentActor {
         let final_content = self.extract_send_message_content(&response, ctx).await?;
         Self::store_assistant_message(ctx, &final_content);
 
-        Ok(HandleMessageResult::Done(HandleMessageFullResponse {
-            messages: ctx.state.all_messages().to_vec(),
-            usage: UsageStats {
-                prompt_tokens: total_prompt_tokens,
-                completion_tokens: total_completion_tokens,
-                total_tokens: total_prompt_tokens + total_completion_tokens,
-            },
-        }))
+        Ok(Self::build_done_response(
+            ctx,
+            total_prompt_tokens,
+            total_completion_tokens,
+        ))
     }
 
     /// Continue processing after tool execution
@@ -592,7 +621,14 @@ impl AgentActor {
                         .find(|tc| tc.id == tool_result.tool_call_id)
                         .map(|tc| tc.arguments.clone())
                 })
-                .unwrap_or_else(|| serde_json::json!({}));
+                .unwrap_or_else(|| {
+                    tracing::warn!(
+                        tool_call_id = %tool_result.tool_call_id,
+                        tool_name = %tool_result.tool_name,
+                        "Tool call input not found in message history, using empty object"
+                    );
+                    serde_json::json!({})
+                });
 
             assistant_blocks.push(crate::llm::ContentBlock::ToolUse {
                 id: tool_result.tool_call_id.clone(),
@@ -643,16 +679,6 @@ impl AgentActor {
             Self::store_assistant_message(ctx, &response.content);
             Self::store_tool_call_messages(ctx, &response.tool_calls, &response.content);
 
-            let pending_tool_calls: Vec<PendingToolCall> = response
-                .tool_calls
-                .iter()
-                .map(|tc| PendingToolCall {
-                    id: tc.id.clone(),
-                    name: tc.name.clone(),
-                    input: tc.input.clone(),
-                })
-                .collect();
-
             let new_continuation = AgentContinuation {
                 llm_messages: continuation.llm_messages,
                 tool_names: continuation.tool_names,
@@ -665,7 +691,7 @@ impl AgentActor {
             };
 
             return Ok(HandleMessageResult::NeedTools {
-                tool_calls: pending_tool_calls,
+                tool_calls: Self::build_pending_tool_calls(&response.tool_calls),
                 continuation: new_continuation,
             });
         }
@@ -674,14 +700,11 @@ impl AgentActor {
         let final_content = self.extract_send_message_content(&response, ctx).await?;
         Self::store_assistant_message(ctx, &final_content);
 
-        Ok(HandleMessageResult::Done(HandleMessageFullResponse {
-            messages: ctx.state.all_messages().to_vec(),
-            usage: UsageStats {
-                prompt_tokens: total_prompt_tokens,
-                completion_tokens: total_completion_tokens,
-                total_tokens: total_prompt_tokens + total_completion_tokens,
-            },
-        }))
+        Ok(Self::build_done_response(
+            ctx,
+            total_prompt_tokens,
+            total_completion_tokens,
+        ))
     }
 
     /// Extract send_message content for dual-mode support

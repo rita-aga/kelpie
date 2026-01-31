@@ -1889,27 +1889,27 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
             });
         }
 
+        // TigerStyle: Construct ToolInfo once to avoid duplication
+        let tool_info = ToolInfo {
+            id,
+            name: name.clone(),
+            description: description.clone(),
+            input_schema: input_schema.clone(),
+            source: source.clone(),
+            default_requires_approval,
+            tool_type: tool_type.clone(),
+            tags,
+            return_char_limit,
+        };
+
         // For client-side tools, we store metadata but don't register executable code
         if tool_type == "client" || default_requires_approval {
-            // Store in a client tools registry (in-memory for now)
-            let tool_info = ToolInfo {
-                id: id.clone(),
-                name: name.clone(),
-                description: description.clone(),
-                input_schema: input_schema.clone(),
-                source: source.clone(),
-                default_requires_approval,
-                tool_type: tool_type.clone(),
-                tags: tags.clone(),
-                return_char_limit,
-            };
-
             // Store in client tools map
             self.inner
                 .client_tools
                 .write()
                 .map_err(|_| StateError::LockPoisoned)?
-                .insert(name.clone(), tool_info.clone());
+                .insert(name, tool_info.clone());
 
             return Ok(tool_info);
         }
@@ -1918,9 +1918,9 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
         if let Some(source_code) = &source {
             self.tool_registry()
                 .register_custom_tool(
-                    name.clone(),
-                    description.clone(),
-                    input_schema.clone(),
+                    tool_info.name.clone(),
+                    description,
+                    input_schema,
                     source_code.clone(),
                     "python".to_string(),
                     vec![],
@@ -1929,12 +1929,12 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
 
             // Persist to durable storage (if configured)
             if let Some(storage) = &self.inner.storage {
-                tracing::info!(name = %name, "persisting custom tool to storage");
+                tracing::info!(name = %tool_info.name, "persisting custom tool to storage");
                 let now = chrono::Utc::now();
                 let record = crate::storage::CustomToolRecord {
-                    name: name.clone(),
-                    description: description.clone(),
-                    input_schema: input_schema.clone(),
+                    name: tool_info.name.clone(),
+                    description: tool_info.description.clone(),
+                    input_schema: tool_info.input_schema.clone(),
                     source_code: source_code.clone(),
                     runtime: "python".to_string(),
                     requirements: vec![],
@@ -1942,35 +1942,25 @@ impl<R: kelpie_core::Runtime + 'static> AppState<R> {
                     updated_at: now,
                 };
                 match storage.save_custom_tool(&record).await {
-                    Ok(_) => tracing::info!(name = %name, "custom tool persisted successfully"),
+                    Ok(_) => {
+                        tracing::info!(name = %tool_info.name, "custom tool persisted successfully")
+                    }
                     Err(e) => {
-                        tracing::warn!(name = %name, error = %e, "failed to persist custom tool to storage")
+                        tracing::warn!(name = %tool_info.name, error = %e, "failed to persist custom tool to storage")
                     }
                 }
             } else {
-                tracing::debug!(name = %name, "no storage configured, custom tool not persisted");
+                tracing::debug!(name = %tool_info.name, "no storage configured, custom tool not persisted");
             }
         }
 
         // Store the tool info in client_tools map for ID-based lookup
         // This allows get_tool_by_id to work for all tool types
-        let tool_info = ToolInfo {
-            id: id.clone(),
-            name: name.clone(),
-            description: description.clone(),
-            input_schema: input_schema.clone(),
-            source: source.clone(),
-            default_requires_approval,
-            tool_type: tool_type.clone(),
-            tags: tags.clone(),
-            return_char_limit,
-        };
-
         self.inner
             .client_tools
             .write()
             .map_err(|_| StateError::LockPoisoned)?
-            .insert(name.clone(), tool_info.clone());
+            .insert(name, tool_info.clone());
 
         Ok(tool_info)
     }
@@ -3357,6 +3347,42 @@ impl<R: kelpie_core::Runtime> AppState<R> {
         Ok(())
     }
 
+    // =========================================================================
+    // MCP Config Helpers (DRY - reduce cognitive complexity)
+    // =========================================================================
+
+    /// Convert MCPServerConfig to McpConfig
+    ///
+    /// TigerStyle: Single responsibility - converts between config types.
+    /// Reduces nesting depth by extracting repeated match logic.
+    /// Public to allow reuse in mcp_servers API module.
+    pub fn mcp_server_config_to_mcp_config(
+        server_name: &str,
+        config: &crate::models::MCPServerConfig,
+    ) -> kelpie_tools::mcp::McpConfig {
+        use kelpie_tools::mcp::McpConfig;
+
+        match config {
+            crate::models::MCPServerConfig::Stdio { command, args, env } => {
+                let mut mcp_config = McpConfig::stdio(server_name, command, args.clone());
+                if let Some(env_map) = env {
+                    for (k, v) in env_map {
+                        if let Some(v_str) = v.as_str() {
+                            mcp_config = mcp_config.with_env(k.clone(), v_str.to_string());
+                        }
+                    }
+                }
+                mcp_config
+            }
+            crate::models::MCPServerConfig::Sse { server_url, .. } => {
+                McpConfig::sse(server_name, server_url)
+            }
+            crate::models::MCPServerConfig::StreamableHttp { server_url, .. } => {
+                McpConfig::http(server_name, server_url)
+            }
+        }
+    }
+
     /// List tools provided by an MCP server
     ///
     /// Returns JSON Value array to avoid type conflicts from multiple compilations
@@ -3364,7 +3390,7 @@ impl<R: kelpie_core::Runtime> AppState<R> {
         &self,
         server_id: &str,
     ) -> Result<Vec<serde_json::Value>, StateError> {
-        use kelpie_tools::mcp::{McpClient, McpConfig};
+        use kelpie_tools::mcp::McpClient;
         use std::sync::Arc;
 
         // Get the MCP server
@@ -3376,26 +3402,8 @@ impl<R: kelpie_core::Runtime> AppState<R> {
                 id: server_id.to_string(),
             })?;
 
-        // Convert MCPServerConfig to McpConfig
-        let mcp_config = match &server.config {
-            crate::models::MCPServerConfig::Stdio { command, args, env } => {
-                let mut config = McpConfig::stdio(&server.server_name, command, args.clone());
-                if let Some(env_map) = env {
-                    for (k, v) in env_map {
-                        if let Some(v_str) = v.as_str() {
-                            config = config.with_env(k.clone(), v_str.to_string());
-                        }
-                    }
-                }
-                config
-            }
-            crate::models::MCPServerConfig::Sse { server_url, .. } => {
-                McpConfig::sse(&server.server_name, server_url)
-            }
-            crate::models::MCPServerConfig::StreamableHttp { server_url, .. } => {
-                McpConfig::http(&server.server_name, server_url)
-            }
-        };
+        // Convert MCPServerConfig to McpConfig using helper
+        let mcp_config = Self::mcp_server_config_to_mcp_config(&server.server_name, &server.config);
 
         // Create MCP client
         let client = Arc::new(McpClient::new(mcp_config));
@@ -3442,7 +3450,7 @@ impl<R: kelpie_core::Runtime> AppState<R> {
         tool_name: &str,
         arguments: serde_json::Value,
     ) -> Result<serde_json::Value, StateError> {
-        use kelpie_tools::mcp::{McpClient, McpConfig};
+        use kelpie_tools::mcp::McpClient;
         use std::sync::Arc;
 
         // Get the MCP server
@@ -3454,26 +3462,8 @@ impl<R: kelpie_core::Runtime> AppState<R> {
                 id: server_id.to_string(),
             })?;
 
-        // Convert MCPServerConfig to McpConfig
-        let mcp_config = match &server.config {
-            crate::models::MCPServerConfig::Stdio { command, args, env } => {
-                let mut config = McpConfig::stdio(&server.server_name, command, args.clone());
-                if let Some(env_map) = env {
-                    for (k, v) in env_map {
-                        if let Some(v_str) = v.as_str() {
-                            config = config.with_env(k.clone(), v_str.to_string());
-                        }
-                    }
-                }
-                config
-            }
-            crate::models::MCPServerConfig::Sse { server_url, .. } => {
-                McpConfig::sse(&server.server_name, server_url)
-            }
-            crate::models::MCPServerConfig::StreamableHttp { server_url, .. } => {
-                McpConfig::http(&server.server_name, server_url)
-            }
-        };
+        // Convert MCPServerConfig to McpConfig using helper
+        let mcp_config = Self::mcp_server_config_to_mcp_config(&server.server_name, &server.config);
 
         // Create MCP client
         let client = Arc::new(McpClient::new(mcp_config));
