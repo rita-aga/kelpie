@@ -99,6 +99,20 @@ pub enum FaultType {
     /// Sandbox exec operation times out
     SandboxExecTimeout { timeout_ms: u64 },
 
+    // Per-agent sandbox isolation faults (for AgentSandboxManager)
+    /// Agent's dedicated sandbox pool creation fails
+    AgentSandboxPoolCreateFail { agent_id: String },
+    /// Agent's dedicated pool is exhausted (min=max=1, sandbox already in use)
+    AgentSandboxPoolExhausted { agent_id: String },
+    /// Wrong agent receives another agent's sandbox (INVARIANT VIOLATION)
+    /// This should never happen in correct code - used for testing isolation.
+    AgentSandboxAffinityViolation {
+        expected_agent: String,
+        actual_agent: String,
+    },
+    /// Agent sandbox not cleaned up on agent termination
+    AgentSandboxLeakOnTerminate { agent_id: String },
+
     // WASM runtime faults
     /// WASM module compilation fails
     WasmCompileFail,
@@ -246,6 +260,11 @@ impl FaultType {
             FaultType::SandboxResumeFail => "sandbox_resume_fail",
             FaultType::SandboxExecFail => "sandbox_exec_fail",
             FaultType::SandboxExecTimeout { .. } => "sandbox_exec_timeout",
+            // Per-agent sandbox isolation faults
+            FaultType::AgentSandboxPoolCreateFail { .. } => "agent_sandbox_pool_create_fail",
+            FaultType::AgentSandboxPoolExhausted { .. } => "agent_sandbox_pool_exhausted",
+            FaultType::AgentSandboxAffinityViolation { .. } => "agent_sandbox_affinity_violation",
+            FaultType::AgentSandboxLeakOnTerminate { .. } => "agent_sandbox_leak_on_terminate",
             // WASM runtime faults
             FaultType::WasmCompileFail => "wasm_compile_fail",
             FaultType::WasmInstantiateFail => "wasm_instantiate_fail",
@@ -587,6 +606,26 @@ impl FaultInjectorBuilder {
             .with_fault(FaultConfig::new(FaultType::SandboxPauseFail, probability))
             .with_fault(FaultConfig::new(FaultType::SandboxResumeFail, probability))
             .with_fault(FaultConfig::new(FaultType::SandboxExecFail, probability))
+    }
+
+    /// Add per-agent sandbox isolation faults
+    ///
+    /// These faults test the AgentSandboxManager:
+    /// - Pool creation failures
+    /// - Pool exhaustion (dedicated mode with max=1)
+    pub fn with_agent_sandbox_faults(self, probability: f64) -> Self {
+        self.with_fault(FaultConfig::new(
+            FaultType::AgentSandboxPoolCreateFail {
+                agent_id: "any".to_string(),
+            },
+            probability,
+        ))
+        .with_fault(FaultConfig::new(
+            FaultType::AgentSandboxPoolExhausted {
+                agent_id: "any".to_string(),
+            },
+            probability,
+        ))
     }
 
     /// Add WASM runtime faults with default probabilities

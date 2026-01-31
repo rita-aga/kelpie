@@ -21,6 +21,7 @@ pub mod standalone_blocks;
 pub mod streaming;
 pub mod summarization;
 pub mod teleport;
+pub mod testing;
 pub mod tools;
 
 use axum::{
@@ -88,6 +89,8 @@ pub fn router<R: Runtime + 'static>(state: AppState<R>) -> Router {
         .nest("/v1", scheduling::router())
         // Projects routes (Phase 6)
         .nest("/v1", projects::router())
+        // Test API routes (E2E testing)
+        .nest("/v1/test", testing::router())
         // Idempotency middleware for exactly-once semantics on mutating requests
         // TLA+ Invariant: IdempotencyGuarantee, ExactlyOnceExecution
         .layer(middleware::from_fn_with_state(

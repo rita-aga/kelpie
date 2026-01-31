@@ -292,17 +292,12 @@ impl Sandbox for ProcessSandbox {
 }
 
 /// Factory for creating process sandboxes
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ProcessSandboxFactory;
 
 impl ProcessSandboxFactory {
     pub fn new() -> Self {
         Self
-    }
-}
-
-impl Default for ProcessSandboxFactory {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

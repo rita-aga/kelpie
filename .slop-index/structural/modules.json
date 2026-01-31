@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "generated_at": "2026-01-29T20:03:48.923739+00:00",
+  "generated_at": "2026-01-30T16:11:55.195465+00:00",
   "crates": [
     {
       "crate_name": "kelpie-core",
@@ -63,6 +63,7 @@
             "config",
             "constants",
             "error",
+            "http",
             "io",
             "metrics",
             "runtime",
@@ -89,6 +90,14 @@
         {
           "name": "kelpie-core::actor",
           "path": "crates/kelpie-core/src/actor.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-core::http",
+          "path": "crates/kelpie-core/src/http.rs",
           "is_public": false,
           "children": [
             "tests"
@@ -376,6 +385,7 @@
             "agent",
             "clock",
             "fault",
+            "http",
             "invariants",
             "liveness",
             "llm",
@@ -455,6 +465,14 @@
           ]
         },
         {
+          "name": "kelpie-dst::http",
+          "path": "crates/kelpie-dst/src/http.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
           "name": "kelpie-dst::network",
           "path": "crates/kelpie-dst/src/network.rs",
           "is_public": false,
@@ -513,6 +531,7 @@
           "path": "crates/kelpie-sandbox/src/lib.rs",
           "is_public": false,
           "children": [
+            "agent_manager",
             "config",
             "error",
             "exec",
@@ -553,6 +572,14 @@
         {
           "name": "kelpie-sandbox::pool",
           "path": "crates/kelpie-sandbox/src/pool.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-sandbox::agent_manager",
+          "path": "crates/kelpie-sandbox/src/agent_manager.rs",
           "is_public": false,
           "children": [
             "tests"
@@ -827,131 +854,6 @@
       ]
     },
     {
-      "crate_name": "kelpie-tools",
-      "root_path": "crates/kelpie-tools",
-      "modules": [
-        {
-          "name": "kelpie-tools::registry",
-          "path": "crates/kelpie-tools/src/registry.rs",
-          "is_public": false,
-          "children": [
-            "tests"
-          ]
-        },
-        {
-          "name": "kelpie-tools::error",
-          "path": "crates/kelpie-tools/src/error.rs",
-          "is_public": false,
-          "children": [
-            "tests"
-          ]
-        },
-        {
-          "name": "kelpie-tools",
-          "path": "crates/kelpie-tools/src/lib.rs",
-          "is_public": false,
-          "children": [
-            "builtin",
-            "error",
-            "http_tool",
-            "mcp",
-            "registry",
-            "sim",
-            "traits",
-            "tests"
-          ]
-        },
-        {
-          "name": "kelpie-tools::sim",
-          "path": "crates/kelpie-tools/src/sim.rs",
-          "is_public": false,
-          "children": [
-            "tests"
-          ]
-        },
-        {
-          "name": "kelpie-tools::traits",
-          "path": "crates/kelpie-tools/src/traits.rs",
-          "is_public": false,
-          "children": [
-            "tests"
-          ]
-        },
-        {
-          "name": "kelpie-tools::mcp",
-          "path": "crates/kelpie-tools/src/mcp.rs",
-          "is_public": false,
-          "children": [
-            "tests"
-          ]
-        },
-        {
-          "name": "kelpie-tools::http_tool",
-          "path": "crates/kelpie-tools/src/http_tool.rs",
-          "is_public": false,
-          "children": [
-            "tests"
-          ]
-        },
-        {
-          "name": "kelpie-tools::builtin::shell",
-          "path": "crates/kelpie-tools/src/builtin/shell.rs",
-          "is_public": false,
-          "children": [
-            "tests"
-          ]
-        },
-        {
-          "name": "kelpie-tools::builtin::filesystem",
-          "path": "crates/kelpie-tools/src/builtin/filesystem.rs",
-          "is_public": false,
-          "children": [
-            "tests"
-          ]
-        },
-        {
-          "name": "kelpie-tools::builtin::git",
-          "path": "crates/kelpie-tools/src/builtin/git.rs",
-          "is_public": false,
-          "children": [
-            "tests"
-          ]
-        },
-        {
-          "name": "kelpie-tools::builtin",
-          "path": "crates/kelpie-tools/src/builtin/mod.rs",
-          "is_public": false,
-          "children": [
-            "filesystem",
-            "git",
-            "shell"
-          ]
-        }
-      ]
-    },
-    {
-      "crate_name": "kelpie-wasm",
-      "root_path": "crates/kelpie-wasm",
-      "modules": [
-        {
-          "name": "kelpie-wasm::runtime",
-          "path": "crates/kelpie-wasm/src/runtime.rs",
-          "is_public": false,
-          "children": [
-            "tests"
-          ]
-        },
-        {
-          "name": "kelpie-wasm",
-          "path": "crates/kelpie-wasm/src/lib.rs",
-          "is_public": false,
-          "children": [
-            "runtime"
-          ]
-        }
-      ]
-    },
-    {
       "crate_name": "kelpie-server",
       "root_path": "crates/kelpie-server",
       "modules": [
@@ -1023,17 +925,9 @@
           ]
         },
         {
-          "name": "kelpie-server::interface::telegram",
-          "path": "crates/kelpie-server/src/interface/telegram.rs",
-          "is_public": false
-        },
-        {
           "name": "kelpie-server::interface",
           "path": "crates/kelpie-server/src/interface/mod.rs",
-          "is_public": false,
-          "children": [
-            "telegram"
-          ]
+          "is_public": false
         },
         {
           "name": "kelpie-server::tools::code_execution",
@@ -1074,7 +968,6 @@
           "children": [
             "agent_call",
             "code_execution",
-            "executor",
             "heartbeat",
             "memory",
             "messaging",
@@ -1085,14 +978,6 @@
         {
           "name": "kelpie-server::tools::messaging",
           "path": "crates/kelpie-server/src/tools/messaging.rs",
-          "is_public": false,
-          "children": [
-            "tests"
-          ]
-        },
-        {
-          "name": "kelpie-server::tools::executor",
-          "path": "crates/kelpie-server/src/tools/executor.rs",
           "is_public": false,
           "children": [
             "tests"
@@ -1415,6 +1300,140 @@
           "is_public": false,
           "children": [
             "tests"
+          ]
+        }
+      ]
+    },
+    {
+      "crate_name": "kelpie-tools",
+      "root_path": "crates/kelpie-tools",
+      "modules": [
+        {
+          "name": "kelpie-tools::registry",
+          "path": "crates/kelpie-tools/src/registry.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::error",
+          "path": "crates/kelpie-tools/src/error.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools",
+          "path": "crates/kelpie-tools/src/lib.rs",
+          "is_public": false,
+          "children": [
+            "builtin",
+            "error",
+            "http_client",
+            "http_tool",
+            "mcp",
+            "registry",
+            "sim",
+            "traits",
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::http_client",
+          "path": "crates/kelpie-tools/src/http_client.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::sim",
+          "path": "crates/kelpie-tools/src/sim.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::traits",
+          "path": "crates/kelpie-tools/src/traits.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::mcp",
+          "path": "crates/kelpie-tools/src/mcp.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::http_tool",
+          "path": "crates/kelpie-tools/src/http_tool.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::builtin::shell",
+          "path": "crates/kelpie-tools/src/builtin/shell.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::builtin::filesystem",
+          "path": "crates/kelpie-tools/src/builtin/filesystem.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::builtin::git",
+          "path": "crates/kelpie-tools/src/builtin/git.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::builtin",
+          "path": "crates/kelpie-tools/src/builtin/mod.rs",
+          "is_public": false,
+          "children": [
+            "filesystem",
+            "git",
+            "shell"
+          ]
+        }
+      ]
+    },
+    {
+      "crate_name": "kelpie-wasm",
+      "root_path": "crates/kelpie-wasm",
+      "modules": [
+        {
+          "name": "kelpie-wasm::runtime",
+          "path": "crates/kelpie-wasm/src/runtime.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-wasm",
+          "path": "crates/kelpie-wasm/src/lib.rs",
+          "is_public": false,
+          "children": [
+            "runtime"
           ]
         }
       ]

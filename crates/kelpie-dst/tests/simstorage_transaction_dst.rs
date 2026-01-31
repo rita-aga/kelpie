@@ -4,6 +4,8 @@
 //! FDB-like transaction semantics for higher-level agent operations.
 //!
 //! Issue #87: Fix SimStorage Transaction Semantics to Match FDB
+//! Issue #140: DST Quality Remediation - replaced chrono::Utc::now() and
+//! uuid::Uuid::new_v4() with deterministic alternatives.
 //!
 //! ## Properties Tested
 //!
@@ -16,22 +18,71 @@
 //!
 //! TigerStyle: Deterministic simulation with fault injection, 2+ assertions per test.
 
-use kelpie_core::Runtime;
+use chrono::{DateTime, Utc};
+use kelpie_core::{RngProvider, Runtime};
+use kelpie_dst::{DeterministicRng, SimClock, SimConfig};
 use kelpie_server::models::{AgentType, Block, Message, MessageRole};
 use kelpie_server::storage::{AgentMetadata, AgentStorage, SessionState, SimStorage};
 use std::sync::Arc;
 
+// ============================================================================
+// DST Infrastructure
+// ============================================================================
+
+// Thread-local DST context for deterministic time and RNG.
+// Using thread_local! allows test helpers to access deterministic sources
+// without explicit parameter passing, while maintaining proper DST semantics.
+//
+// NOTE: This works because madsim uses a single-threaded deterministic scheduler.
+// These tests MUST use #[madsim::test], not #[tokio::test].
+thread_local! {
+    static DST_CLOCK: std::cell::RefCell<Option<Arc<SimClock>>> = const { std::cell::RefCell::new(None) };
+    static DST_RNG: std::cell::RefCell<Option<Arc<DeterministicRng>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Initialize DST context for the current test.
+fn init_dst_context(clock: Arc<SimClock>, rng: Arc<DeterministicRng>) {
+    DST_CLOCK.with(|c| *c.borrow_mut() = Some(clock));
+    DST_RNG.with(|r| *r.borrow_mut() = Some(rng));
+}
+
+/// Get current deterministic time.
+fn dst_now() -> DateTime<Utc> {
+    DST_CLOCK.with(|c| {
+        c.borrow()
+            .as_ref()
+            .map(|clock| clock.now())
+            .unwrap_or_else(|| {
+                // Fallback to a fixed time if DST context not initialized
+                // This ensures reproducibility even if test setup is incomplete
+                DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+                    .unwrap()
+                    .to_utc()
+            })
+    })
+}
+
+/// Generate a deterministic UUID.
+fn dst_uuid() -> String {
+    DST_RNG.with(|r| {
+        r.borrow()
+            .as_ref()
+            .map(|rng| rng.gen_uuid())
+            .unwrap_or_else(|| {
+                // Fallback to a fixed UUID if DST context not initialized
+                "00000000-0000-4000-8000-000000000000".to_string()
+            })
+    })
+}
+
 /// Create a test SimStorage instance
-///
-/// Note: kelpie-server's SimStorage doesn't use DST's DeterministicRng/FaultInjector
-/// directly - it has its own implementation. For DST tests we can still test
-/// the transaction semantics by running concurrent operations.
 fn create_test_storage() -> SimStorage {
     SimStorage::new()
 }
 
-/// Create test agent metadata
+/// Create test agent metadata with deterministic timestamps
 fn test_agent(id: &str) -> AgentMetadata {
+    let now = dst_now();
     AgentMetadata {
         id: id.to_string(),
         name: format!("Test Agent {}", id),
@@ -43,28 +94,29 @@ fn test_agent(id: &str) -> AgentMetadata {
         tool_ids: vec![],
         tags: vec![],
         metadata: serde_json::Value::Null,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        created_at: now,
+        updated_at: now,
     }
 }
 
-/// Create test block
+/// Create test block with deterministic ID and timestamps
 fn test_block(label: &str, value: &str) -> Block {
+    let now = dst_now();
     Block {
-        id: uuid::Uuid::new_v4().to_string(),
+        id: dst_uuid(),
         label: label.to_string(),
         value: value.to_string(),
         description: None,
         limit: None,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        created_at: now,
+        updated_at: now,
     }
 }
 
-/// Create test message
+/// Create test message with deterministic ID and timestamp
 fn test_message(agent_id: &str, content: &str) -> Message {
     Message {
-        id: uuid::Uuid::new_v4().to_string(),
+        id: dst_uuid(),
         agent_id: agent_id.to_string(),
         message_type: "user_message".to_string(),
         role: MessageRole::User,
@@ -74,7 +126,7 @@ fn test_message(agent_id: &str, content: &str) -> Message {
         tool_call: None,
         tool_return: None,
         status: None,
-        created_at: chrono::Utc::now(),
+        created_at: dst_now(),
     }
 }
 
@@ -88,6 +140,12 @@ fn test_message(agent_id: &str, content: &str) -> Message {
 /// This matches FDB transaction semantics where operations are atomic.
 #[madsim::test]
 async fn test_atomic_checkpoint() {
+    let config = SimConfig::from_env_or_random();
+    init_dst_context(
+        Arc::new(SimClock::default()),
+        Arc::new(DeterministicRng::new(config.seed)),
+    );
+
     let storage = create_test_storage();
 
     let agent_id = "checkpoint-test-agent";
@@ -117,6 +175,12 @@ async fn test_atomic_checkpoint() {
 /// Property: checkpoint() with None message only saves session.
 #[madsim::test]
 async fn test_atomic_checkpoint_no_message() {
+    let config = SimConfig::from_env_or_random();
+    init_dst_context(
+        Arc::new(SimClock::default()),
+        Arc::new(DeterministicRng::new(config.seed)),
+    );
+
     let storage = create_test_storage();
 
     let agent_id = "checkpoint-no-msg-agent";
@@ -144,6 +208,12 @@ async fn test_atomic_checkpoint_no_message() {
 /// archival entries) atomically - either all data is deleted or none.
 #[madsim::test]
 async fn test_atomic_cascade_delete() {
+    let config = SimConfig::from_env_or_random();
+    init_dst_context(
+        Arc::new(SimClock::default()),
+        Arc::new(DeterministicRng::new(config.seed)),
+    );
+
     let storage = create_test_storage();
 
     let agent_id = "cascade-delete-agent";
@@ -208,6 +278,12 @@ async fn test_atomic_cascade_delete() {
 /// ensuring atomicity even if interrupted mid-operation.
 #[madsim::test]
 async fn test_delete_agent_lock_ordering() {
+    let config = SimConfig::from_env_or_random();
+    init_dst_context(
+        Arc::new(SimClock::default()),
+        Arc::new(DeterministicRng::new(config.seed)),
+    );
+
     let storage = Arc::new(create_test_storage());
 
     // Create 10 agents with related data
@@ -260,6 +336,12 @@ async fn test_delete_agent_lock_ordering() {
 /// should detect the conflict and retry.
 #[madsim::test]
 async fn test_update_block_conflict_detection() {
+    let config = SimConfig::from_env_or_random();
+    init_dst_context(
+        Arc::new(SimClock::default()),
+        Arc::new(DeterministicRng::new(config.seed)),
+    );
+
     let storage = Arc::new(create_test_storage());
 
     let agent_id = "conflict-test-agent";
@@ -309,6 +391,12 @@ async fn test_update_block_conflict_detection() {
 /// Property: append_block appends content atomically with retry on conflict.
 #[madsim::test]
 async fn test_append_block_conflict_detection() {
+    let config = SimConfig::from_env_or_random();
+    init_dst_context(
+        Arc::new(SimClock::default()),
+        Arc::new(DeterministicRng::new(config.seed)),
+    );
+
     let storage = Arc::new(create_test_storage());
 
     let agent_id = "append-conflict-agent";
@@ -357,6 +445,12 @@ async fn test_append_block_conflict_detection() {
 /// Property: Each write operation increments the version counter for affected keys.
 #[madsim::test]
 async fn test_version_tracking_on_writes() {
+    let config = SimConfig::from_env_or_random();
+    init_dst_context(
+        Arc::new(SimClock::default()),
+        Arc::new(DeterministicRng::new(config.seed)),
+    );
+
     let storage = create_test_storage();
 
     let agent_id = "version-test-agent";
@@ -377,6 +471,12 @@ async fn test_version_tracking_on_writes() {
 /// Property: Operations on independent keys should not conflict with each other.
 #[madsim::test]
 async fn test_no_conflict_on_different_keys() {
+    let config = SimConfig::from_env_or_random();
+    init_dst_context(
+        Arc::new(SimClock::default()),
+        Arc::new(DeterministicRng::new(config.seed)),
+    );
+
     let storage = Arc::new(create_test_storage());
 
     // Create 20 agents concurrently
@@ -420,6 +520,12 @@ async fn test_no_conflict_on_different_keys() {
 /// messages appending in order.
 #[madsim::test]
 async fn test_multiple_checkpoints_consistency() {
+    let config = SimConfig::from_env_or_random();
+    init_dst_context(
+        Arc::new(SimClock::default()),
+        Arc::new(DeterministicRng::new(config.seed)),
+    );
+
     let storage = create_test_storage();
 
     let agent_id = "multi-checkpoint-agent";
@@ -452,6 +558,12 @@ async fn test_multiple_checkpoints_consistency() {
 /// correctly without data loss.
 #[madsim::test]
 async fn test_concurrent_checkpoints_same_session() {
+    let config = SimConfig::from_env_or_random();
+    init_dst_context(
+        Arc::new(SimClock::default()),
+        Arc::new(DeterministicRng::new(config.seed)),
+    );
+
     let storage = Arc::new(create_test_storage());
 
     let agent_id = "concurrent-checkpoint-agent";

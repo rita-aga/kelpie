@@ -130,7 +130,8 @@ unsafe impl Send for VzVm {}
 unsafe impl Sync for VzVm {}
 
 impl VzVm {
-    fn new(config: VmConfig, vz_config: VzConfig) -> VmResult<Self> {
+    /// Create a new VZ VM with the given configuration
+    pub fn new(config: VmConfig, vz_config: VzConfig) -> VmResult<Self> {
         if !cfg!(target_os = "macos") {
             return Err(VmError::CreateFailed {
                 reason: "Apple VZ backend requires macOS".to_string(),

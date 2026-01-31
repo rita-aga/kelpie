@@ -3,6 +3,10 @@ fn main() {
     let vz_enabled = std::env::var("CARGO_FEATURE_VZ").is_ok();
 
     if vz_enabled && target_os == "macos" {
+        // Register source file for rebuild detection
+        println!("cargo:rerun-if-changed=src/backends/vz_bridge.m");
+        println!("cargo:rerun-if-changed=src/backends/vz_bridge.h");
+
         cc::Build::new()
             .file("src/backends/vz_bridge.m")
             .flag("-fobjc-arc")

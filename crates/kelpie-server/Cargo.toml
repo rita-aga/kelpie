@@ -14,6 +14,9 @@ otel = ["kelpie-core/otel", "prometheus"]
 dst = ["kelpie-tools/dst", "dep:kelpie-dst"]
 fdb = ["dep:foundationdb", "kelpie-storage/fdb"]
 madsim = ["kelpie-core/madsim", "kelpie-dst?/madsim"]
+# Apple VZ sandbox support (macOS only, ARM64)
+# Enables VzSandbox for per-agent VM isolation
+vz = ["kelpie-vm/vz"]
 
 [dependencies]
 # Core kelpie crates
@@ -54,6 +57,9 @@ bytes = { workspace = true }
 # UUID and time
 uuid = { workspace = true }
 chrono = { workspace = true }
+
+# Global state (for test sessions)
+once_cell = { workspace = true }
 
 # Cron scheduling
 croner = { workspace = true }

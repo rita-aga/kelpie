@@ -14,6 +14,7 @@ mod heartbeat;
 mod memory;
 mod messaging;
 mod registry;
+mod sandbox_provider;
 mod web_search;
 
 pub use agent_call::{
@@ -32,5 +33,10 @@ pub use registry::{
     RegisteredTool, RegistryStats, ToolExecutionContext, ToolExecutionResult, ToolSignal,
     ToolSource, UnifiedToolRegistry, AGENT_LOOP_ITERATIONS_MAX, HEARTBEAT_PAUSE_MINUTES_DEFAULT,
     HEARTBEAT_PAUSE_MINUTES_MAX, HEARTBEAT_PAUSE_MINUTES_MIN, MS_PER_MINUTE,
+};
+pub use sandbox_provider::{
+    cleanup_agent_sandbox, execute_for_agent, execute_in_sandbox, ExecResult, SandboxBackendKind,
+    SandboxProvider, EXEC_OUTPUT_BYTES_MAX, EXEC_TIMEOUT_SECONDS_DEFAULT, EXEC_TIMEOUT_SECONDS_MAX,
+    ISOLATION_MODE_ENV_VAR, SANDBOX_BACKEND_ENV_VAR,
 };
 pub use web_search::register_web_search_tool;

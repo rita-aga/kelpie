@@ -3,6 +3,8 @@
 
 #include "vz_bridge.h"
 #include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 @interface KelpieVzVmWrapper : NSObject
 @property (nonatomic, strong) VZVirtualMachine *vm;
@@ -91,6 +93,40 @@ KelpieVzVmHandle *kelpie_vz_vm_create(const char *id,
         VZVirtioSocketDeviceConfiguration *socketConfig = [[VZVirtioSocketDeviceConfiguration alloc] init];
         config.socketDevices = @[socketConfig];
 
+        // Add serial port for console output (console=hvc0)
+        // VZVirtioConsoleDeviceSerialPortConfiguration provides hvc0 device to guest
+        @try {
+            // Open /dev/null for input (host -> guest, guest reads nothing)
+            int nullFd = open("/dev/null", O_RDWR);
+            if (nullFd >= 0) {
+                // Duplicate for separate read/write handles
+                int readFd = dup(nullFd);
+                int writeFd = dup(nullFd);
+                close(nullFd);
+
+                if (readFd >= 0 && writeFd >= 0) {
+                    NSFileHandle *readHandle = [[NSFileHandle alloc] initWithFileDescriptor:readFd closeOnDealloc:YES];
+                    NSFileHandle *writeHandle = [[NSFileHandle alloc] initWithFileDescriptor:writeFd closeOnDealloc:YES];
+                    VZFileHandleSerialPortAttachment *consoleAttachment =
+                        [[VZFileHandleSerialPortAttachment alloc] initWithFileHandleForReading:readHandle
+                                                                        fileHandleForWriting:writeHandle];
+                    VZVirtioConsoleDeviceSerialPortConfiguration *consoleConfig =
+                        [[VZVirtioConsoleDeviceSerialPortConfiguration alloc] init];
+                    consoleConfig.attachment = consoleAttachment;
+                    config.serialPorts = @[consoleConfig];
+                } else {
+                    if (readFd >= 0) close(readFd);
+                    if (writeFd >= 0) close(writeFd);
+                    NSLog(@"VZ console: failed to dup fds");
+                }
+            } else {
+                NSLog(@"VZ console: failed to open /dev/null");
+            }
+        } @catch (NSException *exception) {
+            NSLog(@"VZ console setup failed: %@", exception);
+            // Continue without console - VM might still work for vsock communication
+        }
+
         NSError *validationError = nil;
         if (![config validateWithError:&validationError]) {
             NSString *message = validationError ? validationError.localizedDescription : @"validation failed";
@@ -161,16 +197,33 @@ static int kelpie_vz_run_vm_op(KelpieVzVmWrapper *vm,
 }
 
 int kelpie_vz_vm_start(KelpieVzVmHandle *vm, char **error_out) {
+    if (vm == NULL) {
+        kelpie_vz_set_error(error_out, @"vm handle is null");
+        return -1;
+    }
+
     KelpieVzVmWrapper *wrapper = (__bridge KelpieVzVmWrapper *)vm;
-    int result = kelpie_vz_run_vm_op(wrapper, ^(void (^completion)(NSError *)) {
+    dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+    __block NSError *startError = nil;
+
+    dispatch_async(wrapper.queue, ^{
         [wrapper.vm startWithCompletionHandler:^(NSError * _Nullable errorOrNil) {
-            completion(errorOrNil);
+            startError = errorOrNil;
+            dispatch_semaphore_signal(sema);
         }];
     });
-    if (result != 0) {
-        kelpie_vz_set_error(error_out, @"failed to start VZ virtual machine");
+
+    dispatch_semaphore_wait(sema, DISPATCH_TIME_FOREVER);
+
+    if (startError != nil) {
+        NSString *message = [NSString stringWithFormat:@"VZ start failed: %@ (code: %ld, domain: %@)",
+                             startError.localizedDescription,
+                             (long)startError.code,
+                             startError.domain];
+        kelpie_vz_set_error(error_out, message);
+        return -1;
     }
-    return result;
+    return 0;
 }
 
 int kelpie_vz_vm_stop(KelpieVzVmHandle *vm, char **error_out) {

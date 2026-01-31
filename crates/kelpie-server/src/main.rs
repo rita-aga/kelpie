@@ -13,7 +13,7 @@ use tools::{register_heartbeat_tools, register_memory_tools};
 use axum::extract::Request;
 use axum::ServiceExt;
 use clap::Parser;
-use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
+use kelpie_server::tools::SandboxProvider;
 use serde_json::Value;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -215,6 +215,15 @@ async fn main() -> anyhow::Result<()> {
         AppState::new(runtime.clone())
     };
 
+    // Initialize sandbox provider (selects backend based on config)
+    SandboxProvider::init()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to initialize sandbox provider: {}", e))?;
+    tracing::info!(
+        backend = %kelpie_server::tools::SandboxBackendKind::detect(),
+        "Sandbox provider initialized"
+    );
+
     // Register builtin tools
     register_builtin_tools(&state).await;
 
@@ -332,6 +341,9 @@ async fn register_builtin_tools<R: kelpie_core::Runtime + 'static>(state: &AppSt
 }
 
 /// Execute a shell command in a sandboxed environment
+///
+/// Uses SandboxProvider which selects the appropriate backend
+/// (ProcessSandbox or VzSandbox) based on configuration.
 async fn execute_shell_command(input: &Value) -> String {
     let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -339,43 +351,28 @@ async fn execute_shell_command(input: &Value) -> String {
         return "Error: No command provided".to_string();
     }
 
-    // Create and start sandbox
-    let config = SandboxConfig::default();
-    let mut sandbox = ProcessSandbox::new(config);
-
-    if let Err(e) = sandbox.start().await {
-        return format!("Failed to start sandbox: {}", e);
-    }
-
-    // Execute command via sh -c for shell expansion
-    let exec_opts = ExecOptions::new()
-        .with_timeout(std::time::Duration::from_secs(30))
-        .with_max_output(1024 * 1024);
-
-    match sandbox.exec("sh", &["-c", command], exec_opts).await {
-        Ok(output) => {
-            let stdout = output.stdout_string();
-            let stderr = output.stderr_string();
-
-            if output.is_success() {
-                if stdout.is_empty() {
+    // Execute command via sh -c for shell expansion using sandbox provider
+    match kelpie_server::tools::execute_in_sandbox("sh", &["-c", command], 30).await {
+        Ok(result) => {
+            if result.success {
+                if result.stdout.is_empty() {
                     "Command executed successfully (no output)".to_string()
                 } else {
                     // Truncate long output
-                    if stdout.len() > 4000 {
+                    if result.stdout.len() > 4000 {
                         format!(
                             "{}...\n[truncated, {} total bytes]",
-                            &stdout[..4000],
-                            stdout.len()
+                            &result.stdout[..4000],
+                            result.stdout.len()
                         )
                     } else {
-                        stdout
+                        result.stdout
                     }
                 }
             } else {
                 format!(
                     "Command failed with exit code {}:\n{}{}",
-                    output.status.code, stdout, stderr
+                    result.exit_code, result.stdout, result.stderr
                 )
             }
         }
