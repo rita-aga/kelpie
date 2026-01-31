@@ -116,25 +116,9 @@ async fn create_server<R: Runtime + 'static>(
 
     // TigerStyle: Spawn async tool discovery in background to avoid blocking server creation
     // This prevents timeouts when MCP server subprocess is slow to start
-    // Convert server config to McpConfig
-    use kelpie_tools::mcp::McpConfig;
-    let mcp_config = match &server.config {
-        MCPServerConfig::Stdio { command, args, env } => {
-            let mut config = McpConfig::stdio(&server.server_name, command, args.clone());
-            if let Some(env_map) = env {
-                for (k, v) in env_map {
-                    if let Some(v_str) = v.as_str() {
-                        config = config.with_env(k.clone(), v_str.to_string());
-                    }
-                }
-            }
-            config
-        }
-        MCPServerConfig::Sse { server_url, .. } => McpConfig::sse(&server.server_name, server_url),
-        MCPServerConfig::StreamableHttp { server_url, .. } => {
-            McpConfig::http(&server.server_name, server_url)
-        }
-    };
+    // Convert server config to McpConfig using shared helper
+    let mcp_config =
+        AppState::<R>::mcp_server_config_to_mcp_config(&server.server_name, &server.config);
 
     // Spawn background task for async tool discovery with timeout
     // TigerStyle: Non-blocking tool discovery - server returns immediately
