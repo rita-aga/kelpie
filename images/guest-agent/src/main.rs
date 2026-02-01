@@ -46,34 +46,51 @@ async fn main() -> Result<()> {
     #[cfg(feature = "vsock")]
     {
         // Use vsock for VM communication
+        // Guest connects to host via vsock (libkrun tunnels to Unix socket on host)
         let port = std::env::var("KELPIE_GUEST_VSOCK_PORT")
             .ok()
             .and_then(|p| p.parse().ok())
             .unwrap_or(VSOCK_PORT_DEFAULT);
 
-        info!(port = port, "Binding to vsock");
+        // CID 2 is the host in vsock
+        const VMADDR_CID_HOST: u32 = 2;
 
-        let addr = VsockAddr::new(VMADDR_CID_ANY, port);
-        let listener = VsockListener::bind(addr).context("Failed to bind vsock")?;
+        info!(port = port, cid = VMADDR_CID_HOST, "Connecting to host via vsock");
 
-        info!(port = port, "Listening for vsock connections");
+        // Retry connection until successful (host may not be ready immediately)
+        let max_retries = 30;
+        let mut stream = None;
 
-        // Accept connections in a loop
-        loop {
-            match listener.accept().await {
-                Ok((stream, addr)) => {
-                    info!(cid = addr.cid(), port = addr.port(), "Accepted vsock connection");
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_connection(stream).await {
-                            error!(error = %e, "Connection handler error");
-                        }
-                    });
+        for attempt in 1..=max_retries {
+            let addr = VsockAddr::new(VMADDR_CID_HOST, port);
+            match tokio_vsock::VsockStream::connect(addr).await {
+                Ok(s) => {
+                    info!(attempt = attempt, "Connected to host via vsock");
+                    stream = Some(s);
+                    break;
                 }
                 Err(e) => {
-                    error!(error = %e, "Accept error");
+                    if attempt < max_retries {
+                        info!(attempt = attempt, error = %e, "Vsock connect retry");
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    } else {
+                        error!(error = %e, "Failed to connect to host via vsock after {} attempts", max_retries);
+                        return Err(e.into());
+                    }
                 }
             }
         }
+
+        let stream = stream.context("Failed to connect to vsock")?;
+        info!("Connected to host, handling commands");
+
+        // Handle the single connection to the host
+        if let Err(e) = handle_connection(stream).await {
+            error!(error = %e, "Connection handler error");
+        }
+
+        info!("Host disconnected, shutting down");
+        Ok(())
     }
 
     #[cfg(not(feature = "vsock"))]

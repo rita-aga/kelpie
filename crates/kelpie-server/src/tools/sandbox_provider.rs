@@ -253,14 +253,20 @@ impl SandboxProvider {
                 let image_manager = kelpie_vm::VmImageManager::new()
                     .map_err(|e| format!("Failed to create VM image manager: {}", e))?;
 
-                let images = image_manager
-                    .ensure_images()
-                    .await
-                    .map_err(|e| format!("Failed to ensure VM images: {}", e))?;
+                // libkrun uses directory-based rootfs, not ext4 image
+                let rootfs_path = image_manager
+                    .libkrun_rootfs_path()
+                    .map_err(|e| format!("Failed to get libkrun rootfs: {}", e))?;
 
                 tracing::info!(
-                    rootfs = ?images.rootfs,
+                    rootfs = ?rootfs_path,
                     "libkrun rootfs ready (libkrun uses bundled kernel)"
+                );
+
+                // Alias for the rest of the code
+                let images = kelpie_vm::VmImagePaths::new(
+                    std::path::PathBuf::new(), // kernel not used by libkrun
+                    rootfs_path,
                 );
 
                 // Create libkrun sandbox factory with rootfs path

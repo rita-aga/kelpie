@@ -228,34 +228,48 @@ impl LibkrunVm {
         }
     }
 
-    /// Connect to the guest agent via vsock
+    /// Connect to the guest agent via vsock Unix socket
+    ///
+    /// libkrun creates a Unix socket for vsock communication. When the guest
+    /// connects to the vsock port, it's tunneled through this socket.
     async fn connect_vsock(&self) -> VmResult<UnixStream> {
         let runtime = kelpie_core::current_runtime();
 
+        // Wait for the vsock socket to be created and try to connect
         for i in 0..VSOCK_CONNECT_RETRY_COUNT_MAX {
+            // Check if socket exists
+            if !self.vsock_path.exists() {
+                debug!(vm_id = %self.id, attempt = i + 1, path = ?self.vsock_path, "Waiting for vsock socket");
+                runtime.sleep(VSOCK_CONNECT_RETRY_DELAY).await;
+                continue;
+            }
+
+            // Try to connect
             match UnixStream::connect(&self.vsock_path).await {
                 Ok(stream) => {
-                    debug!(vm_id = %self.id, "Connected to vsock after {} attempts", i + 1);
+                    info!(vm_id = %self.id, "Connected to vsock after {} attempts", i + 1);
                     return Ok(stream);
                 }
                 Err(e) if i < VSOCK_CONNECT_RETRY_COUNT_MAX - 1 => {
-                    debug!(vm_id = %self.id, attempt = i + 1, error = %e, "Vsock connect retry");
+                    debug!(vm_id = %self.id, attempt = i + 1, error = %e, path = ?self.vsock_path, "Vsock connect retry");
                     runtime.sleep(VSOCK_CONNECT_RETRY_DELAY).await;
                 }
                 Err(e) => {
                     return Err(VmError::ExecFailed {
                         reason: format!(
-                            "failed to connect to vsock after {} attempts: {}",
-                            VSOCK_CONNECT_RETRY_COUNT_MAX, e
+                            "failed to connect to vsock at {:?} after {} attempts: {}",
+                            self.vsock_path, VSOCK_CONNECT_RETRY_COUNT_MAX, e
                         ),
                     });
                 }
             }
         }
 
-        // Loop always returns before reaching here (either success or final error)
         Err(VmError::ExecFailed {
-            reason: "vsock connect loop exited unexpectedly".to_string(),
+            reason: format!(
+                "vsock socket {:?} not created after {} attempts",
+                self.vsock_path, VSOCK_CONNECT_RETRY_COUNT_MAX
+            ),
         })
     }
 
@@ -396,13 +410,14 @@ impl LibkrunVm {
                 }
             })?;
 
-        // krun_add_vsock_port2 with listen=true creates a listening socket
+        // krun_add_vsock_port2 with listen=true: host listens on Unix socket, guest connects via vsock
+        // When guest connects to this vsock port, libkrun forwards it to the Unix socket
         let result = unsafe {
             krun_add_vsock_port2(
                 ctx_id,
                 self.libkrun_config.vsock_port,
                 vsock_path_c.as_ptr(),
-                true,
+                true, // Host listens, guest connects
             )
         };
         if result < 0 {
